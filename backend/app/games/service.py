@@ -48,18 +48,24 @@ internal state on the *same* instance. Handing out a live reference to it
 once the lock that protected the read is released: a second, later throw
 can reassign that same Scorecard's frames before a caller finishes reading
 from the reference it was handed, making an *earlier* throw's response
-describe *newer* game state. `Rack` doesn't have this problem (each
-instance is genuinely immutable — a later throw replaces the slot with a
-different object, never mutates the one already handed out), but
-`Scorecard` does, so nothing here ever exposes a live `Scorecard`
-reference for a caller to read from later. `GameSession` has no public
-`scorecard` accessor at all — an earlier version of this module had one
-(returning `self._scorecard` under the lock, then releasing it), which
-was exactly this escape hatch: the lock protected the moment of the
-read, not what a caller did with the live, still-mutable object
-afterward. `current_snapshot()` and the `GameStateSnapshot` each
-`throw()`/`reset()` returns are the sole public read model for a game
-session's frames, score, completion state, next roll, and rack.
+describe *newer* game state. `Rack` doesn't have this specific problem
+(each instance is genuinely immutable — a later throw replaces the slot
+with a different object, never mutates the one already handed out) —
+but `GameSession` doesn't expose either one publicly, and not only for
+the race. `current_snapshot()` and the `GameStateSnapshot` each
+`throw()`/`reset()` returns are meant to be the *one* public read model
+for a game session's lane version, standing pins, scorecard frames,
+score, completion state, and next roll — not one model for the pins and
+a second, parallel accessor for everything else. `GameSession` had
+public `scorecard` and `rack` properties in earlier versions of this
+module (each returning the live slot under the lock, then releasing
+it); both are gone now. `scorecard` really was the data race described
+above; `rack` wasn't, but a second, narrower inspection path left
+public undermined the same single-read-model contract and would only
+get harder to remove once a future storage or multiplayer backend
+depended on it. `_rack`, like `_scorecard`, is a private transaction
+slot now — read only from inside `throw()`/`reset()`/`_build_snapshot()`,
+all of which already hold `self._lock`.
 
 `GameStateSnapshot` is the fix: a frozen dataclass built *inside* the
 lock, holding only plain, already-immutable values (an int, a frozenset,
@@ -136,16 +142,6 @@ class GameSession:
         self._scorecard = Scorecard()
         self._rack = Rack.full()
         self._lock = threading.Lock()
-
-    @property
-    def rack(self) -> Rack:
-        """The pins currently standing. `Rack` is immutable, so handing
-        out the live reference is safe — a caller can't mutate it even
-        without holding the lock. (Mostly useful for tests/white-box
-        inspection — routes render responses from a `GameStateSnapshot`,
-        never from this.)"""
-        with self._lock:
-            return self._rack
 
     def _build_snapshot(self) -> GameStateSnapshot:
         """Builds a `GameStateSnapshot` from current state. Caller must

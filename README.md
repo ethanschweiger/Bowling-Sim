@@ -364,13 +364,15 @@ objects) — from *inside* the same lock that did the mutation, and return
 it as part of their own result. Every response, including `GET`, is
 rendered from one of these snapshots, never from a second lock/read taken
 after the operation that produced it has already returned. `GameSession`
-itself has no public accessor for the live `Scorecard` either — an
-earlier version's `.scorecard` property was exactly this escape hatch
-(it protected the moment of the read with the lock, but not what a
-caller did with the live, still-mutable object afterward); it's gone,
-and `current_snapshot()`/the returned `GameStateSnapshot` are the only
-public way to inspect a game's frames, score, completion state, next
-roll, and rack.
+itself has no public accessor for either live slot — earlier versions had
+`.scorecard` and `.rack` properties, each handing out its live value
+under the lock, then releasing it. `.scorecard` was a real instance of
+this same race; `.rack` wasn't, since `Rack` is immutable, but leaving a
+second, narrower inspection path public still undercut the same
+single-read-model contract. Both are gone now: `current_snapshot()`/the
+returned `GameStateSnapshot` are the *only* public way to inspect a
+game's lane version, standing pins, frames, score, completion state, and
+next roll.
 
 ### Read a game without changing it
 
