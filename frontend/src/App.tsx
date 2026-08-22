@@ -9,7 +9,7 @@ import { ScoreboardPanel } from './components/ScoreboardPanel';
 import { StaleGameNotice } from './components/StaleGameNotice';
 import { ThrowControls, type ThrowStatus } from './components/ThrowControls';
 import { DEFAULT_BALL_ID } from './domain/ballCatalog';
-import { bootstrapGame, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
+import { bootstrapGame, classifyThrowFailure, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
 import { defaultReleaseValues, type ReleaseFieldId } from './domain/releaseFields';
 
 interface GameSnapshot {
@@ -109,11 +109,19 @@ function App() {
       if (!mountedRef.current) {
         return;
       }
-      if (isStaleGameError(error)) {
+      // A throw's own 404 is ambiguous (missing game vs. an unrelated
+      // unknown ball_id — see classifyThrowFailure's docstring), so it's
+      // confirmed against a fresh GET before ever offering to discard a
+      // possibly-live game. Non-404 errors pass through with no extra call.
+      const classification = await classifyThrowFailure(game.gameId, error);
+      if (!mountedRef.current) {
+        return;
+      }
+      if (classification.kind === 'confirmed-missing-game') {
         setStatus({ kind: 'idle' });
         setStaleGameMessage('This game no longer exists on the server (it may have restarted).');
       } else {
-        setStatus({ kind: 'error', message: messageFor(error, 'The throw did not go through.') });
+        setStatus({ kind: 'error', message: messageFor(classification.error, 'The throw did not go through.') });
       }
     }
   }

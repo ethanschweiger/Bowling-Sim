@@ -79,9 +79,48 @@ async function attemptBootstrap(store: GameIdStore): Promise<BootResult> {
  * game is gone; offer to start a new one." A network failure, a
  * validation error, or a completed-game 409 are all real, visible errors,
  * but none of them mean the game itself is gone, so none of them should
- * route through this recovery path. */
+ * route through this recovery path.
+ *
+ * Only safe to use directly on a bootstrap GET's or a reset's own error —
+ * both 404 for exactly one reason (an unknown game_id). A throw's 404 is
+ * *not* one of those: `POST /games/{id}/throws` also 404s for an unknown
+ * `ball_id` (see backend/app/api/routes/games.py), so a throw's own 404
+ * alone can't tell "missing game" and "unrelated request error" apart.
+ * Use `classifyThrowFailure` for that one, ambiguous case instead. */
 export function isStaleGameError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404;
+}
+
+export type ThrowFailureClassification = { kind: 'confirmed-missing-game' } | { kind: 'other'; error: unknown };
+
+/** Resolves what a failed throw's error actually means. A throw's 404 is
+ * ambiguous (see `isStaleGameError`'s docstring) — the one authoritative
+ * way to tell "missing game" from "unrelated request error" (most likely
+ * an unknown `ball_id`, but this deliberately doesn't parse the error's
+ * human-readable text to check) is to ask the server directly, with the
+ * one endpoint that only ever 404s for a missing game_id: `GET`. If that
+ * confirmation GET also 404s, the game really is gone. If it succeeds,
+ * the game is fine and the throw failed for some other reason — the
+ * *original* throw error is what should reach the user, not a fabricated
+ * "missing game" story. If the confirmation GET itself fails for some
+ * unrelated reason (network, 5xx — genuinely unknown either way), this
+ * conservatively reports the original throw error and never offers
+ * destructive recovery on an unconfirmed guess. Non-404 throw errors
+ * (409 complete, network failure, ...) are never ambiguous in the first
+ * place and pass through untouched, with no confirmation call at all. */
+export async function classifyThrowFailure(gameId: string, originalError: unknown): Promise<ThrowFailureClassification> {
+  if (!(originalError instanceof ApiError) || originalError.status !== 404) {
+    return { kind: 'other', error: originalError };
+  }
+  try {
+    await getGame(gameId);
+    return { kind: 'other', error: originalError };
+  } catch (confirmationError) {
+    if (isStaleGameError(confirmationError)) {
+      return { kind: 'confirmed-missing-game' };
+    }
+    return { kind: 'other', error: originalError };
+  }
 }
 
 /** Unconditionally starts a brand new game and makes it this browser's

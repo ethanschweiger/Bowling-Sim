@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bootstrapGame,
+  classifyThrowFailure,
   describeLaneVersion,
   GAME_ID_STORAGE_KEY,
   isStaleGameError,
@@ -161,6 +162,62 @@ describe('isStaleGameError', () => {
   it('is false for a non-ApiError', () => {
     expect(isStaleGameError(new TypeError('boom'))).toBe(false);
     expect(isStaleGameError('not even an error')).toBe(false);
+  });
+});
+
+describe('classifyThrowFailure', () => {
+  it('confirms a missing game when the confirmation GET also 404s', async () => {
+    const originalError = new ApiError(404, "Unknown game_id 'g1'");
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ detail: "Unknown game_id 'g1'" }, { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await classifyThrowFailure('g1', originalError);
+
+    expect(result).toEqual({ kind: 'confirmed-missing-game' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/games/g1');
+  });
+
+  it('keeps the live game and the original error when the confirmation GET succeeds (e.g. an unknown ball_id)', async () => {
+    const originalError = new ApiError(404, "Unknown ball_id 'nope'");
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ game_id: 'g1', lane_condition_version: 2, game_state: {} }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await classifyThrowFailure('g1', originalError);
+
+    expect(result).toEqual({ kind: 'other', error: originalError });
+  });
+
+  it('does not offer recovery when the confirmation GET itself fails for an unrelated reason', async () => {
+    const originalError = new ApiError(404, "Unknown ball_id 'nope'");
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ detail: 'server exploded' }, { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await classifyThrowFailure('g1', originalError);
+
+    expect(result).toEqual({ kind: 'other', error: originalError });
+  });
+
+  it('passes a non-404 throw error straight through without confirming anything', async () => {
+    const originalError = new ApiError(409, "game 'g1' is already complete");
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await classifyThrowFailure('g1', originalError);
+
+    expect(result).toEqual({ kind: 'other', error: originalError });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('passes a non-ApiError straight through without confirming anything', async () => {
+    const originalError = new TypeError('Failed to fetch');
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await classifyThrowFailure('g1', originalError);
+
+    expect(result).toEqual({ kind: 'other', error: originalError });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

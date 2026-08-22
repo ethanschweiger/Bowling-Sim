@@ -452,10 +452,17 @@ deliberate double-invoke of a mount effect in development: the attempt is
 memoized at module scope (`frontend/src/domain/gameLifecycle.ts`), so a
 second concurrent caller shares the first one's in-flight request instead
 of starting a second one and orphaning a game. A failed bootstrap shows a
-"Retry" action rather than getting stuck; a throw or reset that comes back
-404 for the saved game (the backend restarted, per "Known limitations"
-below) shows a distinct "Start a new game" recovery action instead of
-silently discarding whatever the UI was last showing. The footer's lane-
+"Retry" action rather than getting stuck; a reset that 404s (unambiguous —
+it can only mean the saved game is gone, most likely the backend
+restarted, per "Known limitations" below) shows a distinct "Start a new
+game" recovery action instead of silently discarding whatever the UI was
+last showing. A throw's own 404 is *not* treated the same way outright,
+because `POST .../throws` also 404s for an unrelated reason (an unknown
+`ball_id`, see "Throw in that game" below) — the frontend confirms with a
+fresh `GET` first (`gameLifecycle.ts`'s `classifyThrowFailure`) and only
+shows the recovery action once that confirms the game itself is gone;
+otherwise the throw's own error is what the user sees, and the live game
+is never discarded on a guess. The footer's lane-
 condition-version line is careful about a real backend distinction: a
 throw response's version is the one that throw ran *against* (documented,
 pre-wear), not the game's current version, so the footer labels it
@@ -541,8 +548,13 @@ curl -X POST http://localhost:8000/api/v1/games/{game_id}/throws \
 that exact throw. This game's lane wears in with every throw; the
 response's `lane_condition_version` tells you which state your throw
 actually ran against, and `game_state` tells you the resulting rack,
-frames, and score. An unknown `game_id` is a 404; a throw against a
-finished game (ten frames plus any required bonus balls) is a
+frames, and score. This route's 404 is ambiguous by design, not just an
+unknown `game_id` — an unknown `ball_id` is *also* a 404 (checked after
+the game itself is confirmed to exist), so a client can't tell "the game
+is gone" from "that ball doesn't exist" by status code alone; the
+frontend's own handling of this (`GET`-confirming before ever treating a
+throw's 404 as a missing game) is under "Frontend" above. A throw against
+a finished game (ten frames plus any required bonus balls) is a
 `409 Conflict` — nothing about the game changes when that happens.
 
 ### Reset a game
@@ -658,11 +670,12 @@ percentages, leave tracking, ball usage stats.
   fetched from the API — there's no `GET /api/v1/balls` yet.
 - The frontend only detects a stale saved `game_id` (the backend
   restarted, dropping all in-memory games, per the limitation above)
-  reactively — when a throw or reset against it comes back 404. It then
-  shows a "Start a new game" recovery action rather than silently
-  discarding the last good state; there's no proactive background check,
-  so a tab left open across a backend restart won't notice until the next
-  throw or reset is attempted.
+  reactively — when a reset against it 404s directly, or a throw's 404 is
+  confirmed against a fresh `GET`. It then shows a "Start a new game"
+  recovery action rather than silently discarding the last good state;
+  there's no proactive background check, so a tab left open across a
+  backend restart won't notice until the next throw or reset is
+  attempted.
 - A 10th-frame bonus ball that lands on a fresh rack after an opening
   strike (e.g. the frame's 2nd or 3rd ball) displays as its own plain pin
   count rather than a traditional synthesized "X" glyph — deriving that
