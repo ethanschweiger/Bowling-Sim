@@ -1,12 +1,13 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.physics.lane_session import default_session
 
 client = TestClient(app)
 
 VALID_PAYLOAD = {
     "ball_id": "reactive_pearl",
-    "oil_pattern": "house",
     "speed_mph": 17.0,
     "rev_rate": 350.0,
     "axis_rotation": 45.0,
@@ -16,14 +17,17 @@ VALID_PAYLOAD = {
 }
 
 
+@pytest.fixture(autouse=True)
+def reset_lane():
+    """Each test starts from a fresh house shot — the lane session is
+    process-global and would otherwise carry wear between tests."""
+    default_session.reset()
+    yield
+    default_session.reset()
+
+
 def test_unknown_ball_id_returns_404():
     payload = {**VALID_PAYLOAD, "ball_id": "not_a_real_ball"}
-    response = client.post("/api/v1/simulations/throws", json=payload)
-    assert response.status_code == 404
-
-
-def test_unknown_oil_pattern_returns_404():
-    payload = {**VALID_PAYLOAD, "oil_pattern": "not_a_real_pattern"}
     response = client.post("/api/v1/simulations/throws", json=payload)
     assert response.status_code == 404
 
@@ -41,7 +45,8 @@ def test_missing_required_field_returns_422():
 
 
 def test_representative_throw_returns_a_plausible_trajectory():
-    response = client.post("/api/v1/simulations/throws", json=VALID_PAYLOAD)
+    payload = {**VALID_PAYLOAD, "seed": 7}
+    response = client.post("/api/v1/simulations/throws", json=payload)
     assert response.status_code == 200
 
     body = response.json()
@@ -59,3 +64,25 @@ def test_representative_throw_returns_a_plausible_trajectory():
         assert 0.0 <= point["board"] <= 40.0
 
     assert 0 <= body["pins_knocked"] <= 10
+    assert body["seed"] == 7
+    assert body["lane_condition_version"] == 1
+    assert set(body["actual_release"].keys()) == {
+        "speed_mph",
+        "rev_rate",
+        "axis_rotation",
+        "axis_tilt",
+        "launch_angle",
+        "launch_position",
+    }
+
+
+def test_omitted_seed_is_generated_and_returned():
+    response = client.post("/api/v1/simulations/throws", json=VALID_PAYLOAD)
+    assert response.status_code == 200
+    assert isinstance(response.json()["seed"], int)
+
+
+def test_consecutive_throws_advance_the_lane_condition_version():
+    first = client.post("/api/v1/simulations/throws", json={**VALID_PAYLOAD, "seed": 1}).json()
+    second = client.post("/api/v1/simulations/throws", json={**VALID_PAYLOAD, "seed": 2}).json()
+    assert second["lane_condition_version"] == first["lane_condition_version"] + 1

@@ -1,8 +1,15 @@
 """Ball model.
 
 Mirrors what's stamped on a real bowling ball's spec sheet. `hook_potential`
-folds those specs into one number the simulator uses to scale how hard the
-ball changes direction once it hits dry boards.
+folds coverstock, surface, RG, and differential into one number the
+simulator uses to scale how hard the ball changes direction once it hits
+dry boards. `mass_lbs` feeds the simulator's deceleration directly (see
+simulate.py) — a heavier ball sheds less speed for the same friction.
+
+`radius_in` is deliberately unused this milestone: every ball in the
+catalog shares the regulation diameter, so it can't yet differentiate
+simulated behavior. It stays on the model for when custom or undersized
+balls matter.
 """
 
 from dataclasses import dataclass
@@ -25,12 +32,33 @@ _COVERSTOCK_GRIP: dict[Coverstock, float] = {
 }
 
 
+def _surface_grip_factor(surface: str) -> float:
+    """Rougher (lower-grit) surfaces bite into oil harder and hook more;
+    a polished surface is the smoothest finish a coverstock can carry.
+
+    Grit numbers below come straight off a box's spec sheet (e.g.
+    "500-grit", "2000-grit"); anything without a parseable number falls
+    back to a neutral factor of 1.0.
+    """
+    if surface == "polished":
+        return 0.6
+
+    digits = "".join(ch for ch in surface if ch.isdigit())
+    if not digits:
+        return 1.0
+
+    grit = int(digits)
+    # 500 grit (roughest) -> ~1.3x grip, 3000 grit (finest) -> ~0.6x grip.
+    factor = 1.3 - (grit - 500) / (3000 - 500) * (1.3 - 0.6)
+    return max(0.5, min(1.3, factor))
+
+
 @dataclass(frozen=True)
 class Ball:
     id: str
     name: str
     mass_lbs: float = 15.0
-    radius_in: float = 4.29           # regulation radius, ~8.6" diameter
+    radius_in: float = 4.29           # regulation radius, ~8.6" diameter — unused this milestone, see module docstring
     rg_in: float = 2.54               # radius of gyration — lower flares earlier
     differential: float = 0.045       # RG differential — higher flares more
     surface: str = "1500-grit"        # finish on the coverstock
@@ -38,12 +66,12 @@ class Ball:
 
     @property
     def hook_potential(self) -> float:
-        """0-1ish scalar: how aggressively this ball changes direction on dry boards."""
-        grip = _COVERSTOCK_GRIP[self.coverstock]
+        """Scalar: how aggressively this ball changes direction on dry boards."""
+        grip = _COVERSTOCK_GRIP[self.coverstock] * _surface_grip_factor(self.surface)
         # Higher differential = more flare = more hook. Lower RG = quicker revs.
         flare_factor = self.differential / 0.060
         rg_factor = (2.80 - self.rg_in) / (2.80 - 2.46)
-        return max(0.0, min(1.5, grip * (0.6 * flare_factor + 0.4 * rg_factor)))
+        return max(0.0, min(1.8, grip * (0.6 * flare_factor + 0.4 * rg_factor)))
 
 
 # A small starter catalog — enough to make ball choice matter in v1.
