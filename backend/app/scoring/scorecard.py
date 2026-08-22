@@ -40,7 +40,7 @@ running total can't skip past a gap.
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 FRAME_COUNT = 10
 MAX_PINS = 10
@@ -254,3 +254,55 @@ class Scorecard:
             if frame.score is not None:
                 return frame.score
         return None
+
+    def next_ball_starts_fresh_rack(self) -> bool:
+        """Whether the next legal roll — if the game isn't already
+        complete — would be thrown against a fresh, full rack, as opposed
+        to whatever's left standing from the previous ball in the same
+        frame. True for: the very first roll of the game; the first ball
+        of any frame; any ball immediately following a strike (frames
+        1-9, or either strike ball in frame 10); and frame 10's bonus
+        ball after a spare. False only when the next ball continues on
+        the remainder left by the previous ball in the same frame.
+
+        A pure read of the frames already computed by `add_roll` — this
+        doesn't re-derive or duplicate the ten-pin rules that produced
+        them, it only reads `is_strike`/`is_spare`/`rolls`/`is_complete`
+        off the existing `Frame` objects. Meaningless (but still returns
+        a bool rather than raising) once `is_game_complete` is True —
+        callers that care should check that first.
+        """
+        if not self._frames:
+            return True  # frame 1, ball 1
+        last = self._frames[-1]
+        if last.is_complete:
+            return True  # next roll starts a new frame
+
+        if last.number < FRAME_COUNT:
+            # Frames 1-9 are only ever incomplete after one non-strike
+            # ball (a strike frame is complete immediately) — ball 2
+            # continues on that ball's remainder.
+            return False
+
+        # Frame 10, incomplete.
+        if len(last.rolls) == 1:
+            return last.is_strike  # ball 1 strike -> ball 2 fresh; else ball 2 continues
+        # Two rolls thrown, frame 10 still incomplete: reachable only via
+        # a ball-1 strike (ball 3's freshness depends on ball 2) or a
+        # ball-1+ball-2 spare (ball 3 is always fresh).
+        if last.is_spare:
+            return True
+        return last.rolls[1] == MAX_PINS
+
+    def next_roll_position(self) -> Tuple[Optional[int], Optional[int]]:
+        """(frame_number, ball_number) the next legal roll would belong
+        to — both 1-based — or (None, None) if the game is already
+        complete. Another pure read of the existing `frames`; no rule
+        duplication."""
+        if self.is_game_complete:
+            return None, None
+        if not self._frames or self._frames[-1].is_complete:
+            next_frame = self._frames[-1].number + 1 if self._frames else 1
+            return next_frame, 1
+        last = self._frames[-1]
+        return last.number, len(last.rolls) + 1

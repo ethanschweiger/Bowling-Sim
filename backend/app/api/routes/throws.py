@@ -3,9 +3,11 @@
 Kept temporarily for backward compatibility. Every call here shares ONE
 game session (id `LEGACY_GAME_ID`, lazily created on first use) — there is
 no per-caller isolation, so two unrelated clients hitting this route wear
-the same lane. It does not own a separate hidden lane of its own: it
-delegates to the same `GameService` the game-scoped routes use, just
-against one well-known, fixed game_id instead of a caller-chosen one.
+the same lane, share the same scorecard, and see the same rack. It does
+not own a separate hidden lane, scorecard, or rack of its own: it
+delegates to the same `GameService`/`GameSession.throw` transaction the
+game-scoped routes use, just against one well-known, fixed game_id
+instead of a caller-chosen one.
 
 New clients should use `POST /api/v1/games` to get their own game, then
 `POST /api/v1/games/{game_id}/throws` — see `app/api/routes/games.py`.
@@ -15,7 +17,8 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
 
-from app.games.service import default_game_service
+from app.api.routes.games import build_game_state
+from app.games.service import GameCompleteError, default_game_service
 from app.models.schemas import PinfallInfo, ReleaseValues, ThrowRequest, ThrowResponse, TrajectoryPointResponse
 from app.physics.ball import BALL_CATALOG
 from app.physics.collision import DEFAULT_PINFALL_MODEL
@@ -46,9 +49,18 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
     )
     actual_throw, seed = sample_release(requested_throw, request.seed)
 
-    result = session.lane.run_throw(lambda condition: simulate_throw(ball, actual_throw, condition))
-    impact = impact_state_from_result(result, ball)
-    pinfall = DEFAULT_PINFALL_MODEL.resolve(impact)
+    try:
+        result, pinfall = session.throw(
+            simulate=lambda condition: simulate_throw(ball, actual_throw, condition),
+            resolve_pinfall=lambda sim_result, standing_ids: DEFAULT_PINFALL_MODEL.resolve(
+                impact_state_from_result(sim_result, ball), standing_ids=standing_ids
+            ),
+        )
+    except GameCompleteError:
+        # The shared legacy game finished its game; reset it via
+        # POST /api/v1/games/legacy-default/reset (it's a real game_id
+        # like any other) to keep using this deprecated route.
+        raise HTTPException(status_code=409, detail="the shared legacy game is already complete")
 
     return ThrowResponse(
         seed=seed,
@@ -64,4 +76,5 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
             fallen_pin_ids=list(pinfall.fallen_pin_ids),
         ),
         lane_condition_version=result.lane_condition_version,
+        game_state=build_game_state(session),
     )

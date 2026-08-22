@@ -58,6 +58,33 @@ class PinfallInfo(BaseModel):
     fallen_pin_ids: list[int] = Field(default_factory=list)
 
 
+class FrameStateResponse(BaseModel):
+    """One frame's state, straight off `app.scoring.scorecard.Frame`."""
+
+    number: int
+    rolls: list[int]
+    is_strike: bool
+    is_spare: bool
+    is_complete: bool
+    score: Optional[int]  # cumulative through this frame; None if a bonus it needs hasn't landed yet
+
+
+class GameStateResponse(BaseModel):
+    """A concise, self-contained snapshot of a game's scorecard and rack —
+    everything needed to render a scoreboard or decide what the next
+    throw should look like, without re-deriving any ten-pin rule
+    client-side."""
+
+    standing_pin_ids: list[int]
+    frames: list[FrameStateResponse]
+    total_score: Optional[int]  # cumulative through the most recently resolved frame; None if nothing resolved yet
+    is_game_complete: bool
+    # Both None exactly when is_game_complete is True — there is no next
+    # roll. Otherwise the 1-based frame/ball the next legal roll belongs to.
+    next_frame_number: Optional[int]
+    next_ball_number: Optional[int]
+
+
 class ThrowResponse(BaseModel):
     seed: int
     actual_release: ReleaseValues
@@ -68,6 +95,7 @@ class ThrowResponse(BaseModel):
     pins_knocked: int  # preserved for backward compatibility; see `pinfall` for how it was produced
     pinfall: PinfallInfo
     lane_condition_version: int
+    game_state: GameStateResponse
 
 
 class CreateGameRequest(BaseModel):
@@ -82,6 +110,7 @@ class CreateGameRequest(BaseModel):
 class CreateGameResponse(BaseModel):
     game_id: str
     lane_condition_version: int
+    game_state: GameStateResponse
 
 
 class GameThrowResponse(ThrowResponse):
@@ -91,3 +120,4 @@ class GameThrowResponse(ThrowResponse):
 class GameResetResponse(BaseModel):
     game_id: str
     lane_condition_version: int
+    game_state: GameStateResponse

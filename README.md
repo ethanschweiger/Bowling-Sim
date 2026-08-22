@@ -317,16 +317,41 @@ mutating your original collection afterward can't reach back into the
 silently treated as that pin, and a duplicate or unknown ID raises
 `RackError` rather than silently deduping or vanishing pins from the deck.
 
-Neither `Rack` nor the collision model is wired into a two-ball frame
-yet — that's the next step, once a `GameSession` owns one. See
-`app/games/service.py`'s "Ownership boundaries" for the intended shape:
-one lane condition, one scorecard, and one rack *slot* — `GameSession`
-would atomically replace that slot's value with the next (immutable)
-`Rack` after each throw, the same pattern `LaneSession` already uses for
-`LaneCondition` — all independent of each other, with the reusable
-pattern and standard deck definitions (`OilPatternSpec`,
-`pin_deck.STANDARD_DECK`) staying shared across every game exactly as
-they do today.
+### A real game: `GameSession` owns a lane, a scorecard, and a rack
+
+Every `GameSession` (`app/games/service.py`) now owns three independently
+mutable slots — its `LaneCondition`/`LaneSession`, a `Scorecard`, and a
+rack slot holding an immutable `Rack` — and none of the three value/rule
+objects is aware of the others or of `GameSession` itself. The reusable,
+never-mutated definitions (`OilPatternSpec`/`LaneCondition.house_shot()`,
+`pin_deck.STANDARD_DECK`) stay shared across every game, exactly as
+before. All three slots are **in-memory and per-game**, same as the lane
+always was — nothing here is persisted, and there's no accounts/ownership
+layer; a future move to shared storage or WebSocket-synchronized
+multiplayer changes who holds a `GameSession`, not the collision solver,
+the scorecard rules, or the rack's own logic.
+
+`GameSession.throw` is the one transaction that changes all three. It
+holds a single per-game lock across the whole operation: reject the call
+outright if the game's already complete (before touching anything);
+otherwise read the current rack, run the trajectory and pinfall
+resolution the caller supplies, wear the lane in, record the pinfall in
+the scorecard, and replace the rack according to the standard ten-pin
+fresh-rack rules — a strike or a spare's bonus always gets a fresh rack;
+an ordinary ball leaves the collision's complement standing for the next
+ball in the same frame. Which of those applies is answered by
+`Scorecard.next_ball_starts_fresh_rack()`, a small read-only query over
+the frames `add_roll` already computed — the game session never
+re-derives or duplicates a ten-pin rule of its own. Two different games'
+sessions have entirely separate locks, so they never block each other.
+
+Every throw, create, and reset response carries a `game_state`: the
+standing pin IDs, every frame's rolls/strike/spare/complete/score, the
+resolved `total_score`, `is_game_complete`, and the 1-based
+`next_frame_number`/`next_ball_number` (both `null` exactly when the game
+is complete). A throw against an already-complete game is rejected with
+`409 Conflict` — `POST .../reset` starts the game over with a fresh rack,
+a blank scorecard, and lane version 1.
 
 ### Release variance
 
@@ -377,7 +402,10 @@ pytest
 ```bash
 curl -X POST http://localhost:8000/api/v1/games \
   -H "Content-Type: application/json" -d '{}'
-# {"game_id": "…", "lane_condition_version": 1}
+# {"game_id": "…", "lane_condition_version": 1, "game_state": {
+#    "standing_pin_ids": [1,2,3,4,5,6,7,8,9,10], "frames": [],
+#    "total_score": null, "is_game_complete": false,
+#    "next_frame_number": 1, "next_ball_number": 1 } }
 ```
 
 `oil_pattern` is optional and defaults to `"house"` — the only pattern this
@@ -405,17 +433,22 @@ curl -X POST http://localhost:8000/api/v1/games/{game_id}/throws \
 `seed` is optional — reuse the one an earlier response returned to replay
 that exact throw. This game's lane wears in with every throw; the
 response's `lane_condition_version` tells you which state your throw
-actually ran against. An unknown `game_id` is a 404.
+actually ran against, and `game_state` tells you the resulting rack,
+frames, and score. An unknown `game_id` is a 404; a throw against a
+finished game (ten frames plus any required bonus balls) is a
+`409 Conflict` — nothing about the game changes when that happens.
 
-### Reset a game's lane
+### Reset a game
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/games/{game_id}/reset
-# {"game_id": "…", "lane_condition_version": 1}
+# {"game_id": "…", "lane_condition_version": 1, "game_state": {...fresh...}}
 ```
 
-Restores this game's lane to exactly what it started with and puts the
-version counter back at 1. Other games are untouched.
+Restores this game's lane to exactly what it started with, starts a new
+blank `Scorecard`, and returns the rack to all ten pins standing — the
+same `game_state` shape a freshly created game has. Other games are
+untouched.
 
 Ball catalog: `house_ball`, `urethane_smooth`, `reactive_pearl`, `particle_beast`
 (see `backend/app/physics/ball.py`).
@@ -459,7 +492,16 @@ percentages, leave tracking, ball usage stats.
 - `GameService` never expires old games, so a long-running process
   accumulates one `GameSession` per game created, indefinitely.
 - The deprecated `/api/v1/simulations/throws` route shares one game across
-  every caller — it's for backward compatibility, not isolation.
+  every caller — it's for backward compatibility, not isolation. It now
+  goes through the same `GameSession.throw` transaction the game-scoped
+  route uses, so its rack/scorecard genuinely progress across calls too
+  (no longer an independent full-rack simulation on every request); once
+  that shared game finishes, calls to it return 409 until someone resets
+  it via `POST /api/v1/games/legacy-default/reset`.
+- Every caller who knows a `game_id` can throw in it — there's no
+  per-player turn enforcement within a game yet (relevant once
+  multiplayer exists; a single caller driving one game is the only
+  supported use today).
 - `mass_lbs` and `radius_in` are on the `Ball` model but not used in this
   milestone's trajectory calculation — both deliberately, see "Ball
   properties" above (`app/physics/ball.py`).
