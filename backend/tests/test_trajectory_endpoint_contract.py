@@ -13,6 +13,7 @@ import math
 
 import pytest
 
+from app.games.service import GameService
 from app.physics.ball import BALL_CATALOG
 from app.physics.impact import TruncatedTrajectoryError, impact_state_from_result
 from app.physics.lane import LaneCondition
@@ -20,8 +21,11 @@ from app.physics.pin_deck import LANE_CENTER_BOARD
 from app.physics.simulate import (
     BOARD_DECIMALS,
     STEP_CAP_GUARD,
+    STEP_FT,
     SimulationResult,
     TerminalState,
+    TrajectoryPoint,
+    pin_deck_tolerance_for,
     simulate_throw,
     step_cap_for,
 )
@@ -129,6 +133,44 @@ def test_a_truncated_trajectory_is_refused_rather_than_scored():
     assert "40.000" in str(excinfo.value)
 
 
+def test_a_truncated_route_cannot_mutate_any_part_of_the_game():
+    """Transaction-level: refusal must happen before the lane is worn.
+
+    `LaneSession.run_throw` applies wear as soon as the simulation returns,
+    which is earlier than pinfall resolution — so checking validity only at
+    impact construction would leave a truncated throw having already bumped
+    the lane-condition version on its way to failing.
+    """
+    game = GameService().create_game()
+    before = game.current_snapshot()
+    version_before = game.lane.condition.version
+
+    def truncated_simulate(condition):
+        return SimulationResult(
+            path=[TrajectoryPoint(distance_ft=0.0, board=28.0), TrajectoryPoint(distance_ft=40.0, board=22.0)],
+            entry_board=22.0,
+            entry_angle_deg=2.0,
+            speed_at_pins_mph=14.0,
+            lane_condition_version=condition.version,
+            terminal=TerminalState(
+                distance_ft=40.0, board=22.0, heading_deg=2.0, speed_mph=14.0, reached_pin_deck=False
+            ),
+        )
+
+    def resolve_must_not_run(_sim_result, _standing_ids):
+        raise AssertionError("pinfall resolution must never be reached for a truncated route")
+
+    with pytest.raises(TruncatedTrajectoryError):
+        game.throw(simulate=truncated_simulate, resolve_pinfall=resolve_must_not_run)
+
+    after = game.current_snapshot()
+    assert game.lane.condition.version == version_before, "the lane was worn by a throw that never arrived"
+    assert after.frames == before.frames
+    assert after.standing_pin_ids == before.standing_pin_ids
+    assert after.total_score == before.total_score
+    assert after == before
+
+
 def test_reaching_the_deck_is_measured_against_the_lane_not_a_hardcoded_60():
     # A shorter lane must still register as reached at its own length.
     lane = LaneCondition.house_shot()
@@ -154,6 +196,59 @@ def test_step_cap_always_leaves_headroom_to_cross_the_lane():
         assert step_cap_for(60.0, step) > needed, step
 
 
+@pytest.mark.parametrize("stride", [0.5, 0.25, 0.1, 0.05, 0.3, 0.7])
+def test_the_real_simulator_reaches_the_pin_deck_at_any_stride(stride):
+    """The regression for the defect this milestone exists to fix.
+
+    The previous version of `step_cap_for` defaulted its stride argument to
+    `STEP_FT`, which Python binds once at import. `simulate_throw` called it
+    without the active stride, so the cap stayed frozen at the 0.5 ft value
+    while the loop used a finer one: 0.25 ft stopped at 32 ft, 0.1 ft at
+    12.8 ft, 0.05 ft at 6.4 ft. The old test only called `step_cap_for`
+    directly with explicit arguments, so it passed while the production
+    path was broken. This one drives the real simulator.
+
+    0.3 and 0.7 are deliberately not divisors of the 60 ft lane: they
+    exercise the bounded final partial step.
+    """
+    lane = LaneCondition.house_shot()
+    result = simulate_throw(BALL_CATALOG["reactive_pearl"], Throw(), lane, step_ft=stride)
+
+    assert result.terminal.reached_pin_deck
+    # Exactly the lane length, not merely near or beyond it.
+    assert result.terminal.distance_ft == lane.length_ft
+    assert result.path[-1].distance_ft == lane.length_ft
+    # And the payload stays inside the cap derived for *this* stride.
+    assert len(result.path) <= step_cap_for(lane.length_ft, stride) + 1
+
+
+def test_a_changed_module_stride_is_picked_up_by_the_cap(monkeypatch):
+    # The original failure mode reproduced through the module global rather
+    # than the explicit argument, since that is how a future refinement
+    # would most likely arrive.
+    lane = LaneCondition.house_shot()
+    monkeypatch.setattr("app.physics.simulate.STEP_FT", 0.1)
+    result = simulate_throw(BALL_CATALOG["house_ball"], Throw(), lane)
+    assert result.terminal.distance_ft == lane.length_ft
+    assert result.terminal.reached_pin_deck
+
+
+def test_arrival_tolerance_is_resolved_per_stride_not_at_import():
+    assert pin_deck_tolerance_for(0.5) == 0.05
+    assert pin_deck_tolerance_for(0.1) == pytest.approx(0.01)
+    assert pin_deck_tolerance_for(0.1) < pin_deck_tolerance_for(0.5)
+    for bad in (0.0, -1.0):
+        with pytest.raises(ValueError):
+            pin_deck_tolerance_for(bad)
+
+
+def test_simulate_throw_rejects_a_nonpositive_stride():
+    lane = LaneCondition.house_shot()
+    for bad in (0.0, -0.25):
+        with pytest.raises(ValueError):
+            simulate_throw(BALL_CATALOG["house_ball"], Throw(), lane, step_ft=bad)
+
+
 def test_step_cap_rejects_a_nonpositive_stride():
     for bad in (0.0, -0.5):
         with pytest.raises(ValueError):
@@ -166,7 +261,7 @@ def test_returned_path_length_is_bounded_by_the_step_cap():
     # release point. Anything that raises path density has to raise this
     # documented bound deliberately.
     lane = LaneCondition.house_shot()
-    bound = step_cap_for(lane.length_ft) + 1
+    bound = step_cap_for(lane.length_ft, STEP_FT) + 1
     for ball in BALL_CATALOG.values():
         for angle in (-2.0, 0.0, 2.0):
             result = simulate_throw(ball, Throw(launch_angle=angle), lane)

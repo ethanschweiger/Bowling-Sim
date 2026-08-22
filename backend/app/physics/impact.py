@@ -48,6 +48,27 @@ class TruncatedTrajectoryError(Exception):
     """
 
 
+def require_reached_pin_deck(result: SimulationResult) -> SimulationResult:
+    """Raise `TruncatedTrajectoryError` unless this run reached the pin deck.
+
+    Separated from `impact_state_from_result` so the check can be made
+    *before* a throw mutates anything. `LaneSession.run_throw` applies
+    lane wear as soon as the simulation returns, which is earlier than
+    pinfall resolution — so a truncated route caught only at impact
+    construction would already have worn the lane. Callers that own a
+    game transaction run this inside their simulate step, where raising
+    still leaves the lane, rack, and scorecard untouched.
+
+    Returns the result unchanged so it can wrap a simulate call directly.
+    """
+    if not result.terminal.reached_pin_deck:
+        raise TruncatedTrajectoryError(
+            f"trajectory stopped at {result.terminal.distance_ft:.3f} ft, short of the headpin plane; "
+            "it has no entry state and must not be resolved as pinfall"
+        )
+    return result
+
+
 def impact_state_from_result(result: SimulationResult, ball: Ball) -> ImpactState:
     """Build the headpin-plane impact state a completed throw produced.
 
@@ -64,13 +85,7 @@ def impact_state_from_result(result: SimulationResult, ball: Ball) -> ImpactStat
     Raises `TruncatedTrajectoryError` if the trajectory never reached the
     headpin plane.
     """
-    terminal = result.terminal
-    if not terminal.reached_pin_deck:
-        raise TruncatedTrajectoryError(
-            f"trajectory stopped at {terminal.distance_ft:.3f} ft, short of the headpin plane; "
-            "it has no entry state and must not be resolved as pinfall"
-        )
-
+    terminal = require_reached_pin_deck(result).terminal
     lateral_position_in = boards_to_in(terminal.board - LANE_CENTER_BOARD)
     return ImpactState(
         lateral_position_in=lateral_position_in,

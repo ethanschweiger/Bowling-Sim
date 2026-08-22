@@ -167,14 +167,24 @@ may round this state; it may never recompute it.
 
 `TerminalState.reached_pin_deck` records whether the run actually got to
 the lane's stated length. A trajectory that stopped short is a truncated
-route, not an entry result, and `impact_state_from_result` raises
-`TruncatedTrajectoryError` rather than letting the collision model score a
-throw that never arrived. That matters because the integration-step cap is
-now *derived* from lane length and stride (`simulate.step_cap_for`) rather
-than being a fixed number: a cap tuned for the current 0.5 ft stride would
-silently truncate a 0.1 ft refinement at 40 ft — while still reporting an
-entry board. Every legal release reaches the pin deck today; the guard
-exists so that can't quietly stop being true.
+route, not an entry result: `require_reached_pin_deck` refuses it, and
+`impact_state_from_result` refuses it too. The refusal happens *inside*
+the game's simulate step rather than at impact construction, because
+`LaneSession.run_throw` applies lane wear the moment a simulation returns
+— so a check made any later would already have worn the lane on the way
+to failing. From where it now sits, a truncated route leaves lane, rack,
+and scorecard all untouched.
+
+One stride, resolved once per run, drives the step cap, the loop, the
+arrival tolerance, and the recorded distance. That matters more than it
+sounds: an earlier version had `step_cap_for` *default* its stride
+argument to `STEP_FT`, which Python binds once at import, so the cap
+silently kept the 0.5 ft value while the loop used a finer one — a 0.25 ft
+stride stopped at 32 ft, 0.1 ft at 12.8 ft, and 0.05 ft at 6.4 ft, each
+still reporting an entry board. The stride is now a required argument, and
+a bounded final partial step lands the run exactly on the lane length even
+when the length is not a multiple of the stride (0.3 ft and 0.7 ft strides
+both finish at exactly 60.0 ft, not near it).
 
 The response's path length is bounded by that same derived cap, so raising
 visual fidelity can't turn into an unbounded payload without deliberately

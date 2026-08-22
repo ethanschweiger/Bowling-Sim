@@ -84,6 +84,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable, Dict, FrozenSet, Optional, Tuple
 
+from app.physics.impact import require_reached_pin_deck
 from app.physics.lane import LaneCondition
 from app.physics.lane_session import LaneSession
 from app.physics.rack import Rack
@@ -192,7 +193,16 @@ class GameSession:
                 raise GameCompleteError(f"game {self.game_id} is already complete")
 
             standing_ids = self._rack.standing_ids
-            simulation_result = self.lane.run_throw(simulate)
+            # The validity check runs *inside* the simulate step, not after
+            # it. `LaneSession.run_throw` applies lane wear the moment the
+            # simulation returns — before pinfall resolution — so a route
+            # that never reached the pin deck has to be refused here or it
+            # would already have worn the lane on its way to failing. From
+            # this position the raise leaves lane, rack, and scorecard all
+            # untouched, exactly like the game-complete rejection above.
+            simulation_result = self.lane.run_throw(
+                lambda condition: require_reached_pin_deck(simulate(condition))
+            )
             pinfall_result = resolve_pinfall(simulation_result, standing_ids)
 
             self._scorecard.add_roll(pinfall_result.pins_knocked)

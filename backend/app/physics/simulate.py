@@ -55,6 +55,7 @@ alongside this call by `LaneSession.run_throw`.
 
 import math
 from dataclasses import dataclass
+from typing import Optional
 
 from app.physics.ball import Ball
 from app.physics.lane import LaneCondition
@@ -76,27 +77,44 @@ MIN_FORWARD_FPS = mph_to_fps(0.5)
 STEP_CAP_GUARD = 8
 
 
-def step_cap_for(length_ft: float, step_ft: float = STEP_FT) -> int:
+def step_cap_for(length_ft: float, step_ft: float) -> int:
     """The integration-step cap for a given lane length and stride.
 
     Derived, never a fixed guess. A cap tuned for one stride silently
-    truncates a finer one: the old fixed 400 was ample for STEP_FT=0.5
+    truncates a finer one: a fixed 400 was ample for a 0.5 ft stride
     (a 60 ft lane needs 120 steps) but a refinement to 0.1 ft needs 600
     and would have stopped at 40 ft — while still being reported as an
-    entry result. Deriving the cap from length/stride means changing
-    integration precision can't reintroduce that failure, and
-    `reached_pin_deck` below catches it if anything ever does.
+    entry result.
+
+    `step_ft` is deliberately REQUIRED. An earlier version defaulted it to
+    `STEP_FT`, which Python evaluates once at import: the default captured
+    0.5 permanently, so changing the actual stride left the cap stale and
+    truncated every run (0.25 ft stopped at 32 ft, 0.1 ft at 12.8 ft).
+    Callers must pass the stride the run is actually using.
     """
     if step_ft <= 0:
         raise ValueError(f"step_ft must be positive, got {step_ft}")
     return int(math.ceil(length_ft / step_ft)) + STEP_CAP_GUARD
 
 
-# How close to the lane's stated length counts as having reached the
-# headpin plane. One tenth of a stride: comfortably tighter than a single
-# integration step, loose enough to absorb float accumulation over ~120
-# additions.
-PIN_DECK_TOLERANCE_FT = STEP_FT / 10.0
+def pin_deck_tolerance_for(step_ft: float) -> float:
+    """How close to the lane's stated length counts as having reached the
+    headpin plane, for the stride a run is actually using.
+
+    Also resolved per run rather than at import, for the same reason
+    `step_cap_for` takes its stride explicitly. Runs now land exactly on
+    the lane length via a bounded final partial step, so this only has to
+    absorb float accumulation across the additions that got there.
+    """
+    if step_ft <= 0:
+        raise ValueError(f"step_ft must be positive, got {step_ft}")
+    return step_ft / 10.0
+
+
+# Float slack for "is the loop still short of the pin deck". Tiny: the
+# final step is shortened to land exactly on the lane length, so this
+# guards against re-entering the loop for a residue of a few ULPs.
+DISTANCE_EPSILON_FT = 1e-9
 
 # Decimal places the recorded path and the derived entry marker share.
 # One precision, applied once to one value (see TerminalState) — not two
@@ -151,7 +169,26 @@ class SimulationResult:
     terminal: TerminalState
 
 
-def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> SimulationResult:
+def simulate_throw(
+    ball: Ball,
+    throw: Throw,
+    lane_condition: LaneCondition,
+    step_ft: Optional[float] = None,
+) -> SimulationResult:
+    """Integrate one throw down the lane.
+
+    `step_ft` is the integration stride. Resolved once per run — from the
+    argument when given, otherwise from the module's `STEP_FT` *at call
+    time* — and then used for the step cap, the loop, the arrival
+    tolerance, and the recorded distance alike. Sharing one per-run value
+    across all four is the point: when they were allowed to disagree, the
+    cap kept a stride the loop was no longer using and every run
+    truncated.
+    """
+    active_step_ft = STEP_FT if step_ft is None else step_ft
+    if active_step_ft <= 0:
+        raise ValueError(f"step_ft must be positive, got {active_step_ft}")
+
     launch_board = throw.launch_position
     lateral_offset_ft = 0.0  # a length, not a board number — see module docstring
 
@@ -173,11 +210,30 @@ def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> S
     path = [TrajectoryPoint(distance_ft=0.0, board=round(board, BOARD_DECIMALS))]
     distance = 0.0
     steps = 0
-    max_steps = step_cap_for(lane_condition.length_ft)
+    length_ft = lane_condition.length_ft
+    max_steps = step_cap_for(length_ft, active_step_ft)
 
-    while distance < lane_condition.length_ft and forward_velocity_fps > MIN_FORWARD_FPS and steps < max_steps:
+    while (
+        distance < length_ft - DISTANCE_EPSILON_FT
+        and forward_velocity_fps > MIN_FORWARD_FPS
+        and steps < max_steps
+    ):
+        # Bounded final partial step: when the lane length is not an exact
+        # multiple of the stride, the last step is shortened to land on the
+        # headpin plane rather than overshooting past it. Without this a
+        # 0.3 ft-style stride would end somewhere near 60 ft instead of at
+        # it, and the "canonical endpoint" would be a different place than
+        # the pins actually sit.
+        remaining_ft = length_ft - distance
+        # The epsilon matters: after ~1200 additions of 0.05 the remaining
+        # distance is 0.05 plus a few ULPs, so a bare `>=` would call the
+        # last full step "not final" and land a hair past the plane rather
+        # than exactly on it.
+        is_final_step = active_step_ft >= remaining_ft - DISTANCE_EPSILON_FT
+        this_step_ft = remaining_ft if is_final_step else active_step_ft
+
         friction = lane_condition.friction_at(distance, board)
-        dt = STEP_FT / forward_velocity_fps  # ft / (ft/s) = s — consistent units throughout
+        dt = this_step_ft / forward_velocity_fps  # ft / (ft/s) = s — consistent units throughout
 
         forward_velocity_fps = max(0.0, forward_velocity_fps - friction * FORWARD_DRAG * forward_velocity_fps * dt)
         angular_velocity_rad_s = max(0.0, angular_velocity_rad_s - friction * SPIN_DECAY * angular_velocity_rad_s * dt)
@@ -194,7 +250,9 @@ def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> S
             # instead of silently drifting past it.
             lateral_offset_ft = boards_to_ft(board - launch_board)
 
-        distance += STEP_FT
+        # Snapped, not accumulated, on the final step: the run ends exactly
+        # at the lane length instead of a few float ULPs either side of it.
+        distance = length_ft if is_final_step else distance + this_step_ft
         steps += 1
         path.append(
             TrajectoryPoint(
@@ -214,7 +272,7 @@ def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> S
         board=board,
         heading_deg=entry_angle,
         speed_mph=fps_to_mph(forward_velocity_fps),
-        reached_pin_deck=distance >= lane_condition.length_ft - PIN_DECK_TOLERANCE_FT,
+        reached_pin_deck=distance >= length_ft - pin_deck_tolerance_for(active_step_ft),
     )
 
     return SimulationResult(
