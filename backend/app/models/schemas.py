@@ -52,8 +52,10 @@ class PinfallInfo(BaseModel):
     model_id: str
     limitations: str
     # Which individual pins fell, where the model can identify them (empty
-    # for a model that can't — see each model's `limitations`).
-    fallen_pin_ids: list[int] = []
+    # for a model that can't — see each model's `limitations`). A mutable
+    # default needs default_factory, not a bare `[]`, so every response
+    # gets its own list rather than one shared across instances.
+    fallen_pin_ids: list[int] = Field(default_factory=list)
 
 
 class ThrowResponse(BaseModel):

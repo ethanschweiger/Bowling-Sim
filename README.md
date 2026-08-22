@@ -145,7 +145,9 @@ collision solver can replace one without touching the others:
   project. Every USBC figure here — spacing, the No. 1 pin's distance, pin
   weight/height/max-diameter/coefficient-of-restitution — is quoted
   directly from the official [USBC Equipment Specifications and Certifications Manual](https://bowl.com/getmedia/08ef148d-c0e4-4e00-9e0d-855ba4729ad5/equipment-specs-manual.pdf)
-  (current as of its "10/25" revision), not estimated.
+  (bowl.com; PDF metadata and every page footer read "Last updated on
+  10/25" — October 2025 — verified directly against the document's own
+  pin-dimension and pin-spot tables, accessed 2026-08-22), not estimated.
 - **Impact construction** (`app/physics/impact.py`) — `impact_state_from_result`
   turns a completed trajectory into an `ImpactState`: the ball's lateral
   position, heading, and speed at the headpin plane, plus the mass and
@@ -181,10 +183,22 @@ a visible, self-describing change instead of a silent one.
 `PlanarCollisionPinfallModel` runs entirely in inches and seconds
 (`ImpactState.speed_mph` converts once, at the top, via
 `units.mph_to_in_per_s`). What it takes directly from the USBC manual:
-pin mass (3 lb 8 oz target), the 12 in triangular deck geometry, and a
+pin weight (3 lb 8 oz target), the 12 in triangular deck geometry, and a
 coefficient of restitution of 0.670 (the manual's own target value for a
 pin), applied to every collision — ball-pin and pin-pin alike, since no
 separate figure is published for either.
+
+A ball or pin spec sheet states a *weight* (lbf, a force), not an
+inertial mass — even though `Ball.mass_lbs` and "pin mass" get used
+informally elsewhere in this project. Real impulse and kinetic-energy math
+needs genuine inertia, so `collision.py` converts every weight it touches
+through standard gravity into a true mass (`units.weight_lbf_to_mass_blob`,
+in "blobs" — the inch-pound-second consistent unit, 1 blob = 1 lbf·s²/in)
+before using it in any calculation. Ball and pin go through the identical
+conversion, so their mass *ratio* — and every collision outcome — is
+unchanged from treating the raw weights as mass directly; only the units
+become honest, and "kinetic energy" in this model means real energy
+(lbf·in), not a same-named but dimensionally hollow number.
 
 What's calibrated — stated explicitly, never silently guessed:
 
@@ -202,6 +216,15 @@ What's calibrated — stated explicitly, never silently guessed:
   moved more than its own effective radius from its spot — a proxy for
   toppling in a model with no angle or center-of-mass height to test an
   actual tip-over threshold against.
+
+A non-positive impact speed short-circuits before any collision geometry
+or positional correction runs, even when the ball's starting position
+overlaps a pin's circle — a stationary ball can never dislodge a pin
+purely because they started overlapped. Two circles found at exactly zero
+distance apart (a genuine edge case mid-simulation, not just the
+zero-speed scenario) separate along their relative-velocity direction when
+there is one, or a fixed downlane axis when both are exactly stationary —
+deterministic either way, and never a source of added energy.
 
 **Deferred 3D effects** — not modeled, and each is a real source of error
 against a genuine pin deck: pin tilt/shape (pins aren't disks — a real one

@@ -67,3 +67,14 @@ def test_reset_returns_game_to_version_1():
 
     after_reset = client.post(f"/api/v1/games/{game['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 1}).json()
     assert after_reset["lane_condition_version"] == 1
+
+
+def test_game_throw_response_uses_the_planar_collision_model():
+    game = _create_game()
+    body = client.post(f"/api/v1/games/{game['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 7}).json()
+
+    assert body["pinfall"]["model_id"] == "planar-collision-2d-v1"
+    assert isinstance(body["pinfall"]["fallen_pin_ids"], list)
+    assert all(1 <= pin_id <= 10 for pin_id in body["pinfall"]["fallen_pin_ids"])
+    assert len(set(body["pinfall"]["fallen_pin_ids"])) == len(body["pinfall"]["fallen_pin_ids"])
+    assert body["pins_knocked"] == len(body["pinfall"]["fallen_pin_ids"])

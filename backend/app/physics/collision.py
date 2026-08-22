@@ -12,20 +12,33 @@ variance (see README).
 
 ## Unit system
 
-Everything here runs in inches and seconds, in the same lateral/downlane
-coordinate frame as `pin_deck.py` (origin at the No. 1 pin's spot, so the
-headpin plane is y=0). `ImpactState.speed_mph` is converted to in/s exactly
-once, at the top of `simulate_collision`, via `units.mph_to_in_per_s`.
-Mass is in pounds throughout: ball mass from `ImpactState.ball_mass_lbs`,
-pin mass from the USBC target weight (`PIN_MASS_LBS`).
+Position and velocity run in inches and seconds, in the same
+lateral/downlane coordinate frame as `pin_deck.py` (origin at the No. 1
+pin's spot, so the headpin plane is y=0). `ImpactState.speed_mph` is
+converted to in/s exactly once, at the top of `simulate_collision`, via
+`units.mph_to_in_per_s`.
+
+Mass gets the same "convert once, at the boundary" treatment. `Ball.mass_lbs`
+and the USBC pin weight are stated *weights* (lbf, a force), not inertial
+masses, however colloquially they get called "mass" elsewhere in this
+codebase. Every weight this module touches is converted through standard
+gravity into a true mass (`units.weight_lbf_to_mass_blob`, in "blobs" —
+the inch-pound-second consistent mass unit, 1 blob = 1 lbf*s^2/in) before
+it's used in any impulse or kinetic-energy calculation. Ball and pin go
+through the identical conversion, so their mass *ratio* — and therefore
+every collision outcome — is unchanged from treating the raw weights as
+mass directly; only the units become dimensionally honest, and "kinetic
+energy" in this module means real energy (lbf*in), not a same-named but
+dimensionally hollow proxy.
 
 ## Official USBC inputs vs. calibrated parameters
 
 Official, from `pin_deck.py` (sourced from the equipment specifications
-manual): pin mass, 12 in deck spacing and position, and
-`COLLISION_RESTITUTION` (the manual's own target coefficient of
-restitution for a pin, 0.670 — applied here to every collision, ball-pin
-and pin-pin alike, since no separate figure is published for either case).
+manual — see README for the verified citation with revision/access date):
+pin weight, 12 in deck spacing and position, and `COLLISION_RESTITUTION`
+(the manual's own target coefficient of restitution for a pin, 0.670 —
+applied here to every collision, ball-pin and pin-pin alike, since no
+separate figure is published for either case).
 
 Calibrated — stated explicitly, not measured:
 
@@ -41,6 +54,23 @@ Calibrated — stated explicitly, not measured:
   moved more than its own effective radius from its spot. A stand-in for
   toppling — this model has no angle or center-of-mass height, so it
   can't test an actual tip-over threshold.
+
+## No energy from nothing
+
+A non-positive impact speed short-circuits before any collision geometry
+or positional correction runs — `simulate_collision` returns immediately,
+even if the ball's starting position happens to overlap a pin's circle. A
+stationary ball can never knock a pin down purely because they started
+overlapped; positional correction only ever runs alongside (never instead
+of) genuine contact physics.
+
+`_resolve_pair` also handles the degenerate case of two circles at exactly
+zero distance apart deterministically: it separates them along the
+relative-velocity direction when that's nonzero, or along a fixed axis
+(the downlane +y direction) when both bodies are exactly stationary — a
+regularization for otherwise-undefined geometry, not a source of motion,
+since with zero relative velocity the impulse step contributes nothing
+either way.
 
 ## Fixed timestep, bounded simulation, no randomness
 
@@ -69,7 +99,7 @@ from app.physics.pin_deck import (
     USBC_PIN_WEIGHT_OZ,
 )
 from app.physics.pinfall import PinfallModel, PinfallResult
-from app.physics.units import IN_PER_FT, mph_to_in_per_s
+from app.physics.units import IN_PER_FT, mph_to_in_per_s, weight_lbf_to_mass_blob
 
 COLLISION_DT_S = 0.0005
 MAX_COLLISION_SECONDS = 2.0
@@ -78,10 +108,16 @@ SETTLE_SPEED_IN_S = 0.5  # every body below this speed counts as "settled"
 LINEAR_DAMPING_PER_S = 1.2
 
 OZ_PER_LB = 16.0
-PIN_MASS_LBS = USBC_PIN_WEIGHT_OZ[0] / OZ_PER_LB
+PIN_WEIGHT_LBF = USBC_PIN_WEIGHT_OZ[0] / OZ_PER_LB  # target weight, pounds-force — not yet a mass
+PIN_MASS_BLOB = weight_lbf_to_mass_blob(PIN_WEIGHT_LBF)  # true inertial mass
 PIN_EFFECTIVE_RADIUS_IN = USBC_PIN_MAX_DIAMETER_IN[0] / 2.0
 COLLISION_RESTITUTION = USBC_PIN_COEFFICIENT_OF_RESTITUTION[0]
 FALL_DISPLACEMENT_THRESHOLD_IN = PIN_EFFECTIVE_RADIUS_IN
+
+# The fixed fallback separating axis for two exactly-coincident, exactly-
+# stationary bodies (see "No energy from nothing" above) — downlane, the
+# same +y direction pin rows extend along.
+_STATIONARY_FALLBACK_NORMAL = (0.0, 1.0)
 
 
 @dataclass
@@ -93,7 +129,7 @@ class _Body:
     y_in: float
     vx_in_s: float
     vy_in_s: float
-    mass_lbs: float
+    mass_blob: float  # true inertial mass — see module docstring
     radius_in: float
     origin_x_in: float
     origin_y_in: float
@@ -109,34 +145,48 @@ class _Body:
 
 def _resolve_pair(a: _Body, b: _Body) -> None:
     """Impulse + positional correction for one pair of circles, if they
-    overlap. No-op otherwise. Pure with respect to everything except a
-    and b's own x/y/vx/vy, which it updates in place."""
+    overlap. No-op if they're genuinely apart. Pure with respect to
+    everything except a and b's own x/y/vx/vy, which it updates in place.
+    """
     dx, dy = b.x_in - a.x_in, b.y_in - a.y_in
     dist = math.hypot(dx, dy)
     min_dist = a.radius_in + b.radius_in
-    if dist >= min_dist or dist == 0.0:
+    if dist >= min_dist:
         return
 
-    nx, ny = dx / dist, dy / dist
     rvx, rvy = a.vx_in_s - b.vx_in_s, a.vy_in_s - b.vy_in_s
+
+    if dist == 0.0:
+        # Degenerate geometry: no direction is defined by position alone.
+        # Separate along the closing relative-velocity direction when
+        # there is one; otherwise fall back to a fixed, documented axis.
+        # See "No energy from nothing" in the module docstring.
+        rel_speed = math.hypot(rvx, rvy)
+        if rel_speed > 0.0:
+            nx, ny = rvx / rel_speed, rvy / rel_speed
+        else:
+            nx, ny = _STATIONARY_FALLBACK_NORMAL
+    else:
+        nx, ny = dx / dist, dy / dist
+
     vrel_normal = rvx * nx + rvy * ny
 
     if vrel_normal > 0:  # still approaching along the contact normal
-        inv_mass_sum = 1.0 / a.mass_lbs + 1.0 / b.mass_lbs
+        inv_mass_sum = 1.0 / a.mass_blob + 1.0 / b.mass_blob
         j = -(1.0 + COLLISION_RESTITUTION) * vrel_normal / inv_mass_sum
-        a.vx_in_s += (j / a.mass_lbs) * nx
-        a.vy_in_s += (j / a.mass_lbs) * ny
-        b.vx_in_s -= (j / b.mass_lbs) * nx
-        b.vy_in_s -= (j / b.mass_lbs) * ny
+        a.vx_in_s += (j / a.mass_blob) * nx
+        a.vy_in_s += (j / a.mass_blob) * ny
+        b.vx_in_s -= (j / b.mass_blob) * nx
+        b.vy_in_s -= (j / b.mass_blob) * ny
 
     # Positional correction: separate along the normal, mass-weighted, so
     # the pair doesn't stay overlapped on the next step.
     penetration = min_dist - dist
-    total_mass = a.mass_lbs + b.mass_lbs
-    a.x_in -= nx * penetration * (b.mass_lbs / total_mass)
-    a.y_in -= ny * penetration * (b.mass_lbs / total_mass)
-    b.x_in += nx * penetration * (a.mass_lbs / total_mass)
-    b.y_in += ny * penetration * (a.mass_lbs / total_mass)
+    total_mass = a.mass_blob + b.mass_blob
+    a.x_in -= nx * penetration * (b.mass_blob / total_mass)
+    a.y_in -= ny * penetration * (b.mass_blob / total_mass)
+    b.x_in += nx * penetration * (a.mass_blob / total_mass)
+    b.y_in += ny * penetration * (a.mass_blob / total_mass)
 
 
 def simulate_collision(impact: ImpactState):
@@ -145,16 +195,25 @@ def simulate_collision(impact: ImpactState):
     Returns (fallen_pin_ids, steps_taken): fallen_pin_ids is a tuple of
     unique pin IDs sorted ascending; steps_taken is always
     <= MAX_COLLISION_STEPS.
+
+    A non-positive `impact.speed_mph` returns `((), 0)` immediately — no
+    body is constructed, no geometry is touched, no positional correction
+    runs. A stationary ball cannot dislodge a pin it happens to start
+    overlapping.
     """
+    if impact.speed_mph <= 0.0:
+        return (), 0
+
     speed_in_s = mph_to_in_per_s(impact.speed_mph)
     heading_rad = math.radians(impact.heading_deg)
+    ball_mass_blob = weight_lbf_to_mass_blob(impact.ball_mass_lbs)
 
     ball = _Body(
         x_in=impact.lateral_position_in,
         y_in=0.0,  # the headpin plane is y=0 in this frame
         vx_in_s=speed_in_s * math.sin(heading_rad),
         vy_in_s=speed_in_s * math.cos(heading_rad),
-        mass_lbs=impact.ball_mass_lbs,
+        mass_blob=ball_mass_blob,
         radius_in=impact.ball_radius_in,
         origin_x_in=impact.lateral_position_in,
         origin_y_in=0.0,
@@ -166,7 +225,7 @@ def simulate_collision(impact: ImpactState):
             y_in=(pin.distance_ft - HEADPIN_DISTANCE_FT) * IN_PER_FT,
             vx_in_s=0.0,
             vy_in_s=0.0,
-            mass_lbs=PIN_MASS_LBS,
+            mass_blob=PIN_MASS_BLOB,
             radius_in=PIN_EFFECTIVE_RADIUS_IN,
             origin_x_in=pin.lateral_in,
             origin_y_in=(pin.distance_ft - HEADPIN_DISTANCE_FT) * IN_PER_FT,

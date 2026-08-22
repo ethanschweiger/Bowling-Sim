@@ -89,3 +89,11 @@ def test_consecutive_throws_advance_the_lane_condition_version():
     first = client.post("/api/v1/simulations/throws", json={**VALID_PAYLOAD, "seed": 1}).json()
     second = client.post("/api/v1/simulations/throws", json={**VALID_PAYLOAD, "seed": 2}).json()
     assert second["lane_condition_version"] == first["lane_condition_version"] + 1
+
+
+def test_legacy_throw_response_uses_the_planar_collision_model():
+    body = client.post("/api/v1/simulations/throws", json={**VALID_PAYLOAD, "seed": 7}).json()
+
+    assert body["pinfall"]["model_id"] == "planar-collision-2d-v1"
+    assert isinstance(body["pinfall"]["fallen_pin_ids"], list)
+    assert body["pins_knocked"] == len(body["pinfall"]["fallen_pin_ids"])
