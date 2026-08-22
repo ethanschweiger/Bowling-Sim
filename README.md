@@ -363,7 +363,14 @@ plain values (an int, a frozenset, a tuple of already-immutable `Frame`
 objects) — from *inside* the same lock that did the mutation, and return
 it as part of their own result. Every response, including `GET`, is
 rendered from one of these snapshots, never from a second lock/read taken
-after the operation that produced it has already returned.
+after the operation that produced it has already returned. `GameSession`
+itself has no public accessor for the live `Scorecard` either — an
+earlier version's `.scorecard` property was exactly this escape hatch
+(it protected the moment of the read with the lock, but not what a
+caller did with the live, still-mutable object afterward); it's gone,
+and `current_snapshot()`/the returned `GameStateSnapshot` are the only
+public way to inspect a game's frames, score, completion state, next
+roll, and rack.
 
 ### Read a game without changing it
 

@@ -52,7 +52,14 @@ describe *newer* game state. `Rack` doesn't have this problem (each
 instance is genuinely immutable — a later throw replaces the slot with a
 different object, never mutates the one already handed out), but
 `Scorecard` does, so nothing here ever exposes a live `Scorecard`
-reference for a caller to read from later.
+reference for a caller to read from later. `GameSession` has no public
+`scorecard` accessor at all — an earlier version of this module had one
+(returning `self._scorecard` under the lock, then releasing it), which
+was exactly this escape hatch: the lock protected the moment of the
+read, not what a caller did with the live, still-mutable object
+afterward. `current_snapshot()` and the `GameStateSnapshot` each
+`throw()`/`reset()` returns are the sole public read model for a game
+session's frames, score, completion state, next roll, and rack.
 
 `GameStateSnapshot` is the fix: a frozen dataclass built *inside* the
 lock, holding only plain, already-immutable values (an int, a frozenset,
@@ -139,17 +146,6 @@ class GameSession:
         never from this.)"""
         with self._lock:
             return self._rack
-
-    @property
-    def scorecard(self) -> Scorecard:
-        """This game's live `Scorecard`. Safe to read from immediately,
-        under the caller's own control — but do not hold a reference and
-        read from it *later*, after other code may have run; a later
-        throw mutates this same object. Routes never do this — they use
-        `GameStateSnapshot`. (Mostly useful for tests/white-box
-        inspection of state right after driving a throw directly.)"""
-        with self._lock:
-            return self._scorecard
 
     def _build_snapshot(self) -> GameStateSnapshot:
         """Builds a `GameStateSnapshot` from current state. Caller must

@@ -141,7 +141,7 @@ def test_throw_after_game_completion_returns_409_and_reset_recovers():
 
     for _ in range(12):
         session.throw(simulate=strike_everything, resolve_pinfall=resolve_strike)
-    assert session.scorecard.is_game_complete
+    assert session.current_snapshot().is_game_complete
 
     lane_version_before = session.lane.condition.version
 
