@@ -6,13 +6,22 @@ the ball's path down the lane and reports what happens at the pins.
 
 ## Status
 
-A backend, and a first connected frontend shell. No database, no auth. Each
-game gets its own lane: create one, throw in it, reset it back to a fresh
-house shot whenever you want. A deprecated single-lane endpoint from an
-earlier milestone still works, shared by every caller that still uses it.
-The frontend (`frontend/`) is a Vite + React + TypeScript single-page shell
-that drives one game against the real API — see "Frontend" below for what
-it does and doesn't do yet.
+Playable end to end, locally: pick a ball and a release, throw, watch that
+shot replay down the lane, and score a full ten-frame game. A FastAPI
+backend owns the trajectory simulation, the deterministic 2D pin collision,
+and the ten-pin scoring rules; a Vite + React + TypeScript frontend
+(`frontend/`) drives one game against that real API and renders exactly
+what the server returns.
+
+Each game gets its own lane — create one, throw in it, reset it back to a
+fresh house shot whenever you want. Games live in memory only: there is no
+database, no accounts, no authentication, and no multiplayer. A deprecated
+single-lane endpoint from an earlier milestone still works, shared by every
+caller that still uses it.
+
+See "Frontend" for what the UI does and doesn't do yet, and "Known
+limitations" for which numbers are sourced from USBC specifications versus
+chosen as modeling assumptions.
 
 ## Architecture
 
@@ -423,11 +432,33 @@ The API comes up at `http://localhost:8000`. Interactive docs at
 
 ## Test
 
+Backend — pytest:
+
 ```bash
 cd backend
 source .venv/bin/activate
 pytest
 ```
+
+Frontend — vitest, plus the TypeScript check and the linter:
+
+```bash
+cd frontend
+npm run test
+```
+
+```bash
+cd frontend
+npm run build
+```
+
+```bash
+cd frontend
+npm run lint
+```
+
+`npm run build` runs `tsc -b` before the production build, so it doubles as
+the type check.
 
 ## Frontend
 
