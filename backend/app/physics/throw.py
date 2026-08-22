@@ -44,7 +44,13 @@ RELEASE_BOUNDS = {
     "rev_rate": (0.0, 600.0),
     "axis_rotation": (0.0, 90.0),
     "axis_tilt": (0.0, 90.0),
-    "launch_angle": (-10.0, 10.0),
+    # Tighter than the model's original +-10 degrees: launch_angle is a
+    # *sustained* heading held for the whole 60 ft in this simplified model
+    # (nothing decays it back toward zero), and with the corrected board
+    # width (see units.py), even a couple of degrees integrates into tens
+    # of boards of drift. +-2 degrees keeps the parameter physically
+    # plausible for a real release angle under that assumption.
+    "launch_angle": (-2.0, 2.0),
     "launch_position": (1.0, 39.0),
 }
 

@@ -8,7 +8,7 @@ from app.physics.throw import Throw
 BASE_BALL_SPECS = dict(rg_in=2.52, differential=0.052, surface="2000-grit")
 THROW = Throw(
     speed_mph=17.0, rev_rate=380.0, axis_rotation=55.0,
-    axis_tilt=10.0, launch_angle=1.5, launch_position=20.0,
+    axis_tilt=10.0, launch_angle=0.4, launch_position=20.0,
 )
 
 

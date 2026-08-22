@@ -11,8 +11,33 @@ rises and the ball "reads the lane" and turns.
 Everything inside the loop runs in one unit system — feet and seconds (see
 `app.physics.units`). Speed and spin are converted to ft/s and rad/s once,
 at the top; the timestep comes from feet-of-travel divided by feet-per-
-second, never feet divided by mph. Results convert back to mph only when
-they leave this function.
+second, never feet divided by mph. Lateral position gets the same
+treatment: it accumulates as `lateral_offset_ft`, a real length, and is
+converted to a board number only when a `TrajectoryPoint` is recorded —
+never added to a board index directly. Results convert back to mph and
+boards only when they leave this function.
+
+## Coordinate conventions
+
+- **Downlane distance** (`distance_ft`): 0.0 at the foul line, increasing
+  toward the pins. The loop runs until this reaches the lane condition's
+  length (60 ft) or the ball is effectively stopped.
+- **Lateral direction**: positive `lateral_offset_ft` / positive
+  `lateral_velocity_fps` means drifting toward *higher* board numbers.
+  Board 1 is the right gutter and board 39 the left, in standard USBC
+  numbering — so for a right-handed bowler, positive lateral motion is a
+  drift to the left, which is the hook direction a right-handed reactive
+  release produces.
+- **Board numbering**: 1-39 across the lane, plus a small margin (0 and
+  40) so a ball that drifts to the edge reads as "in the gutter" rather
+  than clipping exactly at 1 or 39.
+- **Release angle** (`throw.launch_angle`): degrees off the lane's
+  centerline at release. Positive means aimed toward higher board numbers,
+  same sign convention as lateral position.
+- **Entry angle** (`result.entry_angle_deg`): the angle between the ball's
+  path and straight-ahead at the pin deck, same sign convention — positive
+  means the ball is still moving toward higher board numbers when it
+  arrives.
 
 Ball mass is deliberately not a term here. Under simple Coulomb friction,
 deceleration is `a = mu * g` — mass cancels out of `F = ma` because both
@@ -34,12 +59,12 @@ from dataclasses import dataclass
 from app.physics.ball import Ball
 from app.physics.lane import LaneCondition
 from app.physics.throw import Throw
-from app.physics.units import fps_to_mph, mph_to_fps, rpm_to_rad_per_s
+from app.physics.units import boards_to_ft, fps_to_mph, ft_to_boards, mph_to_fps, rpm_to_rad_per_s
 
 STEP_FT = 0.5
-FORWARD_DRAG = 0.35          # empirical: how hard friction slows the ball down, per second
-SPIN_DECAY = 0.55            # empirical: how hard friction bleeds off spin, per second
-HOOK_GAIN = 1.2              # empirical: how hard remaining spin turns into lateral motion
+FORWARD_DRAG = 0.35           # empirical: how hard friction slows the ball down, per second
+SPIN_DECAY = 0.55             # empirical: how hard friction bleeds off spin, per second
+HOOK_GAIN = 0.18               # empirical: ft/s^2 of lateral accel per (friction * rad/s * hook_potential)
 
 # Below this forward speed the ball is treated as carried by momentum to the
 # pins rather than integrated further — avoids a division blowup as speed
@@ -68,9 +93,10 @@ class SimulationResult:
 
 
 def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> SimulationResult:
-    board = throw.launch_position
+    launch_board = throw.launch_position
+    lateral_offset_ft = 0.0  # a length, not a board number — see module docstring
+
     forward_velocity_fps = mph_to_fps(throw.speed_mph)
-    # Positive lateral velocity = drifting toward higher board numbers (left, for a righty).
     lateral_velocity_fps = math.tan(math.radians(throw.launch_angle)) * forward_velocity_fps
     angular_velocity_rad_s = rpm_to_rad_per_s(throw.rev_rate)
 
@@ -79,6 +105,12 @@ def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> S
     hook_direction = math.sin(math.radians(throw.axis_rotation))
     tilt_delay = math.cos(math.radians(throw.axis_tilt))
 
+    board_lo, board_hi = 0.0, lane_condition.board_count + 1
+
+    def board_from_offset(offset_ft: float) -> float:
+        return launch_board + ft_to_boards(offset_ft)
+
+    board = board_from_offset(lateral_offset_ft)
     path = [TrajectoryPoint(distance_ft=0.0, board=board)]
     distance = 0.0
     steps = 0
@@ -90,11 +122,17 @@ def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> S
         forward_velocity_fps = max(0.0, forward_velocity_fps - friction * FORWARD_DRAG * forward_velocity_fps * dt)
         angular_velocity_rad_s = max(0.0, angular_velocity_rad_s - friction * SPIN_DECAY * angular_velocity_rad_s * dt)
 
-        hook_force = friction * HOOK_GAIN * angular_velocity_rad_s * ball.hook_potential * tilt_delay
-        lateral_velocity_fps += hook_force * hook_direction * dt
+        hook_force_fps2 = friction * HOOK_GAIN * angular_velocity_rad_s * ball.hook_potential * tilt_delay
+        lateral_velocity_fps += hook_force_fps2 * hook_direction * dt
 
-        board += lateral_velocity_fps * dt
-        board = max(0.0, min(lane_condition.board_count + 1, board))
+        lateral_offset_ft += lateral_velocity_fps * dt  # length + length — never a raw feet-onto-board add
+        raw_board = board_from_offset(lateral_offset_ft)
+        board = max(board_lo, min(board_hi, raw_board))
+        if board != raw_board:
+            # Clamped to the lane edge — keep the offset consistent with the
+            # displayed board so a later step derives the same clamped value
+            # instead of silently drifting past it.
+            lateral_offset_ft = boards_to_ft(board - launch_board)
 
         distance += STEP_FT
         steps += 1

@@ -24,6 +24,20 @@ GRID_LENGTH_CELLS = int(LANE_LENGTH_FT / GRID_RESOLUTION_FT) + 1  # feet 0..60 i
 OILED_FRICTION = 0.015   # heavy oil — the ball skids
 DRY_FRICTION = 0.080     # no oil — the ball grips and hooks
 
+# Temperature's effect on friction is real (warmer lanes tend to break oil
+# down and migrate it faster, effectively drying boards out sooner) but
+# small next to what oil coverage does. Modeled as a documented, bounded
+# multiplier on friction, not derived from thermodynamics: at most a 10%
+# swing, symmetric around a 72F reference.
+REFERENCE_TEMPERATURE_F = 72.0
+TEMPERATURE_FRICTION_COEFF = 0.001   # fractional friction change per degree F from reference
+MAX_TEMPERATURE_ADJUSTMENT = 0.10    # hard cap on that fractional change, either direction
+
+
+def _temperature_friction_multiplier(temperature_f: float) -> float:
+    raw = 1.0 + TEMPERATURE_FRICTION_COEFF * (temperature_f - REFERENCE_TEMPERATURE_F)
+    return _clamp(raw, 1.0 - MAX_TEMPERATURE_ADJUSTMENT, 1.0 + MAX_TEMPERATURE_ADJUSTMENT)
+
 # How much of a cell's oil a single pass picks up, and how much of that
 # picked-up oil resurfaces further down the lane. Both are small fractions
 # so wear is gradual and one throw can never dry out a board.
@@ -121,11 +135,17 @@ class LaneCondition:
     reflects how much of *this pattern's original* oil remains, not how
     much is left relative to whatever the current wettest cell happens to
     be.
+
+    `temperature_f` is a stored lane parameter, carried forward unchanged
+    by `apply_wear` (a throw doesn't change the room's temperature). See
+    `_temperature_friction_multiplier` for its (small, bounded) effect on
+    `friction_at`.
     """
 
     spec: OilPatternSpec
     oil_grid: tuple[tuple[float, ...], ...]  # [board 1..39][foot 0..60] -> mL
     peak_oil_ml: float
+    temperature_f: float = REFERENCE_TEMPERATURE_F
     version: int = 1
 
     @property
@@ -137,11 +157,11 @@ class LaneCondition:
         return BOARD_COUNT
 
     @staticmethod
-    def house_shot() -> "LaneCondition":
-        return LaneCondition._build(HOUSE_SHOT_SPEC)
+    def house_shot(temperature_f: float = REFERENCE_TEMPERATURE_F) -> "LaneCondition":
+        return LaneCondition._build(HOUSE_SHOT_SPEC, temperature_f=temperature_f)
 
     @staticmethod
-    def _build(spec: OilPatternSpec) -> "LaneCondition":
+    def _build(spec: OilPatternSpec, temperature_f: float = REFERENCE_TEMPERATURE_F) -> "LaneCondition":
         shape: list[list[float]] = []
         for board in range(1, BOARD_COUNT + 1):
             lateral = _lateral_factor(board, spec)
@@ -156,7 +176,7 @@ class LaneCondition:
         unit_scale = spec.total_volume_ml / shape_sum if shape_sum > 0 else 0.0
 
         grid = tuple(tuple(v * unit_scale for v in row) for row in shape)
-        return LaneCondition(spec=spec, oil_grid=grid, peak_oil_ml=unit_scale, version=1)
+        return LaneCondition(spec=spec, oil_grid=grid, peak_oil_ml=unit_scale, temperature_f=temperature_f, version=1)
 
     def _cell_index(self, distance_ft: float, board: float) -> tuple[int, int]:
         board_idx = int(_clamp(round(board) - 1, 0, BOARD_COUNT - 1))
@@ -169,16 +189,19 @@ class LaneCondition:
 
     def friction_at(self, distance_ft: float, board: float) -> float:
         """Friction coefficient at a point on the lane, derived from the oil
-        remaining there relative to the pattern's fresh peak. Always within
-        [OILED_FRICTION, DRY_FRICTION], regardless of how far out of bounds
-        distance/board are pushed.
+        remaining there relative to the pattern's fresh peak, then adjusted
+        by temperature. Always within [OILED_FRICTION, DRY_FRICTION],
+        regardless of how far out of bounds distance/board/temperature are
+        pushed.
         """
         if self.peak_oil_ml <= 0:
-            return DRY_FRICTION
+            base = DRY_FRICTION
+        else:
+            oil_ratio = _clamp(self.oil_at(distance_ft, board) / self.peak_oil_ml, 0.0, 1.0)
+            base = DRY_FRICTION - oil_ratio * (DRY_FRICTION - OILED_FRICTION)
 
-        oil_ratio = _clamp(self.oil_at(distance_ft, board) / self.peak_oil_ml, 0.0, 1.0)
-        friction = DRY_FRICTION - oil_ratio * (DRY_FRICTION - OILED_FRICTION)
-        return _clamp(friction, OILED_FRICTION, DRY_FRICTION)
+        adjusted = base * _temperature_friction_multiplier(self.temperature_f)
+        return _clamp(adjusted, OILED_FRICTION, DRY_FRICTION)
 
 
 def apply_wear(condition: LaneCondition, path) -> LaneCondition:
@@ -215,5 +238,9 @@ def apply_wear(condition: LaneCondition, path) -> LaneCondition:
 
     new_grid = tuple(tuple(row) for row in grid)
     return LaneCondition(
-        spec=condition.spec, oil_grid=new_grid, peak_oil_ml=condition.peak_oil_ml, version=condition.version + 1
+        spec=condition.spec,
+        oil_grid=new_grid,
+        peak_oil_ml=condition.peak_oil_ml,
+        temperature_f=condition.temperature_f,
+        version=condition.version + 1,
     )

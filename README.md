@@ -47,10 +47,23 @@ Everything inside the integration loop runs in feet and seconds
 (`app/physics/units.py`). A request's mph and RPM are converted to ft/s and
 rad/s exactly once, at the top of `simulate_throw`; the timestep comes from
 feet-of-travel divided by feet-per-second, never feet divided by mph.
-Results convert back to mph only at the response. `FORWARD_DRAG`,
-`SPIN_DECAY`, and `HOOK_GAIN` in `simulate.py` are openly empirical —
-tuned so skid, hook, and roll stay credible and bounded, not derived from
-rigid-body mechanics.
+Lateral position gets the same treatment: it accumulates as a length
+(`lateral_offset_ft`) throughout the throw and converts to a board number
+only at the trajectory boundary, via a declared board width (1.05 in —
+close to a regulation lane's 41.5 in across 39 boards). It's never added to
+a board index directly. Results convert back to mph and boards only when
+they leave the simulator. `FORWARD_DRAG`, `SPIN_DECAY`, and `HOOK_GAIN` in
+`simulate.py` are openly empirical — tuned so skid, hook, and roll stay
+credible and bounded, not derived from rigid-body mechanics.
+
+Because a board is a narrow unit (~0.0875 ft), `launch_angle`'s legal range
+is deliberately tight (±2°, see `RELEASE_BOUNDS` in `throw.py`): this model
+holds a release angle constant for the ball's entire trip down the lane —
+nothing decays it back toward straight — so even a couple of degrees
+integrates into many boards of drift over 60 ft. See "Coordinate
+conventions" at the top of `simulate.py` for the full sign/direction
+reference (downlane distance, lateral direction, board numbering, release
+angle, entry angle).
 
 ### Ball properties, what they do
 
@@ -91,6 +104,13 @@ recording that throw's wear happen inside one lock (`LaneSession.run_throw`)
 — two requests can't both read the same condition and silently clobber each
 other's wear, and the version a response reports is exactly the one it ran
 against.
+
+`LaneCondition` also carries `temperature_f` (72°F by default), retained
+unchanged through wear. It nudges friction by a small, bounded, documented
+amount — at most ±10%, symmetric around 72°F — rather than doing nothing
+with it (`LaneCondition.friction_at` / `_temperature_friction_multiplier`
+in `lane.py`). The direction (warmer -> slightly higher friction) is a
+stated modeling choice, not derived from thermodynamics.
 
 ### Release variance
 
@@ -146,7 +166,7 @@ curl -X POST http://localhost:8000/api/v1/simulations/throws \
     "rev_rate": 350,
     "axis_rotation": 45,
     "axis_tilt": 15,
-    "launch_angle": 2,
+    "launch_angle": 0.5,
     "launch_position": 28
   }'
 ```
@@ -188,8 +208,17 @@ percentages, leave tracking, ball usage stats.
 - `FORWARD_DRAG`, `SPIN_DECAY`, and `HOOK_GAIN` (`app/physics/simulate.py`)
   are hand-tuned for bounded, credible motion, not fit to real ball-motion
   data.
+- `launch_angle` is held constant for a throw's whole trip down the lane —
+  nothing decays it back toward straight — which is why its legal range is
+  a tight ±2° rather than a more generously "realistic" figure. A model
+  that let a release angle fade out over the first several feet (closer to
+  how a real ball settles onto its roll) could afford a wider range; that's
+  a larger change than this milestone's scope.
 - The house shot's length, taper, ratio, and 22 mL total volume are a
   reasoned assumption, not a certified USBC pattern.
+- The board width (1.05 in) and the temperature-friction adjustment
+  (±10% max, linear, 72°F reference) are both stated modeling constants,
+  not measured or derived.
 - `database_url` exists in config for the v3 milestone; nothing reads or
   writes to Postgres yet, and no migrations exist.
 - Release-error bounds (`_RELEASE_NOISE_STD` in `app/physics/throw.py`) are
