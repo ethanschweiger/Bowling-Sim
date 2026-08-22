@@ -22,8 +22,8 @@ from app.models.schemas import (
     TrajectoryPointResponse,
 )
 from app.physics.ball import BALL_CATALOG
+from app.physics.collision import DEFAULT_PINFALL_MODEL
 from app.physics.impact import impact_state_from_result
-from app.physics.pinfall import DEFAULT_PINFALL_MODEL
 from app.physics.simulate import simulate_throw
 from app.physics.throw import Throw, sample_release
 
@@ -72,7 +72,11 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
         entry_angle_deg=result.entry_angle_deg,
         speed_at_pins_mph=result.speed_at_pins_mph,
         pins_knocked=pinfall.pins_knocked,
-        pinfall=PinfallInfo(model_id=pinfall.model_id, limitations=pinfall.limitations),
+        pinfall=PinfallInfo(
+            model_id=pinfall.model_id,
+            limitations=pinfall.limitations,
+            fallen_pin_ids=list(pinfall.fallen_pin_ids),
+        ),
         lane_condition_version=result.lane_condition_version,
     )
 

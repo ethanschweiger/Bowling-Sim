@@ -41,8 +41,8 @@ class TrajectoryPointResponse(BaseModel):
 
 class PinfallInfo(BaseModel):
     """Which pinfall model produced `pins_knocked`, and its honest
-    limitations — added so a future real collision model is a
-    self-describing swap, not a silent behavior change."""
+    limitations — added so swapping in a different pinfall model later is
+    a self-describing, visible change, not a silent one."""
 
     # `model_id` collides with pydantic's own reserved `model_*` attribute
     # namespace (model_dump, model_validate, ...) — it's still a plain data
@@ -51,6 +51,9 @@ class PinfallInfo(BaseModel):
 
     model_id: str
     limitations: str
+    # Which individual pins fell, where the model can identify them (empty
+    # for a model that can't — see each model's `limitations`).
+    fallen_pin_ids: list[int] = []
 
 
 class ThrowResponse(BaseModel):

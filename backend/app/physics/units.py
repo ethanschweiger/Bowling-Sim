@@ -40,6 +40,10 @@ def fps_to_mph(fps: float) -> float:
     return fps / MPH_TO_FPS
 
 
+def mph_to_in_per_s(mph: float) -> float:
+    return mph_to_fps(mph) * IN_PER_FT
+
+
 def rpm_to_rad_per_s(rpm: float) -> float:
     return rpm * RADIANS_PER_REV / SECONDS_PER_MINUTE
 

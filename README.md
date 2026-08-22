@@ -143,31 +143,71 @@ collision solver can replace one without touching the others:
   pin 60 ft from the foul line. Positions are inches from lane center
   (board 20 of 39), same sign convention as everywhere else in this
   project. Every USBC figure here — spacing, the No. 1 pin's distance, pin
-  weight/height/base-diameter/coefficient-of-restitution — is quoted
+  weight/height/max-diameter/coefficient-of-restitution — is quoted
   directly from the official [USBC Equipment Specifications and Certifications Manual](https://bowl.com/getmedia/08ef148d-c0e4-4e00-9e0d-855ba4729ad5/equipment-specs-manual.pdf)
-  (current as of its "10/25" revision), not estimated. The pin base
-  diameter is cited but **not** turned into a 2D collision radius — that's
-  a calibration decision for the collision milestone itself, not this one.
+  (current as of its "10/25" revision), not estimated.
 - **Impact construction** (`app/physics/impact.py`) — `impact_state_from_result`
   turns a completed trajectory into an `ImpactState`: the ball's lateral
   position, heading, and speed at the headpin plane, plus the mass and
   radius of the ball that got there. This is the one place a trajectory's
   raw fields get read for this purpose — pinfall models consume
   `ImpactState`, never a `SimulationResult` directly.
-- **Pinfall resolution** (`app/physics/pinfall.py`) — sits behind a
-  `PinfallModel` interface. `EntryAngleHeuristicPinfallModel` (the
-  `pins_from_entry` heuristic from earlier milestones, replumbed onto
-  `ImpactState`) is today's only implementation, explicitly named and
-  explicitly not a collision model. Its `resolve()` is a pure function of
-  its input — no random source, ever.
+- **Pinfall resolution** sits behind a `PinfallModel` interface
+  (`app/physics/pinfall.py`), with two implementations:
+  - `PlanarCollisionPinfallModel` (`app/physics/collision.py`) — the API's
+    default. A deterministic 2D (top-down, flat-circle) simulation of the
+    ball and all ten pins: fixed 0.0005s timestep, up to 4000 steps (2s
+    simulated) or until everything settles, elastic/inelastic impulses on
+    contact, bounded linear damping, no randomness. See "Official inputs
+    vs. calibrated parameters" below.
+  - `EntryAngleHeuristicPinfallModel` — the original formula-based rule
+    from earlier milestones, kept as an explicitly labeled fallback for
+    comparison and tests. It can't identify individual pins
+    (`fallen_pin_ids` is always empty from this model).
+  Both are pure functions of their input `ImpactState` — no random source,
+  ever, in either.
 - **Frame scoring** doesn't exist yet. When it's built, it'll consume
   `PinfallResult`s the same way pinfall consumes `ImpactState`s.
 
 `ThrowResponse.pins_knocked` still means exactly what it always has —
 that field isn't going anywhere. `ThrowResponse.pinfall` is new: it names
-which model produced that count (`model_id`) and states its limitations in
-plain language, so swapping in a real collision model later is a visible,
-self-describing change instead of a silent one.
+which model produced that count (`model_id`), lists which pins fell
+(`fallen_pin_ids`, empty for a model that can't identify them), and states
+the model's limitations in plain language — so swapping pinfall models is
+a visible, self-describing change instead of a silent one.
+
+#### The collision model: official inputs vs. calibrated parameters
+
+`PlanarCollisionPinfallModel` runs entirely in inches and seconds
+(`ImpactState.speed_mph` converts once, at the top, via
+`units.mph_to_in_per_s`). What it takes directly from the USBC manual:
+pin mass (3 lb 8 oz target), the 12 in triangular deck geometry, and a
+coefficient of restitution of 0.670 (the manual's own target value for a
+pin), applied to every collision — ball-pin and pin-pin alike, since no
+separate figure is published for either.
+
+What's calibrated — stated explicitly, never silently guessed:
+
+- **Effective pin radius** (`PIN_EFFECTIVE_RADIUS_IN`, ~2.38 in): half the
+  pin's widest diameter (its "belly," 4.5 in above the base — not the base
+  itself, which is only 2.03 in). A real pin's cross-section varies by
+  height; using one circle for it is an approximation, chosen at the
+  widest point because that's roughly where a ball at typical impact
+  height makes contact.
+- **Linear damping** (`LINEAR_DAMPING_PER_S`): a bounded per-second
+  velocity decay standing in for lane friction and the energy an
+  (unmodeled) tipping motion would absorb. Not a measured friction
+  coefficient.
+- **Fall-displacement threshold**: a pin counts as fallen once it has
+  moved more than its own effective radius from its spot — a proxy for
+  toppling in a model with no angle or center-of-mass height to test an
+  actual tip-over threshold against.
+
+**Deferred 3D effects** — not modeled, and each is a real source of error
+against a genuine pin deck: pin tilt/shape (pins aren't disks — a real one
+tips over an axis, this one just displaces), loft off the foul line,
+kickbacks, string-pinsetter interaction, and pinsetter placement variance
+(real pin spots drift slightly, tested to their own ±1/16 in tolerance).
 
 ### Release variance
 
@@ -282,15 +322,16 @@ percentages, leave tracking, ball usage stats.
 
 ## Known limitations (this milestone)
 
-- Pinfall is still `EntryAngleHeuristicPinfallModel` — a deterministic
-  function of lateral position and heading, not a pin-collision model. The
-  domain boundary (pin-deck geometry, `ImpactState`, `PinfallModel`) is now
-  in place for a real collision solver to slot into later; that solver
-  itself doesn't exist yet.
-- No handedness distinction — the pocket model assumes a right-handed shot.
-- Pin base diameter is cited in `pin_deck.py` but deliberately not turned
-  into a 2D collision radius yet — see "Pin deck, impact, and pinfall"
-  above.
+- Pinfall is a flat 2D approximation (`PlanarCollisionPinfallModel`) — real
+  pins tip and rotate in 3D; this model only displaces circles. See
+  "Deferred 3D effects" above for what's not modeled (pin tilt, loft,
+  kickbacks, string pinsetters, placement variance).
+- No handedness distinction — the pocket model (both pinfall
+  implementations' pocket concept) assumes a right-handed shot.
+- The collision model's effective pin radius, damping, and fall threshold
+  are stated calibration choices, not fit against real ball-motion or
+  pinfall data — no exact strike/pinfall count should be read as accurate
+  yet, only as bounded and directionally sensible.
 - Only the house shot is modeled; named-pattern selection is deferred
   (`oil_pattern` on `POST /games` only accepts `"house"` today).
 - Games live in memory only — restarting the process loses every game.

@@ -24,11 +24,11 @@ Specifications and Certifications Manual (bowl.com, "Last updated on
 Spots" sections. Figures are quoted as printed (target, with the manual's
 own min/max tolerance either side), not re-derived or rounded further.
 
-`USBC_PIN_BASE_DIAMETER_IN` is cited for completeness but is deliberately
-**not** turned into an effective 2D collision radius here — a pin's real
+`USBC_PIN_MAX_DIAMETER_IN` is cited for completeness but is deliberately
+**not** turned into an effective 2D collision radius *here* — a pin's real
 cross-section varies with height, and picking one number to represent it
-in a flat model is a calibration decision for the future collision
-milestone, not this one.
+in a flat model is a calibration decision that belongs to whatever model
+actually consumes it (see `collision.py`), not to this pure-geometry module.
 """
 
 import math
@@ -46,12 +46,21 @@ ROW_SPACING_IN = PIN_SPACING_IN * math.sqrt(3) / 2  # equilateral triangle row h
 # Board 20 of 39 is the lane's exact geometric center (19 boards to a side).
 LANE_CENTER_BOARD = (BOARD_COUNT + 1) / 2
 
+# Board 0 and board 40 — the lane's edges — in the same inches-from-center
+# coordinate `Pin.lateral_in` uses. A ball landing at or beyond this is off
+# the lane entirely, never mind the pin deck. Shared by every pinfall model
+# so "off the lane" means the same thing everywhere.
+GUTTER_ABS_LATERAL_IN = LANE_CENTER_BOARD * BOARD_WIDTH_IN
+
 # --- USBC reference constants for a future collision model --------------
 # Cited from the manual's pin dimension table: (target, minimum, maximum).
 
 USBC_PIN_WEIGHT_OZ = (56.0, 54.0, 58.0)          # 3 lb 8 oz target; 3 lb 6 oz - 3 lb 10 oz range
 USBC_PIN_HEIGHT_IN = (15.000, 14.969, 15.031)
-USBC_PIN_BASE_DIAMETER_IN = (4.766, 4.735, 4.797)  # NOT a 2D collision radius — see module docstring
+# The pin's widest diameter — its "belly" — occurs 4.5 in above the base,
+# per the manual's pin-profile table (NOT the base itself, which is only
+# 2.031 in). NOT a 2D collision radius here — see module docstring.
+USBC_PIN_MAX_DIAMETER_IN = (4.766, 4.735, 4.797)
 USBC_PIN_COEFFICIENT_OF_RESTITUTION = (0.670, 0.605, 0.735)
 
 

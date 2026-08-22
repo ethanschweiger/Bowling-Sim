@@ -5,7 +5,9 @@ same PinfallResult out, no random source involved.
 import random
 
 from app.physics.impact import ImpactState
-from app.physics.pinfall import DEFAULT_PINFALL_MODEL, EntryAngleHeuristicPinfallModel
+from app.physics.pinfall import EntryAngleHeuristicPinfallModel
+
+DEFAULT_PINFALL_MODEL = EntryAngleHeuristicPinfallModel()
 
 SAMPLE_IMPACT = ImpactState(
     lateral_position_in=-2.0,
