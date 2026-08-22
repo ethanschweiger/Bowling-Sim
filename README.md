@@ -275,6 +275,45 @@ more pins than remain in that frame, an illegal tenth-frame bonus
 sequence, or a roll after the game is already complete — raises
 `ScorecardError` and leaves the scorecard exactly as it was.
 
+### The standing-pin rack, and letting collision resolve a partial deck
+
+`app/physics/rack.py`'s `Rack` tracks which of the ten pins are still
+standing between throws — nothing else. Like `Scorecard`, it's
+independent of everything around it: no lane oil, no scoring rules, no
+collision math of its own.
+
+```python
+from app.physics.rack import Rack, RackError
+
+rack = Rack.full()               # all ten standing
+rack = rack.after_fallen([1, 2, 3])   # a new Rack — the original is untouched
+7 in rack                        # True
+rack.reset()                     # back to a fresh, all-ten Rack
+
+try:
+    rack.after_fallen([1])       # pin 1 is already down
+except RackError:
+    pass                          # rack is exactly as it was before the call
+```
+
+`PinfallModel.resolve` (and `collision.simulate_collision`) now accept an
+optional `standing_ids` — pass a `Rack.standing_ids` and
+`PlanarCollisionPinfallModel` materializes and resolves *only* those pins;
+any fallen ID it returns is guaranteed to be a member of that set. Omit
+it and every pin is simulated, byte-for-byte the same as before this
+parameter existed — nothing about the default API responses changed in
+this milestone. `EntryAngleHeuristicPinfallModel` accepts the same
+parameter for interface consistency but ignores it; it never identified
+individual pins to begin with.
+
+Neither `Rack` nor the collision model is wired into a two-ball frame
+yet — that's the next step, once a `GameSession` owns one. See
+`app/games/service.py`'s "Ownership boundaries" for the intended shape:
+one lane condition, one scorecard, and one mutable rack per game, all
+independent of each other, with the reusable pattern and standard deck
+definitions (`OilPatternSpec`, `pin_deck.STANDARD_DECK`) staying shared
+across every game exactly as they do today.
+
 ### Release variance
 
 Real bowlers don't repeat a shot exactly. `sample_release` (`app/physics/throw.py`)

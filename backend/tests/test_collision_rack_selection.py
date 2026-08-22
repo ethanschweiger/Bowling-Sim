@@ -1,0 +1,76 @@
+"""Collision model + standing-pin selection: an explicit full rack matches
+the default, a partial rack's result is always a subset with a matching
+count, an empty rack is a clean no-op, and a single-pin rack can only ever
+return that pin.
+"""
+
+from app.physics.collision import PlanarCollisionPinfallModel
+from app.physics.impact import ImpactState
+from app.physics.pin_deck import ALL_PIN_IDS
+from app.physics.rack import Rack
+
+MODEL = PlanarCollisionPinfallModel()
+
+
+def _impact(**overrides) -> ImpactState:
+    base = dict(
+        lateral_position_in=0.0,
+        heading_deg=0.0,
+        speed_mph=16.0,
+        ball_mass_lbs=15.0,
+        ball_radius_in=4.29,
+        lane_condition_version=1,
+    )
+    base.update(overrides)
+    return ImpactState(**base)
+
+
+def test_explicit_full_rack_matches_the_default_result():
+    impact = _impact(lateral_position_in=-1.0, heading_deg=2.0)
+    default_result = MODEL.resolve(impact)
+    explicit_result = MODEL.resolve(impact, standing_ids=ALL_PIN_IDS)
+    assert explicit_result.fallen_pin_ids == default_result.fallen_pin_ids
+    assert explicit_result.pins_knocked == default_result.pins_knocked
+
+    rack_result = MODEL.resolve(impact, standing_ids=Rack.full().standing_ids)
+    assert rack_result.fallen_pin_ids == default_result.fallen_pin_ids
+
+
+def test_partial_rack_result_is_always_a_subset_with_matching_count():
+    impact = _impact(lateral_position_in=0.0, heading_deg=0.0)
+    for standing in (
+        frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
+        frozenset({1, 2, 3}),
+        frozenset({4, 5, 6}),
+        frozenset({7, 8, 9, 10}),
+        frozenset({1}),
+        frozenset(),
+    ):
+        result = MODEL.resolve(impact, standing_ids=standing)
+        assert set(result.fallen_pin_ids) <= standing
+        assert result.pins_knocked == len(result.fallen_pin_ids)
+
+
+def test_empty_rack_returns_zero_without_simulating_a_phantom_pin():
+    impact = _impact(lateral_position_in=0.0, heading_deg=0.0)
+    result = MODEL.resolve(impact, standing_ids=frozenset())
+    assert result.pins_knocked == 0
+    assert result.fallen_pin_ids == ()
+
+
+def test_centered_impact_against_only_the_headpin_can_only_knock_pin_1():
+    impact = _impact(lateral_position_in=0.0, heading_deg=0.0, speed_mph=16.0)
+    result = MODEL.resolve(impact, standing_ids=frozenset({1}))
+    assert set(result.fallen_pin_ids) <= {1}
+    # A dead-center straight shot at the headpin, with no other pins even
+    # present to deflect it, must topple the one pin it directly hits.
+    assert result.fallen_pin_ids == (1,)
+    assert result.pins_knocked == 1
+
+
+def test_no_id_absent_from_the_rack_can_ever_be_returned():
+    impact = _impact(lateral_position_in=1.5, heading_deg=3.0, speed_mph=18.0)
+    standing = frozenset({2, 4, 6, 8, 10})
+    result = MODEL.resolve(impact, standing_ids=standing)
+    assert set(result.fallen_pin_ids).isdisjoint({1, 3, 5, 7, 9})
+    assert set(result.fallen_pin_ids) <= standing

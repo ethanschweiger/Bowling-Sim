@@ -10,6 +10,13 @@ claim to recreate a real pin deck. Deferred 3D effects: pin tilt/toppling
 dynamics, loft, kickbacks, string pinsetters, and pinsetter placement
 variance (see README).
 
+`resolve`/`simulate_collision` accept an optional `standing_ids`: which
+pins actually exist to be hit for this one impact (e.g. a `Rack.standing_ids`
+from `app/physics/rack.py`, for a ball's second throw in a frame). Omit it
+and every pin is simulated — the default, unchanged behavior. This module
+has no notion of a game or a frame; it resolves exactly the one impact
+it's given against exactly the pins it's told are there.
+
 ## Unit system
 
 Position and velocity run in inches and seconds, in the same
@@ -88,9 +95,11 @@ calls a random-number generator.
 
 import math
 from dataclasses import dataclass
+from typing import Iterable, Optional
 
 from app.physics.impact import ImpactState
 from app.physics.pin_deck import (
+    ALL_PIN_IDS,
     GUTTER_ABS_LATERAL_IN,
     HEADPIN_DISTANCE_FT,
     STANDARD_DECK,
@@ -189,12 +198,19 @@ def _resolve_pair(a: _Body, b: _Body) -> None:
     b.y_in += ny * penetration * (a.mass_blob / total_mass)
 
 
-def simulate_collision(impact: ImpactState):
+def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]] = None):
     """Runs the fixed-timestep collision simulation for one impact.
 
+    `standing_ids` restricts which pins exist in the simulation at all —
+    omit it (or pass None) to simulate the full ten-pin rack, unchanged
+    from before this parameter existed. Only pins in `standing_ids` are
+    materialized as bodies, so any returned fallen ID is necessarily a
+    member of that set; an empty `standing_ids` simulates the ball alone
+    (nothing can fall — there's nothing to fall).
+
     Returns (fallen_pin_ids, steps_taken): fallen_pin_ids is a tuple of
-    unique pin IDs sorted ascending; steps_taken is always
-    <= MAX_COLLISION_STEPS.
+    unique pin IDs sorted ascending, always a subset of `standing_ids`;
+    steps_taken is always <= MAX_COLLISION_STEPS.
 
     A non-positive `impact.speed_mph` returns `((), 0)` immediately — no
     body is constructed, no geometry is touched, no positional correction
@@ -203,6 +219,10 @@ def simulate_collision(impact: ImpactState):
     """
     if impact.speed_mph <= 0.0:
         return (), 0
+
+    standing_set = ALL_PIN_IDS if standing_ids is None else frozenset(standing_ids)
+    if not standing_set:
+        return (), 0  # nothing to fall — a valid no-op, not an error
 
     speed_in_s = mph_to_in_per_s(impact.speed_mph)
     heading_rad = math.radians(impact.heading_deg)
@@ -232,6 +252,7 @@ def simulate_collision(impact: ImpactState):
             pin_id=pin.id,
         )
         for pin in STANDARD_DECK
+        if pin.id in standing_set
     ]
     bodies = [ball] + pins
     damping_factor = max(0.0, 1.0 - LINEAR_DAMPING_PER_S * COLLISION_DT_S)
@@ -275,13 +296,13 @@ class PlanarCollisionPinfallModel(PinfallModel):
         "entry-angle heuristic, not a claim to real pin-deck fidelity."
     )
 
-    def resolve(self, impact: ImpactState) -> PinfallResult:
+    def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult:
         if abs(impact.lateral_position_in) >= GUTTER_ABS_LATERAL_IN:
             return PinfallResult(
                 pins_knocked=0, model_id=self.model_id, limitations=self.LIMITATIONS, fallen_pin_ids=()
             )
 
-        fallen_ids, _steps_taken = simulate_collision(impact)
+        fallen_ids, _steps_taken = simulate_collision(impact, standing_ids=standing_ids)
         return PinfallResult(
             pins_knocked=len(fallen_ids),
             model_id=self.model_id,

@@ -15,6 +15,7 @@ applying a formula.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Iterable, Optional
 
 from app.physics.impact import ImpactState
 from app.physics.pin_deck import GUTTER_ABS_LATERAL_IN, LANE_CENTER_BOARD
@@ -36,12 +37,22 @@ class PinfallResult:
 
 class PinfallModel(ABC):
     """A pinfall model consumes an `ImpactState` and reports how many (and,
-    where it can, which) pins fell."""
+    where it can, which) pins fell.
+
+    `standing_ids` is optional: omit it (or pass None) and a model treats
+    every pin as standing — the same behavior as before this parameter
+    existed, byte-for-byte. Pass a specific set (e.g. a `Rack.standing_ids`)
+    and a model that can honor it — `PlanarCollisionPinfallModel` — only
+    materializes and resolves those pins; any `fallen_pin_ids` it returns
+    is guaranteed to be a subset of what was supplied. A model that can't
+    honor per-pin selection (the heuristic) accepts the parameter for
+    interface consistency but ignores it — see its own limitations.
+    """
 
     model_id: str
 
     @abstractmethod
-    def resolve(self, impact: ImpactState) -> PinfallResult: ...
+    def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult: ...
 
 
 # The pocket (board 17.5, the 1-3 pocket for a right-handed bowler),
@@ -70,10 +81,12 @@ class EntryAngleHeuristicPinfallModel(PinfallModel):
         "Deterministic function of lateral position and heading only. No "
         "pin-to-pin interaction, no restitution or mass involved in the "
         "calculation — not a collision model. Cannot identify individual "
-        "pins: fallen_pin_ids is always empty, even when pins_knocked > 0."
+        "pins: fallen_pin_ids is always empty, even when pins_knocked > 0. "
+        "Accepts standing_ids for interface consistency but ignores it — "
+        "the formula has no notion of which specific pins remain."
     )
 
-    def resolve(self, impact: ImpactState) -> PinfallResult:
+    def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult:
         return PinfallResult(
             pins_knocked=self._pins_knocked(impact),
             model_id=self.model_id,
