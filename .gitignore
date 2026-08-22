@@ -18,3 +18,8 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+
+# Local agent instructions only — never commit these.
+/SKILL.md
+/.claude/skills/stop-slop/SKILL.md
+/MANAGER_INSTRUCTIONS.md
