@@ -18,11 +18,14 @@ Consistent with the rest of the physics package (see simulate.py's
 ## Sources
 
 Every USBC-cited number below comes from the official Equipment
-Specifications and Certifications Manual (bowl.com, "Last updated on
-10/25"): https://bowl.com/getmedia/08ef148d-c0e4-4e00-9e0d-855ba4729ad5/equipment-specs-manual.pdf
+Specifications and Certifications Manual (bowl.com), current revision
+"Last updated on 03/26" (March 2026), accessed 2026-08-22:
+https://images.bowl.com/bowl/media/assets/usbc/equipment%20specs/26_231-26-march-es-manual.pdf
 — specifically the "Bowling Pin Dimensions" (target/min/max) and "Pin
 Spots" sections. Figures are quoted as printed (target, with the manual's
 own min/max tolerance either side), not re-derived or rounded further.
+Re-verified against the manual's prior revision too: every figure below
+is unchanged across both.
 
 `USBC_PIN_MAX_DIAMETER_IN` is cited for completeness but is deliberately
 **not** turned into an effective 2D collision radius *here* — a pin's real

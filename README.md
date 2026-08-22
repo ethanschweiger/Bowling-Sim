@@ -144,10 +144,12 @@ collision solver can replace one without touching the others:
   (board 20 of 39), same sign convention as everywhere else in this
   project. Every USBC figure here — spacing, the No. 1 pin's distance, pin
   weight/height/max-diameter/coefficient-of-restitution — is quoted
-  directly from the official [USBC Equipment Specifications and Certifications Manual](https://bowl.com/getmedia/08ef148d-c0e4-4e00-9e0d-855ba4729ad5/equipment-specs-manual.pdf)
-  (bowl.com; PDF metadata and every page footer read "Last updated on
-  10/25" — October 2025 — verified directly against the document's own
+  directly from the official [USBC Equipment Specifications and Certifications Manual](https://images.bowl.com/bowl/media/assets/usbc/equipment%20specs/26_231-26-march-es-manual.pdf)
+  (bowl.com; current revision, every page footer reads "Last updated on
+  03/26" — March 2026 — verified directly against the document's own
   pin-dimension and pin-spot tables, accessed 2026-08-22), not estimated.
+  Re-verified against the manual's prior revision too: every figure used
+  here is unchanged across both.
 - **Impact construction** (`app/physics/impact.py`) — `impact_state_from_result`
   turns a completed trajectory into an `ImpactState`: the ball's lateral
   position, heading, and speed at the headpin plane, plus the mass and
