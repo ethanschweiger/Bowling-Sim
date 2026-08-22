@@ -121,3 +121,14 @@ class GameResetResponse(BaseModel):
     game_id: str
     lane_condition_version: int
     game_state: GameStateResponse
+
+
+class GameStatusResponse(BaseModel):
+    """`GET /api/v1/games/{game_id}` — a read-only snapshot of a game's
+    current state. Same `game_state` shape every other game response
+    uses, built through the same snapshot-to-schema mapper so the
+    contract can't drift between endpoints."""
+
+    game_id: str
+    lane_condition_version: int
+    game_state: GameStateResponse

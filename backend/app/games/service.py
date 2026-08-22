@@ -39,16 +39,42 @@ before anything — lane, rack, scorecard, condition version — changes.
 Two different games' sessions have entirely separate locks, so they never
 block each other; within one game, this lock is what makes concurrent
 throws against it serialize safely instead of racing.
+
+## Durable snapshots
+
+`Scorecard` is a genuinely mutable object — `add_roll` reassigns its
+internal state on the *same* instance. Handing out a live reference to it
+(the way an earlier version of this module's `snapshot()` did) is unsafe
+once the lock that protected the read is released: a second, later throw
+can reassign that same Scorecard's frames before a caller finishes reading
+from the reference it was handed, making an *earlier* throw's response
+describe *newer* game state. `Rack` doesn't have this problem (each
+instance is genuinely immutable — a later throw replaces the slot with a
+different object, never mutates the one already handed out), but
+`Scorecard` does, so nothing here ever exposes a live `Scorecard`
+reference for a caller to read from later.
+
+`GameStateSnapshot` is the fix: a frozen dataclass built *inside* the
+lock, holding only plain, already-immutable values (an int, a frozenset,
+a tuple of already-immutable `Frame` objects, primitives) — never a
+reference to `self._scorecard` or `self._rack` itself. `throw()` and
+`reset()` build and return their post-commit snapshot as part of their
+own result, from inside the same lock that did the mutation; nothing
+calls back into a session afterward to "read the result." `current_snapshot()`
+is the only other way to get one — its own dedicated lock acquisition,
+for read-only callers (game creation, the `GET` endpoint) that aren't
+mid-mutation.
 """
 
 import threading
 import uuid
-from typing import Callable, Dict, Optional
+from dataclasses import dataclass
+from typing import Callable, Dict, FrozenSet, Optional, Tuple
 
 from app.physics.lane import LaneCondition
 from app.physics.lane_session import LaneSession
 from app.physics.rack import Rack
-from app.scoring.scorecard import Scorecard
+from app.scoring.scorecard import Frame, Scorecard
 
 # The only pattern selectable this milestone. A future named-pattern
 # selection just adds more entries here (and to the request schema's
@@ -66,6 +92,25 @@ class GameCompleteError(Exception):
     complete frames (plus any required tenth-frame bonus balls). The
     game's lane, rack, and scorecard are left completely unchanged — the
     rejection happens before any of the three is touched."""
+
+
+@dataclass(frozen=True)
+class GameStateSnapshot:
+    """A fully durable, immutable snapshot of one game's state at one
+    instant. See "Durable snapshots" in the module docstring for why this
+    exists — every field here is already a plain, copy-safe value; there
+    is no live `Scorecard` or `Rack` reference anywhere in it, and no
+    later throw or reset on the owning `GameSession` can change what an
+    already-captured snapshot describes.
+    """
+
+    lane_condition_version: int
+    standing_pin_ids: FrozenSet[int]
+    frames: Tuple[Frame, ...]  # Frame is itself an immutable frozen dataclass — safe to hold indefinitely
+    total_score: Optional[int]
+    is_game_complete: bool
+    next_frame_number: Optional[int]
+    next_ball_number: Optional[int]
 
 
 class GameSession:
@@ -89,31 +134,50 @@ class GameSession:
     def rack(self) -> Rack:
         """The pins currently standing. `Rack` is immutable, so handing
         out the live reference is safe — a caller can't mutate it even
-        without holding the lock."""
+        without holding the lock. (Mostly useful for tests/white-box
+        inspection — routes render responses from a `GameStateSnapshot`,
+        never from this.)"""
         with self._lock:
             return self._rack
 
     @property
     def scorecard(self) -> Scorecard:
-        """This game's live `Scorecard`. Read its `.frames`,
-        `.total_score`, `.is_game_complete` etc. freely — only `throw()`
-        ever calls `add_roll` on it, always under this session's lock."""
+        """This game's live `Scorecard`. Safe to read from immediately,
+        under the caller's own control — but do not hold a reference and
+        read from it *later*, after other code may have run; a later
+        throw mutates this same object. Routes never do this — they use
+        `GameStateSnapshot`. (Mostly useful for tests/white-box
+        inspection of state right after driving a throw directly.)"""
         with self._lock:
             return self._scorecard
 
-    def snapshot(self):
-        """Atomic read of (rack, scorecard) together — for building a
-        `game_state` response, so a concurrent throw landing between two
-        separate property reads can never produce a snapshot mixing an
-        old rack with a newer scorecard or vice versa."""
+    def _build_snapshot(self) -> GameStateSnapshot:
+        """Builds a `GameStateSnapshot` from current state. Caller must
+        already hold `self._lock` — this does not acquire it."""
+        next_frame_number, next_ball_number = self._scorecard.next_roll_position()
+        return GameStateSnapshot(
+            lane_condition_version=self.lane.condition.version,
+            standing_pin_ids=self._rack.standing_ids,
+            frames=self._scorecard.frames,
+            total_score=self._scorecard.total_score,
+            is_game_complete=self._scorecard.is_game_complete,
+            next_frame_number=next_frame_number,
+            next_ball_number=next_ball_number,
+        )
+
+    def current_snapshot(self) -> GameStateSnapshot:
+        """A fresh, durable snapshot of this game's state right now. Safe
+        to call anytime — acquires the lock itself. For read-only callers
+        (game creation, `GET /api/v1/games/{id}`) that aren't in the
+        middle of a `throw`/`reset` of their own."""
         with self._lock:
-            return self._rack, self._scorecard
+            return self._build_snapshot()
 
     def throw(
         self,
         simulate: Callable[[LaneCondition], object],
         resolve_pinfall: Callable[[object, frozenset], object],
-    ):
+    ) -> Tuple[object, object, GameStateSnapshot]:
         """The one throw transaction. `simulate(lane_condition)` must
         return a `SimulationResult` (the same contract `LaneSession.run_throw`
         already uses); `resolve_pinfall(simulation_result, standing_ids)`
@@ -127,7 +191,9 @@ class GameSession:
         scorecard at all — if this game's tenth frame (and any required
         bonus balls) is already finished.
 
-        Returns `(simulation_result, pinfall_result)`.
+        Returns `(simulation_result, pinfall_result, snapshot)` — the
+        snapshot is this throw's exact post-commit state, built before the
+        lock is released, so it can never describe a later throw's result.
         """
         with self._lock:
             if self._scorecard.is_game_complete:
@@ -143,19 +209,26 @@ class GameSession:
             else:
                 self._rack = self._rack.after_fallen(pinfall_result.fallen_pin_ids)
 
-            return simulation_result, pinfall_result
+            snapshot = self._build_snapshot()
+            return simulation_result, pinfall_result, snapshot
 
-    def reset(self) -> LaneCondition:
+    def reset(self) -> Tuple[LaneCondition, GameStateSnapshot]:
         """Restore this game's lane to its own original starting condition
         (same grid, same temperature, version back to 1), and start a
         fresh `Scorecard` and a full `Rack` — atomically, under the same
         lock `throw` uses. Never touches the reusable
-        OilPatternSpec/house_shot() factory itself."""
+        OilPatternSpec/house_shot() factory itself.
+
+        Returns `(initial_lane_condition, snapshot)` — the snapshot is
+        this reset's exact post-commit state, built before the lock is
+        released.
+        """
         with self._lock:
             self.lane.reset_to(self._initial_condition)
             self._scorecard = Scorecard()
             self._rack = Rack.full()
-            return self._initial_condition
+            snapshot = self._build_snapshot()
+            return self._initial_condition, snapshot
 
 
 class GameService:

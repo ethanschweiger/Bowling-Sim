@@ -345,13 +345,35 @@ the frames `add_roll` already computed — the game session never
 re-derives or duplicates a ten-pin rule of its own. Two different games'
 sessions have entirely separate locks, so they never block each other.
 
-Every throw, create, and reset response carries a `game_state`: the
+Every throw, create, reset, and `GET` response carries a `game_state`: the
 standing pin IDs, every frame's rolls/strike/spare/complete/score, the
 resolved `total_score`, `is_game_complete`, and the 1-based
 `next_frame_number`/`next_ball_number` (both `null` exactly when the game
 is complete). A throw against an already-complete game is rejected with
 `409 Conflict` — `POST .../reset` starts the game over with a fresh rack,
 a blank scorecard, and lane version 1.
+
+`game_state` is never built by reading a live `Scorecard` after the fact —
+`Scorecard` is a genuinely mutable object (`add_roll` reassigns state on
+the same instance), so holding a reference to it and reading from that
+reference *later* is unsafe: a second throw landing in between can make
+an earlier response describe newer state. Instead, `throw()` and `reset()`
+each build their own immutable `GameStateSnapshot` — a frozen dataclass of
+plain values (an int, a frozenset, a tuple of already-immutable `Frame`
+objects) — from *inside* the same lock that did the mutation, and return
+it as part of their own result. Every response, including `GET`, is
+rendered from one of these snapshots, never from a second lock/read taken
+after the operation that produced it has already returned.
+
+### Read a game without changing it
+
+`GET /api/v1/games/{game_id}` takes its own fresh, lock-protected
+snapshot (`GameSession.current_snapshot()`) — safe to call anytime,
+including concurrently with other games' throws, since it never mutates
+anything. Same `game_state` mapper as create/throw/reset, so the shape
+can't drift between endpoints. This is current, in-memory, per-process
+state, not persisted or multiplayer-synced — restarting the server, or a
+second server process, would not see it.
 
 ### Release variance
 
@@ -449,6 +471,24 @@ Restores this game's lane to exactly what it started with, starts a new
 blank `Scorecard`, and returns the rack to all ten pins standing — the
 same `game_state` shape a freshly created game has. Other games are
 untouched.
+
+### Read a game's current status
+
+```bash
+curl http://localhost:8000/api/v1/games/{game_id}
+# {"game_id": "…", "lane_condition_version": 2, "game_state": {...}}
+```
+
+Read-only — throws nothing, changes nothing. Same `game_state` shape as
+create/throw/reset, built through the identical mapper so the contract
+can't drift between endpoints. `lane_condition_version` here is the
+game's *current* version (after whatever wear its last throw applied) —
+not to be confused with a throw response's own `lane_condition_version`,
+which is (unchanged, documented) the version that specific throw ran
+*against*, one lower once that throw's own wear has landed. An unknown
+`game_id` is a 404. This reflects current, in-memory, per-process
+state — nothing here is persisted, and there's no multiplayer sync; a
+second server process, or this one restarting, would not see it.
 
 Ball catalog: `house_ball`, `urethane_smooth`, `reactive_pearl`, `particle_beast`
 (see `backend/app/physics/ball.py`).

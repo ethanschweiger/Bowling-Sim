@@ -7,6 +7,8 @@ the real `simulate_throw` for lane wear and the real `GameSession.throw`
 orchestration code end to end.
 """
 
+import threading
+
 import pytest
 
 from app.games.service import GameCompleteError, GameService
@@ -34,7 +36,9 @@ def _scripted_throw(session, pins_knocked, fallen_pin_ids):
             pins_knocked=pins_knocked, model_id="test-scripted", limitations="", fallen_pin_ids=tuple(fallen_pin_ids)
         )
 
-    result, pinfall = session.throw(simulate=lambda condition: simulate_throw(BALL, THROW, condition), resolve_pinfall=resolve_pinfall)
+    result, pinfall, _snapshot = session.throw(
+        simulate=lambda condition: simulate_throw(BALL, THROW, condition), resolve_pinfall=resolve_pinfall
+    )
     return result, pinfall, seen["standing_ids"]
 
 
@@ -180,11 +184,98 @@ def test_reset_restores_full_rack_blank_scorecard_and_lane_version_1():
     session = GameService().create_game()
     _scripted_throw(session, 4, (1, 2, 3, 4))
 
-    restored = session.reset()
+    restored, snapshot = session.reset()
 
     assert restored.version == 1
     assert session.lane.condition.version == 1
     assert session.rack.standing_ids == ALL_PIN_IDS
     assert session.scorecard.frames == ()
+    assert snapshot.lane_condition_version == 1
+    assert snapshot.standing_pin_ids == ALL_PIN_IDS
+    assert snapshot.frames == ()
+    assert snapshot.total_score is None
+    assert not snapshot.is_game_complete
     assert session.scorecard.total_score is None
     assert not session.scorecard.is_game_complete
+
+
+# --- Durable snapshots ------------------------------------------------
+
+
+def _throw_and_capture_snapshot(session, pins_knocked, fallen_pin_ids):
+    """Like _scripted_throw, but returns the actual GameStateSnapshot
+    session.throw() produced, for tests that need to inspect it directly
+    rather than re-deriving state from the live session afterward."""
+
+    def resolve_pinfall(sim_result, standing_ids):
+        return PinfallResult(
+            pins_knocked=pins_knocked, model_id="test-scripted", limitations="", fallen_pin_ids=tuple(fallen_pin_ids)
+        )
+
+    return session.throw(simulate=lambda condition: simulate_throw(BALL, THROW, condition), resolve_pinfall=resolve_pinfall)
+
+
+def test_an_earlier_snapshot_is_unaffected_by_a_later_throw_or_reset():
+    session = GameService().create_game()
+
+    _, _, snapshot_1 = _throw_and_capture_snapshot(session, 3, (1, 2, 3))
+    captured_frames = snapshot_1.frames
+    captured_standing = snapshot_1.standing_pin_ids
+    captured_lane_version = snapshot_1.lane_condition_version
+
+    # A later throw, then a reset — both real, both mutate the live session.
+    _throw_and_capture_snapshot(session, 4, (4, 5, 6, 7))
+    session.reset()
+
+    # The live session has clearly moved on...
+    assert session.scorecard.frames == ()  # reset cleared it
+    assert session.rack.standing_ids == ALL_PIN_IDS
+
+    # ...but the earlier snapshot's own fields are byte-identical to what
+    # they were the moment it was captured.
+    assert snapshot_1.frames == captured_frames
+    assert snapshot_1.standing_pin_ids == captured_standing
+    assert snapshot_1.lane_condition_version == captured_lane_version
+    assert snapshot_1.standing_pin_ids == ALL_PIN_IDS - {1, 2, 3}
+    assert snapshot_1.frames[0].rolls == (3,)
+
+
+def test_a_throws_snapshot_is_immune_to_a_second_throw_completing_before_it_is_read():
+    """Deterministic, using threading.Event — not sleeps. Proves the exact
+    race the durable-snapshot design closes: throw 1 completes and hands
+    back its snapshot; a second throw is allowed to fully commit on the
+    same session *before* anything reads from throw 1's snapshot; the
+    values read afterward must still describe throw 1, not throw 2.
+    """
+    session = GameService().create_game()
+
+    _, _, snapshot_1 = _throw_and_capture_snapshot(session, 3, (1, 2, 3))
+
+    second_throw_may_start = threading.Event()
+    second_throw_done = threading.Event()
+
+    def run_second_throw():
+        second_throw_may_start.wait()
+        _throw_and_capture_snapshot(session, 4, (4, 5, 6, 7))
+        second_throw_done.set()
+
+    worker = threading.Thread(target=run_second_throw)
+    worker.start()
+
+    # Release the second throw and wait — deterministically, via the
+    # Event, not a sleep — until it has fully committed against the same
+    # session, before reading anything from snapshot_1.
+    second_throw_may_start.set()
+    second_throw_done.wait()
+    worker.join()
+
+    # Proof the second throw really happened and really changed the live
+    # session (otherwise this test would be vacuous):
+    assert session.scorecard.frames[0].rolls == (3, 4)
+    assert session.rack.standing_ids == ALL_PIN_IDS  # frame 1 completed -> fresh rack
+
+    # snapshot_1, read only now — strictly after the second throw
+    # committed — still describes exactly what throw 1 produced.
+    assert snapshot_1.frames[0].rolls == (3,)
+    assert snapshot_1.frames[0].is_complete is False
+    assert snapshot_1.standing_pin_ids == ALL_PIN_IDS - {1, 2, 3}

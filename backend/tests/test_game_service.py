@@ -52,11 +52,12 @@ def test_reset_restores_original_grid_temperature_and_version():
     assert game.lane.condition.version > 1
     assert game.lane.condition.oil_grid != original.oil_grid
 
-    restored = game.reset()
+    restored, snapshot = game.reset()
     assert restored.version == 1
     assert restored.oil_grid == original.oil_grid
     assert restored.temperature_f == original.temperature_f
     assert game.lane.condition == restored
+    assert snapshot.lane_condition_version == 1
 
 
 def test_unknown_game_id_raises():

@@ -157,3 +157,49 @@ def test_throw_after_game_completion_returns_409_and_reset_recovers():
     # The game accepts throws again after reset.
     after_reset = client.post(f"/api/v1/games/{game_id}/throws", json={**THROW_PAYLOAD, "seed": 1})
     assert after_reset.status_code == 200
+
+
+def test_get_unknown_game_returns_404():
+    response = client.get("/api/v1/games/does-not-exist")
+    assert response.status_code == 404
+
+
+def test_get_fresh_game_matches_create_response():
+    created = _create_game()
+    game_id = created["game_id"]
+
+    status = client.get(f"/api/v1/games/{game_id}").json()
+    assert status["game_id"] == game_id
+    assert status["lane_condition_version"] == created["lane_condition_version"]
+    assert status["game_state"] == created["game_state"]
+
+
+def test_get_after_a_throw_matches_the_throws_own_game_state():
+    game = _create_game()
+    game_id = game["game_id"]
+
+    throw_body = client.post(f"/api/v1/games/{game_id}/throws", json={**THROW_PAYLOAD, "seed": 5}).json()
+    status = client.get(f"/api/v1/games/{game_id}").json()
+
+    # The throw response's lane_condition_version is (unchanged, documented
+    # semantic) the version that throw ran *against* — GET reports the
+    # current version, i.e. one *after* wear from that same throw applied.
+    assert status["lane_condition_version"] == throw_body["lane_condition_version"] + 1
+    # game_state itself (frames/rack/score) describes the same committed
+    # state the throw's own response already reported — nothing else
+    # touched this game between the two calls.
+    assert status["game_state"] == throw_body["game_state"]
+
+
+def test_get_after_reset_matches_a_fresh_game():
+    game = _create_game()
+    game_id = game["game_id"]
+    client.post(f"/api/v1/games/{game_id}/throws", json={**THROW_PAYLOAD, "seed": 2})
+
+    reset_body = client.post(f"/api/v1/games/{game_id}/reset").json()
+    status = client.get(f"/api/v1/games/{game_id}").json()
+
+    assert status["lane_condition_version"] == reset_body["lane_condition_version"] == 1
+    assert status["game_state"] == reset_body["game_state"]
+    assert status["game_state"]["standing_pin_ids"] == list(range(1, 11))
+    assert status["game_state"]["frames"] == []
