@@ -107,9 +107,3 @@ percentages, leave tracking, ball usage stats.
 - `database_url` exists in config for the v3 milestone; nothing reads or
   writes to Postgres yet, and no migrations exist.
 - No frontend yet. The endpoint is exercised through `curl`, `/docs`, or tests.
-
-## Working in this repo
-
-[`SKILL.md`](SKILL.md) sets the writing rules for anything prose in this
-repo: README, docs, PR descriptions, commit messages. Read it before writing
-any of those.
