@@ -131,6 +131,44 @@ touches `OilPatternSpec`/`LaneCondition.house_shot()`, the reusable pattern
 definition every game is built from; reset only ever affects the one game
 whose ID you call it on.
 
+### Pin deck, impact, and pinfall — separate concerns, on purpose
+
+Four things that will eventually combine into real pin-collision physics
+are kept deliberately separate, each in its own module, so a future
+collision solver can replace one without touching the others:
+
+- **Pin-deck geometry** (`app/physics/pin_deck.py`) — pure, static, and
+  independent of any bowler. Ten individually identified pins (`Pin.id`
+  1-10) in the standard triangular layout, 12 in center-to-center, No. 1
+  pin 60 ft from the foul line. Positions are inches from lane center
+  (board 20 of 39), same sign convention as everywhere else in this
+  project. Every USBC figure here — spacing, the No. 1 pin's distance, pin
+  weight/height/base-diameter/coefficient-of-restitution — is quoted
+  directly from the official [USBC Equipment Specifications and Certifications Manual](https://bowl.com/getmedia/08ef148d-c0e4-4e00-9e0d-855ba4729ad5/equipment-specs-manual.pdf)
+  (current as of its "10/25" revision), not estimated. The pin base
+  diameter is cited but **not** turned into a 2D collision radius — that's
+  a calibration decision for the collision milestone itself, not this one.
+- **Impact construction** (`app/physics/impact.py`) — `impact_state_from_result`
+  turns a completed trajectory into an `ImpactState`: the ball's lateral
+  position, heading, and speed at the headpin plane, plus the mass and
+  radius of the ball that got there. This is the one place a trajectory's
+  raw fields get read for this purpose — pinfall models consume
+  `ImpactState`, never a `SimulationResult` directly.
+- **Pinfall resolution** (`app/physics/pinfall.py`) — sits behind a
+  `PinfallModel` interface. `EntryAngleHeuristicPinfallModel` (the
+  `pins_from_entry` heuristic from earlier milestones, replumbed onto
+  `ImpactState`) is today's only implementation, explicitly named and
+  explicitly not a collision model. Its `resolve()` is a pure function of
+  its input — no random source, ever.
+- **Frame scoring** doesn't exist yet. When it's built, it'll consume
+  `PinfallResult`s the same way pinfall consumes `ImpactState`s.
+
+`ThrowResponse.pins_knocked` still means exactly what it always has —
+that field isn't going anywhere. `ThrowResponse.pinfall` is new: it names
+which model produced that count (`model_id`) and states its limitations in
+plain language, so swapping in a real collision model later is a visible,
+self-describing change instead of a silent one.
+
 ### Release variance
 
 Real bowlers don't repeat a shot exactly. `sample_release` (`app/physics/throw.py`)
@@ -244,9 +282,15 @@ percentages, leave tracking, ball usage stats.
 
 ## Known limitations (this milestone)
 
-- Pin carry is a deterministic function of entry board and angle, not a
-  pin-collision model. Good enough for v1, not physically accurate.
+- Pinfall is still `EntryAngleHeuristicPinfallModel` — a deterministic
+  function of lateral position and heading, not a pin-collision model. The
+  domain boundary (pin-deck geometry, `ImpactState`, `PinfallModel`) is now
+  in place for a real collision solver to slot into later; that solver
+  itself doesn't exist yet.
 - No handedness distinction — the pocket model assumes a right-handed shot.
+- Pin base diameter is cited in `pin_deck.py` but deliberately not turned
+  into a 2D collision radius yet — see "Pin deck, impact, and pinfall"
+  above.
 - Only the house shot is modeled; named-pattern selection is deferred
   (`oil_pattern` on `POST /games` only accepts `"house"` today).
 - Games live in memory only — restarting the process loses every game.

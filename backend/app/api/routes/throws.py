@@ -16,9 +16,10 @@ from dataclasses import asdict
 from fastapi import APIRouter, HTTPException
 
 from app.games.service import default_game_service
-from app.models.schemas import ReleaseValues, ThrowRequest, ThrowResponse, TrajectoryPointResponse
+from app.models.schemas import PinfallInfo, ReleaseValues, ThrowRequest, ThrowResponse, TrajectoryPointResponse
 from app.physics.ball import BALL_CATALOG
-from app.physics.scoring import pins_from_entry
+from app.physics.impact import impact_state_from_result
+from app.physics.pinfall import DEFAULT_PINFALL_MODEL
 from app.physics.simulate import simulate_throw
 from app.physics.throw import Throw, sample_release
 
@@ -46,7 +47,8 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
     actual_throw, seed = sample_release(requested_throw, request.seed)
 
     result = session.lane.run_throw(lambda condition: simulate_throw(ball, actual_throw, condition))
-    pins = pins_from_entry(result)
+    impact = impact_state_from_result(result, ball)
+    pinfall = DEFAULT_PINFALL_MODEL.resolve(impact)
 
     return ThrowResponse(
         seed=seed,
@@ -55,6 +57,7 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
         entry_board=result.entry_board,
         entry_angle_deg=result.entry_angle_deg,
         speed_at_pins_mph=result.speed_at_pins_mph,
-        pins_knocked=pins,
+        pins_knocked=pinfall.pins_knocked,
+        pinfall=PinfallInfo(model_id=pinfall.model_id, limitations=pinfall.limitations),
         lane_condition_version=result.lane_condition_version,
     )

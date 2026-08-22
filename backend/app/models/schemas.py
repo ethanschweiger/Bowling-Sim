@@ -2,7 +2,7 @@
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.physics.throw import RELEASE_BOUNDS
 
@@ -39,6 +39,20 @@ class TrajectoryPointResponse(BaseModel):
     board: float
 
 
+class PinfallInfo(BaseModel):
+    """Which pinfall model produced `pins_knocked`, and its honest
+    limitations — added so a future real collision model is a
+    self-describing swap, not a silent behavior change."""
+
+    # `model_id` collides with pydantic's own reserved `model_*` attribute
+    # namespace (model_dump, model_validate, ...) — it's still a plain data
+    # field here, just needs the protected-namespace check turned off.
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: str
+    limitations: str
+
+
 class ThrowResponse(BaseModel):
     seed: int
     actual_release: ReleaseValues
@@ -46,7 +60,8 @@ class ThrowResponse(BaseModel):
     entry_board: float
     entry_angle_deg: float
     speed_at_pins_mph: float
-    pins_knocked: int
+    pins_knocked: int  # preserved for backward compatibility; see `pinfall` for how it was produced
+    pinfall: PinfallInfo
     lane_condition_version: int
 
 

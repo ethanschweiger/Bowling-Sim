@@ -16,12 +16,14 @@ from app.models.schemas import (
     CreateGameResponse,
     GameResetResponse,
     GameThrowResponse,
+    PinfallInfo,
     ReleaseValues,
     ThrowRequest,
     TrajectoryPointResponse,
 )
 from app.physics.ball import BALL_CATALOG
-from app.physics.scoring import pins_from_entry
+from app.physics.impact import impact_state_from_result
+from app.physics.pinfall import DEFAULT_PINFALL_MODEL
 from app.physics.simulate import simulate_throw
 from app.physics.throw import Throw, sample_release
 
@@ -58,7 +60,8 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
     # Only this game's lane — never any other game's, and never a shared
     # process-global one. run_throw keeps the read/simulate/record atomic.
     result = session.lane.run_throw(lambda condition: simulate_throw(ball, actual_throw, condition))
-    pins = pins_from_entry(result)
+    impact = impact_state_from_result(result, ball)
+    pinfall = DEFAULT_PINFALL_MODEL.resolve(impact)
 
     return GameThrowResponse(
         game_id=game_id,
@@ -68,7 +71,8 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
         entry_board=result.entry_board,
         entry_angle_deg=result.entry_angle_deg,
         speed_at_pins_mph=result.speed_at_pins_mph,
-        pins_knocked=pins,
+        pins_knocked=pinfall.pins_knocked,
+        pinfall=PinfallInfo(model_id=pinfall.model_id, limitations=pinfall.limitations),
         lane_condition_version=result.lane_condition_version,
     )
 
