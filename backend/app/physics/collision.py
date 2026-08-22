@@ -18,9 +18,16 @@ behavior. A supplied selection is routed through `rack.validate_pin_ids`,
 so it's held to the exact same standard `Rack` itself is: only plain
 `int` IDs 1-10 (never a `bool` or `float` that merely equals one), no
 duplicates, raising `RackError` otherwise — a typo'd `{11}` can never
-silently simulate an empty deck. This module has no notion of a game or a
-frame; it resolves exactly the one impact it's given against exactly the
-pins it's told are there.
+silently simulate an empty deck. This validation is the *first* thing
+either function does, ahead of every other short circuit (a gutter miss
+in `resolve`, a non-positive speed in `simulate_collision`) — an invalid
+selection raises independently of whether the ball could physically have
+hit anything, and independently of which of the two functions a caller
+uses (`simulate_collision` can be called directly, without going through
+`resolve` at all, so it validates on its own rather than trusting a
+caller already did). This module has no notion of a game or a frame; it
+resolves exactly the one impact it's given against exactly the pins it's
+told are there.
 
 ## Unit system
 
@@ -223,17 +230,22 @@ def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]
     A non-positive `impact.speed_mph` returns `((), 0)` immediately — no
     body is constructed, no geometry is touched, no positional correction
     runs. A stationary ball cannot dislodge a pin it happens to start
-    overlapping.
+    overlapping. Validation of `standing_ids` happens first, before that
+    (or any other) short circuit — an invalid selection raises regardless
+    of whether the ball could physically have hit anything.
     """
-    if impact.speed_mph <= 0.0:
-        return (), 0
-
     # None keeps the pre-selection default (every pin); anything else is
     # routed through the same validation Rack itself uses, raising the
     # same RackError for a malformed, unknown, or duplicate ID — a
     # caller-supplied {11} can never silently become an empty deck, and
-    # {True} or {1.0} can never silently become pin 1.
+    # {True} or {1.0} can never silently become pin 1. This runs before
+    # every other check in this function, including the non-positive-speed
+    # short circuit below: an invalid selection is invalid regardless of
+    # whether the ball could physically hit anything.
     standing_set = ALL_PIN_IDS if standing_ids is None else validate_pin_ids(standing_ids)
+
+    if impact.speed_mph <= 0.0:
+        return (), 0
     if not standing_set:
         return (), 0  # nothing to fall — a valid no-op, not an error
 
@@ -310,12 +322,19 @@ class PlanarCollisionPinfallModel(PinfallModel):
     )
 
     def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult:
+        # Validated before the gutter check (or any other short circuit)
+        # below: an invalid selection must raise even for an impact that
+        # never could have hit a pin anyway. `simulate_collision` also
+        # validates independently, since it can be called directly without
+        # going through resolve() at all — this isn't relying on that.
+        validated_standing_ids = ALL_PIN_IDS if standing_ids is None else validate_pin_ids(standing_ids)
+
         if abs(impact.lateral_position_in) >= GUTTER_ABS_LATERAL_IN:
             return PinfallResult(
                 pins_knocked=0, model_id=self.model_id, limitations=self.LIMITATIONS, fallen_pin_ids=()
             )
 
-        fallen_ids, _steps_taken = simulate_collision(impact, standing_ids=standing_ids)
+        fallen_ids, _steps_taken = simulate_collision(impact, standing_ids=validated_standing_ids)
         return PinfallResult(
             pins_knocked=len(fallen_ids),
             model_id=self.model_id,
