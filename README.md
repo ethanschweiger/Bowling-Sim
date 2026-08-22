@@ -6,9 +6,10 @@ the ball's path down the lane and reports what happens at the pins.
 
 ## Status
 
-Backend only. No frontend, no database, no auth. A single endpoint runs one
-throw through the physics engine against a stateful house-shot lane and
-returns a trajectory.
+Backend only. No frontend, no database, no auth. Each game gets its own
+lane: create one, throw in it, reset it back to a fresh house shot whenever
+you want. A deprecated single-lane endpoint from an earlier milestone still
+works, shared by every caller that still uses it.
 
 ## Architecture
 
@@ -97,13 +98,12 @@ picked up resurfaces a few feet further down those same boards
 pure — `apply_wear` returns a new `LaneCondition` rather than mutating one,
 and the reusable `OilPatternSpec` (the pattern's shape) is never mutated at
 all. The only mutable state is `LaneSession` (`app/physics/lane_session.py`):
-a small in-memory service holding "the lane right now," built to be swapped
-for a database row or a multiplayer session later without touching the
-physics. Reading the current condition, simulating a throw against it, and
-recording that throw's wear happen inside one lock (`LaneSession.run_throw`)
-— two requests can't both read the same condition and silently clobber each
-other's wear, and the version a response reports is exactly the one it ran
-against.
+a small class holding "the lane right now" for one lane. Reading the
+current condition, simulating a throw against it, and recording that
+throw's wear happen inside one lock (`LaneSession.run_throw`) — two
+requests against the *same* lane can't both read the same condition and
+silently clobber each other's wear, and the version a response reports is
+exactly the one it ran against.
 
 `LaneCondition` also carries `temperature_f` (72°F by default), retained
 unchanged through wear. It nudges friction by a small, bounded, documented
@@ -111,6 +111,25 @@ amount — at most ±10%, symmetric around 72°F — rather than doing nothing
 with it (`LaneCondition.friction_at` / `_temperature_friction_multiplier`
 in `lane.py`). The direction (warmer -> slightly higher friction) is a
 stated modeling choice, not derived from thermodynamics.
+
+### Games own their lane — state lifecycle
+
+`LaneSession` is a primitive, not a place to put multiple players' state.
+`app/games/service.py` owns that: a `GameSession` pairs one game's
+immutable starting `LaneCondition` with the `LaneSession` built from it, and
+`GameService` is the thread-safe map from an opaque `game_id` to its
+`GameSession`. Two games' lanes never see each other's wear — each request
+resolves `game_id` to exactly one `GameSession` and only ever touches that
+one's lane. `GameService`'s own lock only protects the game_id -> session
+mapping (create/lookup); each game's throws are still made atomic by that
+game's own `LaneSession` lock, not the service's.
+
+`POST /api/v1/games/{game_id}/reset` calls `GameSession.reset()`, which
+replaces the lane with the *exact* `LaneCondition` that game started
+with — same grid, same temperature — and lands back at version 1. It never
+touches `OilPatternSpec`/`LaneCondition.house_shot()`, the reusable pattern
+definition every game is built from; reset only ever affects the one game
+whose ID you call it on.
 
 ### Release variance
 
@@ -154,10 +173,25 @@ source .venv/bin/activate
 pytest
 ```
 
-## Try it
+## API
+
+### Create a game
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/simulations/throws \
+curl -X POST http://localhost:8000/api/v1/games \
+  -H "Content-Type: application/json" -d '{}'
+# {"game_id": "…", "lane_condition_version": 1}
+```
+
+`oil_pattern` is optional and defaults to `"house"` — the only pattern this
+milestone supports. Anything else is a 422; the field exists now so a
+future named-pattern (or temperature) selection is an additive change, not
+a new route.
+
+### Throw in that game
+
+```bash
+curl -X POST http://localhost:8000/api/v1/games/{game_id}/throws \
   -H "Content-Type: application/json" \
   -d '{
     "ball_id": "reactive_pearl",
@@ -172,13 +206,30 @@ curl -X POST http://localhost:8000/api/v1/simulations/throws \
 ```
 
 `seed` is optional — reuse the one an earlier response returned to replay
-that exact throw. The lane is a single shared house shot for the process
-right now, and it wears in with every throw; the response's
-`lane_condition_version` tells you which state your throw actually ran
-against.
+that exact throw. This game's lane wears in with every throw; the
+response's `lane_condition_version` tells you which state your throw
+actually ran against. An unknown `game_id` is a 404.
+
+### Reset a game's lane
+
+```bash
+curl -X POST http://localhost:8000/api/v1/games/{game_id}/reset
+# {"game_id": "…", "lane_condition_version": 1}
+```
+
+Restores this game's lane to exactly what it started with and puts the
+version counter back at 1. Other games are untouched.
 
 Ball catalog: `house_ball`, `urethane_smooth`, `reactive_pearl`, `particle_beast`
 (see `backend/app/physics/ball.py`).
+
+### Deprecated: `POST /api/v1/simulations/throws`
+
+The single-lane endpoint from an earlier milestone still works, unchanged
+in shape, but every caller shares one lazily-created game
+(`legacy-default`) — there's no per-caller isolation. It's marked
+`deprecated` in `/docs`. New integrations should create their own game
+instead.
 
 ## Roadmap
 
@@ -196,12 +247,15 @@ percentages, leave tracking, ball usage stats.
 - Pin carry is a deterministic function of entry board and angle, not a
   pin-collision model. Good enough for v1, not physically accurate.
 - No handedness distinction — the pocket model assumes a right-handed shot.
-- Only the house shot is modeled; oil-pattern selection is deferred. It's a
-  single shared, stateful lane for the whole process — no separate games or
-  players yet, so every request wears the same lane. `LaneSession.run_throw`
-  makes each individual throw atomic; it doesn't give two players their own
-  lane, which needs real session scoping (tracked as a future architecture
-  constraint, not yet built).
+- Only the house shot is modeled; named-pattern selection is deferred
+  (`oil_pattern` on `POST /games` only accepts `"house"` today).
+- Games live in memory only — restarting the process loses every game.
+  There's no accounts/ownership layer yet: any caller who has a `game_id`
+  can throw in or reset that game.
+- `GameService` never expires old games, so a long-running process
+  accumulates one `GameSession` per game created, indefinitely.
+- The deprecated `/api/v1/simulations/throws` route shares one game across
+  every caller — it's for backward compatibility, not isolation.
 - `mass_lbs` and `radius_in` are on the `Ball` model but not used in this
   milestone's trajectory calculation — both deliberately, see "Ball
   properties" above (`app/physics/ball.py`).

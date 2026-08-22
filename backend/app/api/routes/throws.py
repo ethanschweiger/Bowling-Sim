@@ -1,26 +1,36 @@
-"""POST /api/v1/simulations/throws — run one throw through the physics engine.
+"""POST /api/v1/simulations/throws — DEPRECATED. Prefer /api/v1/games.
 
-The lane is stateful: this throw reads whatever condition the shared lane
-session is currently in, then wears the lane in along the path this throw
-actually took. The next request sees the result.
+Kept temporarily for backward compatibility. Every call here shares ONE
+game session (id `LEGACY_GAME_ID`, lazily created on first use) — there is
+no per-caller isolation, so two unrelated clients hitting this route wear
+the same lane. It does not own a separate hidden lane of its own: it
+delegates to the same `GameService` the game-scoped routes use, just
+against one well-known, fixed game_id instead of a caller-chosen one.
+
+New clients should use `POST /api/v1/games` to get their own game, then
+`POST /api/v1/games/{game_id}/throws` — see `app/api/routes/games.py`.
 """
 
 from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
 
+from app.games.service import default_game_service
 from app.models.schemas import ReleaseValues, ThrowRequest, ThrowResponse, TrajectoryPointResponse
 from app.physics.ball import BALL_CATALOG
-from app.physics.lane_session import default_session
 from app.physics.scoring import pins_from_entry
 from app.physics.simulate import simulate_throw
 from app.physics.throw import Throw, sample_release
 
-router = APIRouter(prefix="/simulations", tags=["simulations"])
+router = APIRouter(prefix="/simulations", tags=["simulations (deprecated)"])
+
+LEGACY_GAME_ID = "legacy-default"
 
 
-@router.post("/throws", response_model=ThrowResponse)
+@router.post("/throws", response_model=ThrowResponse, deprecated=True)
 def create_throw(request: ThrowRequest) -> ThrowResponse:
+    session = default_game_service.get_or_create(LEGACY_GAME_ID)
+
     ball = BALL_CATALOG.get(request.ball_id)
     if ball is None:
         raise HTTPException(status_code=404, detail=f"Unknown ball_id '{request.ball_id}'")
@@ -35,7 +45,7 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
     )
     actual_throw, seed = sample_release(requested_throw, request.seed)
 
-    result = default_session.run_throw(lambda condition: simulate_throw(ball, actual_throw, condition))
+    result = session.lane.run_throw(lambda condition: simulate_throw(ball, actual_throw, condition))
     pins = pins_from_entry(result)
 
     return ThrowResponse(

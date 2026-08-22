@@ -1,8 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.routes.throws import LEGACY_GAME_ID
+from app.games.service import default_game_service
 from app.main import app
-from app.physics.lane_session import default_session
 
 client = TestClient(app)
 
@@ -12,18 +13,20 @@ VALID_PAYLOAD = {
     "rev_rate": 350.0,
     "axis_rotation": 45.0,
     "axis_tilt": 15.0,
-    "launch_angle": 2.0,
+    "launch_angle": 0.5,
     "launch_position": 28.0,
 }
 
 
 @pytest.fixture(autouse=True)
 def reset_lane():
-    """Each test starts from a fresh house shot — the lane session is
-    process-global and would otherwise carry wear between tests."""
-    default_session.reset()
+    """Each test starts from a fresh house shot. The deprecated legacy
+    route shares one game (LEGACY_GAME_ID) across every call, lazily
+    created on first use, which would otherwise carry wear between tests."""
+    session = default_game_service.get_or_create(LEGACY_GAME_ID)
+    session.reset()
     yield
-    default_session.reset()
+    session.reset()
 
 
 def test_unknown_ball_id_returns_404():

@@ -15,6 +15,11 @@ claim the same lane_condition_version. `run_throw` holds the lock across
 the read, the simulation, and the write, so each throw sees a lane no
 other throw has touched yet, and the version it reports is exactly the one
 it ran against.
+
+This class has no notion of a "game" — it's the primitive one game (or,
+before game scoping existed, the one shared process-global lane) is built
+from. See `app.games.service` for the game-scoped owner of one `LaneSession`
+per game, including reset back to that game's own starting condition.
 """
 
 import threading
@@ -46,11 +51,16 @@ class LaneSession:
             self._condition = apply_wear(condition, result.path)
             return result
 
-    def reset(self) -> None:
+    def reset_to(self, condition: LaneCondition) -> None:
+        """Replace the current condition outright — no wear applied. Used
+        for a real reset (back to a specific starting condition, e.g. a
+        game's own original), not for recording a throw."""
         with self._lock:
-            self._condition = LaneCondition.house_shot()
+            self._condition = condition
 
-
-# One shared lane for the process, for now — there's no concept of separate
-# games or tables yet. The API route reads/writes through this.
-default_session = LaneSession()
+    def reset(self) -> None:
+        """Convenience: reset to a brand-new default house shot. Callers
+        that need to restore a *specific* starting condition (a game's own,
+        which might one day carry a non-default pattern or temperature)
+        should use `reset_to` instead."""
+        self.reset_to(LaneCondition.house_shot())

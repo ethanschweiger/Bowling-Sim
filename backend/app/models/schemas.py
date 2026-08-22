@@ -1,6 +1,6 @@
 """Request/response shapes for the REST API."""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -47,4 +47,27 @@ class ThrowResponse(BaseModel):
     entry_angle_deg: float
     speed_at_pins_mph: float
     pins_knocked: int
+    lane_condition_version: int
+
+
+class CreateGameRequest(BaseModel):
+    # A plain string field (not just a bare literal in the URL) so a future
+    # named-pattern selection or a temperature setting is an additive field
+    # here, not a route/contract change. Only "house" exists this milestone.
+    oil_pattern: Literal["house"] = Field(
+        "house", description="Only 'house' is selectable this milestone."
+    )
+
+
+class CreateGameResponse(BaseModel):
+    game_id: str
+    lane_condition_version: int
+
+
+class GameThrowResponse(ThrowResponse):
+    game_id: str
+
+
+class GameResetResponse(BaseModel):
+    game_id: str
     lane_condition_version: int
