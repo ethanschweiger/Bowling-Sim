@@ -5,9 +5,16 @@ Intentionally independent of lane oil (`LaneCondition`, `lane.py`) and of
 `Scorecard` (`app/scoring/scorecard.py`): a `Rack` only tracks *which*
 pins remain between throws. It knows nothing about oil wear, and nothing
 about frames or a running score. See "Ownership boundaries" in the README
-for how a future `GameSession` is expected to hold one of each — a lane
-condition, a scorecard, and a rack — as three separate, independently
-mutable pieces of state, not one another's concern.
+for how a future `GameSession` is expected to hold a lane condition, a
+scorecard, and a rack — three separate concerns, none of them each
+other's business.
+
+`Rack` is a genuinely immutable value: `validate_pin_ids` canonicalizes
+whatever was passed in — a caller's own mutable `set` or `list` included
+— into an owned `frozenset` before it's ever stored, so mutating the
+collection a caller handed in (or trying to mutate `rack.standing_ids`
+itself, which is always a real `frozenset` and so has no mutating methods
+to call) can never change a `Rack` that already exists.
 """
 
 from dataclasses import dataclass
@@ -17,9 +24,41 @@ from app.physics.pin_deck import ALL_PIN_IDS
 
 
 class RackError(Exception):
-    """Raised for any invalid rack construction or update. The rack that
-    raised (or the prior rack, for `after_fallen`) is left unchanged —
-    there is no way to observe a `Rack` in a partially-applied state."""
+    """The one domain error for every invalid rack or pin-selection
+    boundary in this module and in `collision.py`'s `standing_ids`
+    handling. Raised for: a non-iterable input; any element that isn't an
+    exact `int` (a `bool` or `float` that happens to equal a valid ID,
+    e.g. `True == 1`, is rejected — it is not a harmless alternate
+    spelling of that pin); an ID outside 1-10; a duplicate within the
+    input; or (only from `Rack.after_fallen`) an ID that isn't currently
+    standing. In every case, whatever rack or selection existed before
+    the call is left completely unchanged — there is no way to observe a
+    partially-applied update.
+    """
+
+
+def validate_pin_ids(ids: Iterable[int]) -> FrozenSet[int]:
+    """Canonicalizes an arbitrary iterable of candidate pin IDs into an
+    owned, validated `frozenset`. See `RackError` for exactly what's
+    rejected. Used by `Rack` itself and by the planar collision model's
+    `standing_ids` parameter, so both boundaries reject the same things
+    the same way.
+    """
+    try:
+        candidates = list(ids)
+    except TypeError:
+        raise RackError(f"pin IDs must come from an iterable, got {ids!r}")
+
+    seen: set = set()
+    for pin_id in candidates:
+        if type(pin_id) is not int:
+            raise RackError(f"pin IDs must be plain int, got {pin_id!r} ({type(pin_id).__name__})")
+        if pin_id not in ALL_PIN_IDS:
+            raise RackError(f"{pin_id} is not a standard pin ID (1-10)")
+        if pin_id in seen:
+            raise RackError(f"duplicate pin ID: {pin_id}")
+        seen.add(pin_id)
+    return frozenset(seen)
 
 
 @dataclass(frozen=True)
@@ -27,9 +66,13 @@ class Rack:
     standing_ids: FrozenSet[int]
 
     def __post_init__(self) -> None:
-        invalid = self.standing_ids - ALL_PIN_IDS
-        if invalid:
-            raise RackError(f"not standard pin IDs: {sorted(invalid)}")
+        # Canonicalize whatever was passed in — even a plain, currently-
+        # mutable set or list — into an owned frozenset before storing it,
+        # so this Rack can never be affected by later mutating the
+        # caller's own collection. Frozen dataclasses need object.__setattr__
+        # to set a field from inside __post_init__.
+        validated = validate_pin_ids(self.standing_ids)
+        object.__setattr__(self, "standing_ids", validated)
 
     @staticmethod
     def full() -> "Rack":
@@ -44,20 +87,14 @@ class Rack:
     def after_fallen(self, fallen_ids: Iterable[int]) -> "Rack":
         """Returns a new `Rack` with `fallen_ids` removed from those
         currently standing on `self`. Raises `RackError` — leaving `self`
-        completely unchanged — if `fallen_ids` contains anything outside
-        1-10, a duplicate, or an ID that isn't currently standing.
+        completely unchanged — for anything `validate_pin_ids` rejects, or
+        for an ID that isn't currently standing on this particular rack.
         """
-        fallen_list = list(fallen_ids)
-        seen: set = set()
-        for pin_id in fallen_list:
-            if pin_id not in ALL_PIN_IDS:
-                raise RackError(f"{pin_id!r} is not a standard pin ID (1-10)")
-            if pin_id in seen:
-                raise RackError(f"duplicate fallen pin ID: {pin_id}")
-            if pin_id not in self.standing_ids:
-                raise RackError(f"pin {pin_id} is not standing on this rack")
-            seen.add(pin_id)
-        return Rack(standing_ids=self.standing_ids - seen)
+        validated = validate_pin_ids(fallen_ids)
+        not_standing = validated - self.standing_ids
+        if not_standing:
+            raise RackError(f"not standing on this rack: {sorted(not_standing)}")
+        return Rack(standing_ids=self.standing_ids - validated)
 
     def __contains__(self, pin_id: int) -> bool:
         return pin_id in self.standing_ids

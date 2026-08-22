@@ -44,7 +44,10 @@ class PinfallModel(ABC):
     existed, byte-for-byte. Pass a specific set (e.g. a `Rack.standing_ids`)
     and a model that can honor it — `PlanarCollisionPinfallModel` — only
     materializes and resolves those pins; any `fallen_pin_ids` it returns
-    is guaranteed to be a subset of what was supplied. A model that can't
+    is guaranteed to be a subset of what was supplied. That model routes
+    a supplied selection through `app.physics.rack.validate_pin_ids`,
+    which raises `RackError` for anything malformed, unknown, or
+    duplicated — the same check `Rack` itself applies. A model that can't
     honor per-pin selection (the heuristic) accepts the parameter for
     interface consistency but ignores it — see its own limitations.
     """

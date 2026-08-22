@@ -13,9 +13,14 @@ variance (see README).
 `resolve`/`simulate_collision` accept an optional `standing_ids`: which
 pins actually exist to be hit for this one impact (e.g. a `Rack.standing_ids`
 from `app/physics/rack.py`, for a ball's second throw in a frame). Omit it
-and every pin is simulated — the default, unchanged behavior. This module
-has no notion of a game or a frame; it resolves exactly the one impact
-it's given against exactly the pins it's told are there.
+(or pass `None`) and every pin is simulated — the default, unchanged
+behavior. A supplied selection is routed through `rack.validate_pin_ids`,
+so it's held to the exact same standard `Rack` itself is: only plain
+`int` IDs 1-10 (never a `bool` or `float` that merely equals one), no
+duplicates, raising `RackError` otherwise — a typo'd `{11}` can never
+silently simulate an empty deck. This module has no notion of a game or a
+frame; it resolves exactly the one impact it's given against exactly the
+pins it's told are there.
 
 ## Unit system
 
@@ -108,6 +113,7 @@ from app.physics.pin_deck import (
     USBC_PIN_WEIGHT_OZ,
 )
 from app.physics.pinfall import PinfallModel, PinfallResult
+from app.physics.rack import validate_pin_ids
 from app.physics.units import IN_PER_FT, mph_to_in_per_s, weight_lbf_to_mass_blob
 
 COLLISION_DT_S = 0.0005
@@ -203,10 +209,12 @@ def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]
 
     `standing_ids` restricts which pins exist in the simulation at all —
     omit it (or pass None) to simulate the full ten-pin rack, unchanged
-    from before this parameter existed. Only pins in `standing_ids` are
-    materialized as bodies, so any returned fallen ID is necessarily a
-    member of that set; an empty `standing_ids` simulates the ball alone
-    (nothing can fall — there's nothing to fall).
+    from before this parameter existed. A supplied value is validated via
+    `rack.validate_pin_ids` (raising `RackError` for anything malformed,
+    unknown, or duplicated) before it's used for anything. Only pins in
+    the validated set are materialized as bodies, so any returned fallen
+    ID is necessarily a member of it; a validated-empty `standing_ids`
+    simulates the ball alone (nothing can fall — there's nothing to fall).
 
     Returns (fallen_pin_ids, steps_taken): fallen_pin_ids is a tuple of
     unique pin IDs sorted ascending, always a subset of `standing_ids`;
@@ -220,7 +228,12 @@ def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]
     if impact.speed_mph <= 0.0:
         return (), 0
 
-    standing_set = ALL_PIN_IDS if standing_ids is None else frozenset(standing_ids)
+    # None keeps the pre-selection default (every pin); anything else is
+    # routed through the same validation Rack itself uses, raising the
+    # same RackError for a malformed, unknown, or duplicate ID — a
+    # caller-supplied {11} can never silently become an empty deck, and
+    # {True} or {1.0} can never silently become pin 1.
+    standing_set = ALL_PIN_IDS if standing_ids is None else validate_pin_ids(standing_ids)
     if not standing_set:
         return (), 0  # nothing to fall — a valid no-op, not an error
 

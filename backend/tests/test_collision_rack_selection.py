@@ -4,10 +4,12 @@ count, an empty rack is a clean no-op, and a single-pin rack can only ever
 return that pin.
 """
 
+import pytest
+
 from app.physics.collision import PlanarCollisionPinfallModel
 from app.physics.impact import ImpactState
 from app.physics.pin_deck import ALL_PIN_IDS
-from app.physics.rack import Rack
+from app.physics.rack import Rack, RackError
 
 MODEL = PlanarCollisionPinfallModel()
 
@@ -74,3 +76,33 @@ def test_no_id_absent_from_the_rack_can_ever_be_returned():
     result = MODEL.resolve(impact, standing_ids=standing)
     assert set(result.fallen_pin_ids).isdisjoint({1, 3, 5, 7, 9})
     assert set(result.fallen_pin_ids) <= standing
+
+
+# --- Validation hardening -------------------------------------------------
+
+
+def test_planar_selection_rejects_malformed_ids_with_rack_error():
+    impact = _impact()
+    for bad in (
+        {11},        # unknown ID — must not silently become an empty deck
+        [1, 1],      # duplicate
+        {True},      # bool — must not silently become pin 1
+        {1.0},       # float — must not silently become pin 1
+        {"1"},       # string
+        5,           # non-iterable
+    ):
+        with pytest.raises(RackError):
+            MODEL.resolve(impact, standing_ids=bad)
+
+
+def test_omitted_default_and_validated_selections_still_behave_as_before():
+    impact = _impact(lateral_position_in=-1.0, heading_deg=2.0)
+    default_result = MODEL.resolve(impact)
+    explicit_full = MODEL.resolve(impact, standing_ids=ALL_PIN_IDS)
+    assert explicit_full.fallen_pin_ids == default_result.fallen_pin_ids
+
+    partial = MODEL.resolve(impact, standing_ids={1, 2, 3})
+    assert set(partial.fallen_pin_ids) <= {1, 2, 3}
+
+    empty = MODEL.resolve(impact, standing_ids=frozenset())
+    assert empty.pins_knocked == 0 and empty.fallen_pin_ids == ()

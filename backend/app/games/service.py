@@ -11,16 +11,22 @@ and so two games' lanes never see each other's wear.
 ## Ownership boundaries (future)
 
 `GameSession` doesn't yet own a `Scorecard` (`app/scoring/scorecard.py`)
-or a `Rack` (`app/physics/rack.py`) — this module still only tracks lane
-state. The intended shape once it does: one `GameSession` owns exactly one
-`LaneCondition`/`LaneSession`, one `Scorecard`, and one mutable `Rack`, all
-three independently mutable and none aware of the others. The reusable,
-never-mutated definitions — `OilPatternSpec`/`LaneCondition.house_shot()`
-and `pin_deck.STANDARD_DECK` — stay shared across every game, exactly as
-today. A future move to shared storage or WebSocket-synchronized
-multiplayer changes who holds that `GameSession` (or where its state
-lives), not the collision solver, the scorecard rules, or the rack's own
-logic — none of those know a game or a session exists.
+or a rack slot for a `Rack` (`app/physics/rack.py`) — this module still
+only tracks lane state. `Rack` itself is an immutable value, the same way
+`LaneCondition` is: the intended shape, once `GameSession` owns one of
+each, is one `LaneCondition`/`LaneSession`, one `Scorecard`, and one rack
+*slot* — a single reference `GameSession` atomically replaces with the
+next `Rack` value after each throw, the same pattern `LaneSession` already
+uses for `LaneCondition` (see `lane_session.py`'s `reset_to`). All three
+slots stay independently mutable and none of the three value/rule
+objects — `LaneCondition`, `Scorecard`, `Rack` — is aware of the others.
+The reusable, never-mutated definitions — `OilPatternSpec`/
+`LaneCondition.house_shot()` and `pin_deck.STANDARD_DECK` — stay shared
+across every game, exactly as today. A future move to shared storage or
+WebSocket-synchronized multiplayer changes who holds that `GameSession`
+(or where its state lives), not the collision solver, the scorecard
+rules, or the rack's own logic — none of those know a game or a session
+exists.
 """
 
 import threading

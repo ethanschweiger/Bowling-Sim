@@ -72,3 +72,73 @@ def test_emptying_the_rack_via_after_fallen_is_legal():
     empty = rack.after_fallen(range(1, 11))
     assert len(empty) == 0
     assert empty.standing_ids == frozenset()
+
+
+# --- Validation hardening -------------------------------------------------
+
+
+def test_direct_construction_from_a_mutable_collection_is_canonicalized():
+    mutable_set = {1, 2, 3}
+    rack = Rack(standing_ids=mutable_set)
+    assert isinstance(rack.standing_ids, frozenset)
+
+    mutable_set.add(4)  # mutating the caller's own collection afterward...
+    assert rack.standing_ids == frozenset({1, 2, 3})  # ...never reaches the rack
+
+    with pytest.raises(AttributeError):
+        rack.standing_ids.add(5)  # a real frozenset has no mutating methods
+
+
+def test_direct_construction_from_a_list_is_canonicalized():
+    rack = Rack(standing_ids=[4, 5, 6])
+    assert rack.standing_ids == frozenset({4, 5, 6})
+
+
+def test_bool_is_rejected_even_though_it_equals_a_valid_id():
+    with pytest.raises(RackError):
+        Rack(standing_ids={True, 2})
+    with pytest.raises(RackError):
+        Rack.full().after_fallen([True])
+
+
+def test_float_is_rejected_even_though_it_equals_a_valid_id():
+    with pytest.raises(RackError):
+        Rack(standing_ids={1.0, 2})
+    with pytest.raises(RackError):
+        Rack.full().after_fallen([1.0])
+
+
+def test_string_is_rejected():
+    with pytest.raises(RackError):
+        Rack(standing_ids={"1", 2})
+    with pytest.raises(RackError):
+        Rack.full().after_fallen(["1"])
+
+
+def test_non_iterable_is_rejected():
+    with pytest.raises(RackError):
+        Rack(standing_ids=5)
+    with pytest.raises(RackError):
+        Rack.full().after_fallen(5)
+
+
+def test_duplicate_in_direct_construction_is_rejected():
+    with pytest.raises(RackError):
+        Rack(standing_ids=[1, 1, 2])
+
+
+def test_malformed_input_leaves_an_existing_rack_completely_unchanged():
+    rack = Rack.full().after_fallen([1, 2])
+    snapshot = rack.standing_ids
+
+    for bad in (
+        [True],           # bool
+        [1.0],            # float
+        ["3"],            # string
+        [3, 3],           # duplicate
+        [11],             # unknown ID
+        [1],              # not standing (already down)
+    ):
+        with pytest.raises(RackError):
+            rack.after_fallen(bad)
+        assert rack.standing_ids == snapshot

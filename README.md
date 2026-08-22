@@ -306,13 +306,27 @@ this milestone. `EntryAngleHeuristicPinfallModel` accepts the same
 parameter for interface consistency but ignores it; it never identified
 individual pins to begin with.
 
+`Rack` is a genuinely immutable value, not just by convention: a
+`standing_ids` you pass in — even your own plain `set` or `list` — is
+canonicalized into an owned `frozenset` before it's ever stored, so
+mutating your original collection afterward can't reach back into the
+`Rack`. Every rack boundary (direct construction, `after_fallen`, and a
+`standing_ids` passed straight to the collision model) accepts only exact
+`int`s 1-10 through the same `rack.validate_pin_ids` — a `bool` or
+`float` that happens to equal a valid ID (`True == 1`) is rejected, not
+silently treated as that pin, and a duplicate or unknown ID raises
+`RackError` rather than silently deduping or vanishing pins from the deck.
+
 Neither `Rack` nor the collision model is wired into a two-ball frame
 yet — that's the next step, once a `GameSession` owns one. See
 `app/games/service.py`'s "Ownership boundaries" for the intended shape:
-one lane condition, one scorecard, and one mutable rack per game, all
-independent of each other, with the reusable pattern and standard deck
-definitions (`OilPatternSpec`, `pin_deck.STANDARD_DECK`) staying shared
-across every game exactly as they do today.
+one lane condition, one scorecard, and one rack *slot* — `GameSession`
+would atomically replace that slot's value with the next (immutable)
+`Rack` after each throw, the same pattern `LaneSession` already uses for
+`LaneCondition` — all independent of each other, with the reusable
+pattern and standard deck definitions (`OilPatternSpec`,
+`pin_deck.STANDARD_DECK`) staying shared across every game exactly as
+they do today.
 
 ### Release variance
 
