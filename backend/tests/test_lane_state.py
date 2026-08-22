@@ -55,5 +55,5 @@ def test_house_shot_has_the_documented_friction_profile():
     assert condition.friction_at(distance_ft=10.0, board=1.0) == DRY_FRICTION
 
     # Past the pattern's stated length, even on a favored board: dry.
-    assert condition.friction_at(distance_ft=40.0, board=20.0) == DRY_FRICTION
-    assert HOUSE_SHOT_SPEC.length_ft == 32.0
+    assert condition.friction_at(distance_ft=45.0, board=20.0) == DRY_FRICTION
+    assert HOUSE_SHOT_SPEC.length_ft == 40.0

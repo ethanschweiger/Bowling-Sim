@@ -3,13 +3,18 @@
 Mirrors what's stamped on a real bowling ball's spec sheet. `hook_potential`
 folds coverstock, surface, RG, and differential into one number the
 simulator uses to scale how hard the ball changes direction once it hits
-dry boards. `mass_lbs` feeds the simulator's deceleration directly (see
-simulate.py) — a heavier ball sheds less speed for the same friction.
+dry boards.
 
-`radius_in` is deliberately unused this milestone: every ball in the
-catalog shares the regulation diameter, so it can't yet differentiate
-simulated behavior. It stays on the model for when custom or undersized
-balls matter.
+Two properties are deliberately unused in the trajectory calculation this
+milestone, both documented rather than silently dropped:
+
+- `mass_lbs` doesn't affect deceleration. Under simple Coulomb friction,
+  `a = mu * g` — mass cancels out of `F = ma`, so a heavier ball doesn't
+  coast farther down the lane on that basis. Mass matters for momentum
+  transfer at pin impact, which isn't modeled yet (pin carry is v2+).
+- `radius_in` is unused because every ball in the catalog shares the
+  regulation diameter, so it can't yet differentiate simulated behavior.
+  It stays on the model for when custom or undersized balls matter.
 """
 
 from dataclasses import dataclass

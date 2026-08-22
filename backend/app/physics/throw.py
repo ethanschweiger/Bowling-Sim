@@ -33,13 +33,29 @@ _RELEASE_NOISE_STD = {
 # human release plausibly looks like.
 _NOISE_CLAMP_STD = 3.0
 
+# The same legal range the API enforces on a *requested* throw (see
+# ThrowRequest in app/models/schemas.py, which imports this dict directly
+# so the two can't drift apart). A sampled release is clamped into this
+# range too: a valid request can never come out the other side of sampling
+# with a negative rev rate, a sub-minimum speed, or a board/axis value that
+# doesn't exist.
+RELEASE_BOUNDS = {
+    "speed_mph": (10.0, 25.0),
+    "rev_rate": (0.0, 600.0),
+    "axis_rotation": (0.0, 90.0),
+    "axis_tilt": (0.0, 90.0),
+    "launch_angle": (-10.0, 10.0),
+    "launch_position": (1.0, 39.0),
+}
+
 
 def sample_release(requested: Throw, seed: Optional[int] = None) -> tuple[Throw, int]:
     """Sample a small, bounded release error around the requested throw.
 
     The same seed always reproduces the same sampled throw. If no seed is
     given, one is generated and returned so the caller can replay this exact
-    throw later.
+    throw later. The sampled result is always clamped to `RELEASE_BOUNDS`,
+    so replaying a seed stays reproducible even at the edge of legal range.
     """
     if seed is None:
         seed = random.SystemRandom().randrange(2**31)
@@ -49,6 +65,7 @@ def sample_release(requested: Throw, seed: Optional[int] = None) -> tuple[Throw,
     for field, std in _RELEASE_NOISE_STD.items():
         noise = rng.gauss(0.0, std)
         noise = max(-_NOISE_CLAMP_STD * std, min(_NOISE_CLAMP_STD * std, noise))
-        sampled_fields[field] = getattr(requested, field) + noise
+        lo, hi = RELEASE_BOUNDS[field]
+        sampled_fields[field] = max(lo, min(hi, getattr(requested, field) + noise))
 
     return replace(requested, **sampled_fields), seed

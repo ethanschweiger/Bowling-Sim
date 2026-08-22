@@ -36,10 +36,21 @@ LaneCondition — oil grid (board x foot), derived from a standard house shot
 
 Simulation steps down the lane in half-foot increments. At each step, the
 lane condition's friction at that point slows the ball down and converts
-stored rev rate into lateral drift. Friction is derived from how much oil
+stored spin into lateral drift. Friction is derived from how much oil
 remains in that grid cell: heavy oil skids the ball straight, a dry board
 grips it and starts the hook. That's the whole model — no perfect physics,
 just enough to make ball and lane choices matter.
+
+### One unit system, declared once
+
+Everything inside the integration loop runs in feet and seconds
+(`app/physics/units.py`). A request's mph and RPM are converted to ft/s and
+rad/s exactly once, at the top of `simulate_throw`; the timestep comes from
+feet-of-travel divided by feet-per-second, never feet divided by mph.
+Results convert back to mph only at the response. `FORWARD_DRAG`,
+`SPIN_DECAY`, and `HOOK_GAIN` in `simulate.py` are openly empirical —
+tuned so skid, hook, and roll stay credible and bounded, not derived from
+rigid-body mechanics.
 
 ### Ball properties, what they do
 
@@ -47,34 +58,53 @@ just enough to make ball and lane choices matter.
   board — plastic barely hooks, particle on a 500-grit surface hooks hard.
 - **RG** and **differential** set how early and how sharply the ball flares
   into that hook.
-- **Mass** scales deceleration directly: a heavier ball sheds less speed for
-  the same friction (`F = ma`).
-- **Radius** is on the model but unused this milestone — every catalog ball
-  shares the regulation diameter, so it can't differentiate behavior yet.
+- **Mass** and **radius** are on the model but unused in this milestone's
+  trajectory calculation, both deliberately: under simple Coulomb friction,
+  `a = mu * g`, so mass cancels out of `F = ma` and doesn't change how far a
+  ball coasts. Mass belongs in a future pin-carry / momentum-transfer model
+  instead (v2+). Radius is unused because every catalog ball shares the
+  regulation diameter — it can't differentiate behavior until custom or
+  undersized balls exist.
 
 ### Lane state is stateful, not a fixed pattern
 
-The house shot starts as a lateral/longitudinal oil grid (center boards
-carry a stated 3:1 volume ratio over the pattern's outer edge, tapering to
-dry over the last 6 of its 32 feet). Every throw wears that grid in: the
-boards the ball actually crossed lose a small, bounded fraction of their
-oil, and a smaller fraction of what was picked up resurfaces a few feet
-further down those same boards (`app/physics/lane.py::apply_wear`). The
-physics functions themselves stay pure — `apply_wear` returns a new
-`LaneCondition` rather than mutating one. The only mutable state is
-`LaneSession` (`app/physics/lane_session.py`), a small in-memory service
-holding "the lane right now" for the process, built to be swapped for a
-database row or a multiplayer session later without touching the physics.
+The house shot starts as a lateral/longitudinal oil grid, normalized so it
+sums to exactly 22 mL — a documented, reasoned assumption (not a certified
+USBC pattern) in line with a typical house shot: a 3:1 volume ratio between
+the center boards and the pattern's outer edge, 40 feet long with a 6-foot
+taper into the dry back end. Friction at any point is that cell's oil
+relative to the pattern's fresh peak concentration, so a board that started
+lighter (the pattern's own taper) already reads drier than the center, even
+before any wear.
+
+Every throw wears the grid in: the boards the ball actually crossed lose a
+small, bounded fraction of their oil, and a smaller fraction of what was
+picked up resurfaces a few feet further down those same boards
+(`app/physics/lane.py::apply_wear`). The physics functions themselves stay
+pure — `apply_wear` returns a new `LaneCondition` rather than mutating one,
+and the reusable `OilPatternSpec` (the pattern's shape) is never mutated at
+all. The only mutable state is `LaneSession` (`app/physics/lane_session.py`):
+a small in-memory service holding "the lane right now," built to be swapped
+for a database row or a multiplayer session later without touching the
+physics. Reading the current condition, simulating a throw against it, and
+recording that throw's wear happen inside one lock (`LaneSession.run_throw`)
+— two requests can't both read the same condition and silently clobber each
+other's wear, and the version a response reports is exactly the one it ran
+against.
 
 ### Release variance
 
 Real bowlers don't repeat a shot exactly. `sample_release` (`app/physics/throw.py`)
 draws small, bounded noise around the requested speed, rev rate, axis
-rotation, axis tilt, launch angle, and launch position, then simulates the
-sampled values, never the requested ones. Pass a `seed` to reproduce a throw
-exactly; omit it and the response returns the seed it generated, so you can
-replay that exact throw later. Pin count is always read off the resulting
-trajectory — never sampled on its own.
+rotation, axis tilt, launch angle, and launch position, clamps the result to
+the same legal range the API enforces on a request (`RELEASE_BOUNDS`, the
+single source both `sample_release` and the request schema read from), then
+simulates the sampled values, never the requested ones. Pass a `seed` to
+reproduce a throw exactly; omit it and the response returns the seed it
+generated, so you can replay that exact throw later — clamping is
+deterministic, so replay stays exact even at the edge of the legal range.
+Pin count is always read off the resulting trajectory — never sampled on
+its own.
 
 ## Setup
 
@@ -148,9 +178,18 @@ percentages, leave tracking, ball usage stats.
 - No handedness distinction — the pocket model assumes a right-handed shot.
 - Only the house shot is modeled; oil-pattern selection is deferred. It's a
   single shared, stateful lane for the whole process — no separate games or
-  players yet, so concurrent requests wear the same lane.
-- `radius_in` is on the `Ball` model but not used in any calculation this
-  milestone (see `app/physics/ball.py`).
+  players yet, so every request wears the same lane. `LaneSession.run_throw`
+  makes each individual throw atomic; it doesn't give two players their own
+  lane, which needs real session scoping (tracked as a future architecture
+  constraint, not yet built).
+- `mass_lbs` and `radius_in` are on the `Ball` model but not used in this
+  milestone's trajectory calculation — both deliberately, see "Ball
+  properties" above (`app/physics/ball.py`).
+- `FORWARD_DRAG`, `SPIN_DECAY`, and `HOOK_GAIN` (`app/physics/simulate.py`)
+  are hand-tuned for bounded, credible motion, not fit to real ball-motion
+  data.
+- The house shot's length, taper, ratio, and 22 mL total volume are a
+  reasoned assumption, not a certified USBC pattern.
 - `database_url` exists in config for the v3 milestone; nothing reads or
   writes to Postgres yet, and no migrations exist.
 - Release-error bounds (`_RELEASE_NOISE_STD` in `app/physics/throw.py`) are

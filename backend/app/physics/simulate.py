@@ -4,14 +4,28 @@ velocity -> friction -> angular velocity -> hook potential -> trajectory -> pin 
 
 We step down the lane in half-foot increments. At each step, friction (read
 from the lane condition's oil grid) does two things: it bleeds off forward
-speed, and it converts stored rev rate into lateral motion — the hook. On
-oil, friction is low and the ball mostly skids straight. Past the oil,
-friction rises and the ball "reads the lane" and turns.
+speed, and it converts stored spin into lateral motion — the hook. On oil,
+friction is low and the ball mostly skids straight. Past the oil, friction
+rises and the ball "reads the lane" and turns.
+
+Everything inside the loop runs in one unit system — feet and seconds (see
+`app.physics.units`). Speed and spin are converted to ft/s and rad/s once,
+at the top; the timestep comes from feet-of-travel divided by feet-per-
+second, never feet divided by mph. Results convert back to mph only when
+they leave this function.
+
+Ball mass is deliberately not a term here. Under simple Coulomb friction,
+deceleration is `a = mu * g` — mass cancels out of `F = ma` because both
+the friction force and the object's inertia scale with it. A heavier ball
+does not coast further down the lane for that reason alone; where mass
+actually matters is momentum transfer at pin impact, which this milestone
+doesn't model yet (pin carry is a v2+ concern). See `ball.py` for how the
+other five ball properties are used.
 
 This function is pure: it reads a `LaneCondition` snapshot but never
 mutates it or any shared state. Wearing the lane in from a completed throw
-is a separate step (`app.physics.lane.apply_wear`, applied through
-`LaneSession`), not something this function does on your behalf.
+is a separate step (`app.physics.lane.apply_wear`), applied atomically
+alongside this call by `LaneSession.run_throw`.
 """
 
 import math
@@ -20,16 +34,22 @@ from dataclasses import dataclass
 from app.physics.ball import Ball
 from app.physics.lane import LaneCondition
 from app.physics.throw import Throw
+from app.physics.units import fps_to_mph, mph_to_fps, rpm_to_rad_per_s
 
 STEP_FT = 0.5
-FORWARD_DRAG = 0.35          # how hard friction slows the ball down
-SPIN_DECAY = 0.15            # how hard friction bleeds off rev rate
-HOOK_GAIN = 0.028            # how hard remaining rev rate turns into lateral motion
+FORWARD_DRAG = 0.35          # empirical: how hard friction slows the ball down, per second
+SPIN_DECAY = 0.55            # empirical: how hard friction bleeds off spin, per second
+HOOK_GAIN = 1.2              # empirical: how hard remaining spin turns into lateral motion
 
-# FORWARD_DRAG above is calibrated for a ball at this weight. Actual ball
-# mass scales deceleration from there — a heavier ball sheds less speed for
-# the same friction (F = ma, so a = F / m).
-REFERENCE_MASS_LBS = 15.0
+# Below this forward speed the ball is treated as carried by momentum to the
+# pins rather than integrated further — avoids a division blowup as speed
+# approaches zero, and matches "roughly stopped" at a plausible walking pace.
+MIN_FORWARD_FPS = mph_to_fps(0.5)
+
+# Hard cap on integration steps. At STEP_FT=0.5 and a 60 ft lane this never
+# binds in practice; it exists so a pathological input can't loop forever
+# and every quantity in the simulation stays bounded.
+MAX_STEPS = 400
 
 
 @dataclass(frozen=True)
@@ -49,42 +69,43 @@ class SimulationResult:
 
 def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> SimulationResult:
     board = throw.launch_position
+    forward_velocity_fps = mph_to_fps(throw.speed_mph)
     # Positive lateral velocity = drifting toward higher board numbers (left, for a righty).
-    lateral_velocity = math.tan(math.radians(throw.launch_angle)) * throw.speed_mph
-    forward_velocity = throw.speed_mph
-    rev_rate = throw.rev_rate
+    lateral_velocity_fps = math.tan(math.radians(throw.launch_angle)) * forward_velocity_fps
+    angular_velocity_rad_s = rpm_to_rad_per_s(throw.rev_rate)
 
     # Axis rotation sets which way the ball wants to turn once it grips;
     # axis tilt delays that turn by keeping more of the roll "stored up."
     hook_direction = math.sin(math.radians(throw.axis_rotation))
     tilt_delay = math.cos(math.radians(throw.axis_tilt))
-    mass_factor = REFERENCE_MASS_LBS / max(ball.mass_lbs, 1.0)
 
     path = [TrajectoryPoint(distance_ft=0.0, board=board)]
     distance = 0.0
+    steps = 0
 
-    while distance < lane_condition.length_ft and forward_velocity > 0.5:
+    while distance < lane_condition.length_ft and forward_velocity_fps > MIN_FORWARD_FPS and steps < MAX_STEPS:
         friction = lane_condition.friction_at(distance, board)
-        dt = STEP_FT / max(forward_velocity, 1.0)
+        dt = STEP_FT / forward_velocity_fps  # ft / (ft/s) = s — consistent units throughout
 
-        forward_velocity -= friction * FORWARD_DRAG * mass_factor * forward_velocity * dt
-        rev_rate -= friction * SPIN_DECAY * rev_rate * dt
+        forward_velocity_fps = max(0.0, forward_velocity_fps - friction * FORWARD_DRAG * forward_velocity_fps * dt)
+        angular_velocity_rad_s = max(0.0, angular_velocity_rad_s - friction * SPIN_DECAY * angular_velocity_rad_s * dt)
 
-        hook_force = friction * HOOK_GAIN * rev_rate * ball.hook_potential * tilt_delay
-        lateral_velocity += hook_force * hook_direction * dt
+        hook_force = friction * HOOK_GAIN * angular_velocity_rad_s * ball.hook_potential * tilt_delay
+        lateral_velocity_fps += hook_force * hook_direction * dt
 
-        board += lateral_velocity * dt
+        board += lateral_velocity_fps * dt
         board = max(0.0, min(lane_condition.board_count + 1, board))
 
         distance += STEP_FT
+        steps += 1
         path.append(TrajectoryPoint(distance_ft=round(distance, 2), board=round(board, 3)))
 
-    entry_angle = math.degrees(math.atan2(lateral_velocity, max(forward_velocity, 0.1)))
+    entry_angle = math.degrees(math.atan2(lateral_velocity_fps, max(forward_velocity_fps, 1e-6)))
 
     return SimulationResult(
         path=path,
         entry_board=round(board, 2),
         entry_angle_deg=round(entry_angle, 2),
-        speed_at_pins_mph=round(forward_velocity, 2),
+        speed_at_pins_mph=round(fps_to_mph(forward_velocity_fps), 2),
         lane_condition_version=lane_condition.version,
     )

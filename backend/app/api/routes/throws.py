@@ -35,10 +35,8 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
     )
     actual_throw, seed = sample_release(requested_throw, request.seed)
 
-    lane_condition = default_session.condition
-    result = simulate_throw(ball, actual_throw, lane_condition)
+    result = default_session.run_throw(lambda condition: simulate_throw(ball, actual_throw, condition))
     pins = pins_from_entry(result)
-    default_session.record_throw(result.path)
 
     return ThrowResponse(
         seed=seed,
