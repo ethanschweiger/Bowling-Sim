@@ -11,13 +11,17 @@ interface ThrowControlsProps {
   onReset: () => void;
   isGameComplete: boolean;
   status: ThrowStatus;
+  /** Force both buttons off regardless of status/completion — used while
+   * the saved game is confirmed stale (see StaleGameNotice) and throwing
+   * or resetting would just fail the same way again. */
+  disabled?: boolean;
 }
 
 /** The primary throw/reset actions, plus one status region that announces
  * in-progress requests and errors to assistive tech (`role="alert"` for
  * errors — interrupts immediately; `aria-live="polite"` otherwise, so
  * routine updates don't talk over whatever the user is doing). */
-export function ThrowControls({ onThrow, onReset, isGameComplete, status }: ThrowControlsProps) {
+export function ThrowControls({ onThrow, onReset, isGameComplete, status, disabled = false }: ThrowControlsProps) {
   const isLoading = status.kind === 'loading';
 
   return (
@@ -27,7 +31,7 @@ export function ThrowControls({ onThrow, onReset, isGameComplete, status }: Thro
           type="button"
           className={`${styles.button} ${styles.primary}`}
           onClick={onThrow}
-          disabled={isLoading || isGameComplete}
+          disabled={isLoading || isGameComplete || disabled}
         >
           {isLoading && status.label === 'Throwing' ? 'Throwing…' : 'Throw'}
         </button>
@@ -35,7 +39,7 @@ export function ThrowControls({ onThrow, onReset, isGameComplete, status }: Thro
           type="button"
           className={`${styles.button} ${styles.secondary}`}
           onClick={onReset}
-          disabled={isLoading}
+          disabled={isLoading || disabled}
         >
           {isLoading && status.label === 'Resetting' ? 'Resetting…' : 'Reset game'}
         </button>
@@ -45,7 +49,7 @@ export function ThrowControls({ onThrow, onReset, isGameComplete, status }: Thro
         role={status.kind === 'error' ? 'alert' : undefined}
         aria-live={status.kind === 'error' ? undefined : 'polite'}
       >
-        {statusMessage(status, isGameComplete)}
+        {statusMessage(status, isGameComplete, disabled)}
       </p>
     </div>
   );
@@ -62,7 +66,7 @@ function statusClassName(status: ThrowStatus): string {
   }
 }
 
-function statusMessage(status: ThrowStatus, isGameComplete: boolean): string {
+function statusMessage(status: ThrowStatus, isGameComplete: boolean, disabled: boolean): string {
   switch (status.kind) {
     case 'loading':
       return `${status.label}…`;
@@ -72,6 +76,9 @@ function statusMessage(status: ThrowStatus, isGameComplete: boolean): string {
       return status.message;
     case 'idle':
     default:
+      if (disabled) {
+        return 'Start a new game to continue.';
+      }
       return isGameComplete ? 'Game complete — press Reset game to play again.' : 'Ready.';
   }
 }

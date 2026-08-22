@@ -1,0 +1,117 @@
+/**
+ * Session-lifecycle logic for the frontend's one game: idempotent
+ * create-or-load bootstrap, and detecting when a throw/reset's rejection
+ * means the saved game no longer exists on the server. Kept out of App.tsx
+ * so it's testable without rendering React or a browser tab — every
+ * function here is a plain async function over the typed API client and
+ * (for bootstrap/new-game) an injectable, `localStorage`-shaped store.
+ */
+
+import { ApiError, createGame, getGame } from '../api/client';
+import type { GameStateResponse } from '../api/types';
+
+export const GAME_ID_STORAGE_KEY = 'bowling-sim:game-id';
+
+/** The subset of the Web Storage API this module needs — small enough to
+ * fake in a test without a real `window`/`localStorage`. */
+export type GameIdStore = Pick<Storage, 'getItem' | 'setItem'>;
+
+function defaultStore(): GameIdStore {
+  return window.localStorage;
+}
+
+export interface BootResult {
+  gameId: string;
+  laneConditionVersion: number;
+  gameState: GameStateResponse;
+}
+
+// Module-level, not component state: this is what makes bootstrap survive
+// React StrictMode's deliberate double-invoke of a mount effect. Both
+// invocations call bootstrapGame() near-simultaneously; the second one
+// finds this already set and shares the first one's in-flight promise
+// instead of starting a second create/GET — so a StrictMode dev double-
+// mount can never create two games and orphan one.
+let bootstrapPromise: Promise<BootResult> | null = null;
+
+/** Create-or-load, memoized for the lifetime of this module. A failed
+ * attempt clears the memo before rejecting, so the *next* call (a mount
+ * effect's second StrictMode pass, or a user pressing "Retry") genuinely
+ * tries again rather than replaying the same stale rejection forever. */
+export function bootstrapGame(store: GameIdStore = defaultStore()): Promise<BootResult> {
+  if (!bootstrapPromise) {
+    bootstrapPromise = attemptBootstrap(store).catch((error: unknown) => {
+      bootstrapPromise = null;
+      throw error;
+    });
+  }
+  return bootstrapPromise;
+}
+
+/** Test-only seam: forget any in-flight/completed attempt so a fresh test
+ * doesn't inherit state a previous one left in this module. */
+export function resetBootstrapForTests(): void {
+  bootstrapPromise = null;
+}
+
+async function attemptBootstrap(store: GameIdStore): Promise<BootResult> {
+  const storedId = store.getItem(GAME_ID_STORAGE_KEY);
+  if (storedId) {
+    try {
+      const found = await getGame(storedId);
+      return { gameId: found.game_id, laneConditionVersion: found.lane_condition_version, gameState: found.game_state };
+    } catch (error) {
+      if (!isStaleGameError(error)) {
+        throw error;
+      }
+      // Stored id is stale (server restarted, or it never existed) — fall
+      // through and create a fresh one below.
+    }
+  }
+
+  const created = await createGame();
+  store.setItem(GAME_ID_STORAGE_KEY, created.game_id);
+  return { gameId: created.game_id, laneConditionVersion: created.lane_condition_version, gameState: created.game_state };
+}
+
+/** True exactly when `error` is the server telling us a game_id doesn't
+ * exist — the one specific condition that means "this browser's saved
+ * game is gone; offer to start a new one." A network failure, a
+ * validation error, or a completed-game 409 are all real, visible errors,
+ * but none of them mean the game itself is gone, so none of them should
+ * route through this recovery path. */
+export function isStaleGameError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404;
+}
+
+/** Unconditionally starts a brand new game and makes it this browser's
+ * saved one — the "Start a new game" recovery action for a confirmed-
+ * stale saved game_id. Never reads the old id; always overwrites it (or
+ * writes one for the first time) on success. */
+export async function startNewGame(store: GameIdStore = defaultStore()): Promise<BootResult> {
+  const created = await createGame();
+  store.setItem(GAME_ID_STORAGE_KEY, created.game_id);
+  return { gameId: created.game_id, laneConditionVersion: created.lane_condition_version, gameState: created.game_state };
+}
+
+/** The two lane-version facts the UI can truthfully know at any moment —
+ * see the root README's "Read a game without changing it" for why they
+ * aren't the same number. `currentLaneVersion` comes from a create, reset,
+ * or GET response (all documented as reporting the game's *current*
+ * version); `lastThrowRanAgainstVersion` comes only from a throw response
+ * (documented as the version that throw ran *against*, i.e. one behind
+ * current once that throw's own wear has landed). */
+export interface LaneVersionState {
+  currentLaneVersion: number | null;
+  lastThrowRanAgainstVersion: number | null;
+}
+
+/** One sentence describing lane-condition version state, labeled for
+ * exactly what it is — never presenting a throw's pre-wear number as if
+ * it were the game's current version. */
+export function describeLaneVersion(state: LaneVersionState): string {
+  if (state.lastThrowRanAgainstVersion !== null) {
+    return `Last throw ran against lane condition version ${state.lastThrowRanAgainstVersion}.`;
+  }
+  return `Lane condition version ${state.currentLaneVersion ?? '—'}.`;
+}

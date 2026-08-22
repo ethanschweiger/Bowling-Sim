@@ -447,6 +447,21 @@ after a 10th-frame strike shows its own plain pin count rather than a
 synthesized "X", since telling which bonus ball was fresh is a rack rule
 this client leaves to the server).
 
+That create-or-load bootstrap is idempotent even under React `StrictMode`'s
+deliberate double-invoke of a mount effect in development: the attempt is
+memoized at module scope (`frontend/src/domain/gameLifecycle.ts`), so a
+second concurrent caller shares the first one's in-flight request instead
+of starting a second one and orphaning a game. A failed bootstrap shows a
+"Retry" action rather than getting stuck; a throw or reset that comes back
+404 for the saved game (the backend restarted, per "Known limitations"
+below) shows a distinct "Start a new game" recovery action instead of
+silently discarding whatever the UI was last showing. The footer's lane-
+condition-version line is careful about a real backend distinction: a
+throw response's version is the one that throw ran *against* (documented,
+pre-wear), not the game's current version, so the footer labels it
+"ran against" rather than presenting it as current — the truthfully-
+current number (from create/reset/GET) is what shows the rest of the time.
+
 The six release inputs share `RELEASE_BOUNDS` and `ThrowRequest`'s field
 defaults with the backend (`frontend/src/domain/releaseFields.ts`), so the
 UI can't offer a value the API would reject. The ball catalog
@@ -475,8 +490,11 @@ proxy (`frontend/vite.config.ts`) forwards relative `/api/...` requests to
 `http://127.0.0.1:8000`, so start the backend first (see "Run" above) —
 no CORS configuration was needed on the FastAPI side; the browser only
 ever talks to the Vite server, which makes the cross-origin hop itself.
-Copy `frontend/.env.example` to `.env.local` and set `VITE_API_BASE_URL`
-only if the backend runs somewhere other than the proxy's default.
+This proxy is the only supported local setup. `frontend/.env.example`
+documents `VITE_API_BASE_URL`, which points the API client at a different
+origin entirely, bypassing the proxy — that needs the backend's own CORS
+configuration to work, which doesn't exist yet (`backend/app/main.py` has
+none), so don't set it expecting a different origin to just work.
 
 ```bash
 cd frontend
@@ -638,12 +656,13 @@ percentages, leave tracking, ball usage stats.
 - The ball catalog and "only house is available" pattern notice are
   hardcoded in the frontend (`frontend/src/domain/ballCatalog.ts`), not
   fetched from the API — there's no `GET /api/v1/balls` yet.
-- The frontend's "create or load" flow only checks whether its saved
-  `game_id` still exists when the page first loads. If the backend process
-  restarts (dropping all in-memory games, per the limitation above) while
-  a tab is already open, that tab's next throw or reset gets a real 404
-  from the server and displays it, but doesn't recover on its own — a page
-  reload does, hitting the same load-time check again.
+- The frontend only detects a stale saved `game_id` (the backend
+  restarted, dropping all in-memory games, per the limitation above)
+  reactively — when a throw or reset against it comes back 404. It then
+  shows a "Start a new game" recovery action rather than silently
+  discarding the last good state; there's no proactive background check,
+  so a tab left open across a backend restart won't notice until the next
+  throw or reset is attempted.
 - A 10th-frame bonus ball that lands on a fresh rack after an opening
   strike (e.g. the frame's 2nd or 3rd ball) displays as its own plain pin
   count rather than a traditional synthesized "X" glyph — deriving that
@@ -654,8 +673,3 @@ percentages, leave tracking, ball usage stats.
   distance are both deliberately exaggerated for legibility (see
   `frontend/src/domain/laneProjection.ts`) — the diagram is faithful to
   ordering and relative position, not to true physical scale.
-- In development, React's `StrictMode` double-invokes the frontend's
-  load effect, so opening the page creates one extra, immediately
-  orphaned game server-side per mount (harmless — `GameService` already
-  never expires old games, per the limitation above — and StrictMode's
-  double-invoke doesn't happen in a production build).

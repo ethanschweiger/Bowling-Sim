@@ -26,14 +26,41 @@
   color: var(--color-text-muted);
 }
 
-.loadingText,
-.initError {
+.loadingText {
   margin: 0;
 }
 
 .initError {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
   color: var(--color-danger-text);
   font-weight: 600;
+}
+
+.initError p {
+  margin: 0;
+}
+
+.retryButton {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.retryButton:hover {
+  background: var(--color-surface-inset);
+}
+
+.retryButton:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .main {
