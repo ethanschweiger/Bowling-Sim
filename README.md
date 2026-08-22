@@ -195,9 +195,3 @@ percentages, leave tracking, ball usage stats.
 - Release-error bounds (`_RELEASE_NOISE_STD` in `app/physics/throw.py`) are
   reasoned estimates of human variance, not measured from real bowlers.
 - No frontend yet. The endpoint is exercised through `curl`, `/docs`, or tests.
-
-## Working in this repo
-
-[`SKILL.md`](SKILL.md) sets the writing rules for anything prose in this
-repo: README, docs, PR descriptions, commit messages. Read it before writing
-any of those.
