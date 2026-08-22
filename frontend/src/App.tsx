@@ -232,6 +232,7 @@ function App() {
               standingPinIds={game.gameState.standing_pin_ids}
               latestThrow={latestThrow}
               replayEnabled={canReplay(latestThrow, isBusy, isStale)}
+              requestPending={isBusy}
             />
           </section>
 

@@ -506,8 +506,20 @@ makes no request, and cannot change score, pins, lane condition, game id,
 or release values (`trajectoryAnimation.ts`'s `canReplay` — a pure
 predicate with no access to the API client); it's disabled while no shot
 exists yet, a request is in flight, or the game is confirmed stale.
-Starting a new shot, a reset, or a confirmed-stale-game replacement all
-clear the previous throw before any of this can apply, so a new game's
+Submitting a new throw (or a reset, or "Start a new game") settles any
+still-playing animation of the *preceding* result immediately, the
+instant the request is sent — not only once its response arrives. That
+preceding result stays visible as a static image while the new request
+is pending, and "Replay last shot" is disabled for it in the meantime
+(`canReplay` already treats "a request is in flight" as not replayable).
+If the new request then fails for an ordinary reason, that settled
+result simply stays as it is — nothing auto-replays it just because the
+pending state cleared. Only a *successful* response (a fresh path) or an
+explicit "Replay last shot" press ever starts a new animation
+(`trajectoryAnimation.ts`'s `decidePlaybackAction` makes this decision
+from plain before/after state, independent of React or the DOM, and is
+unit-tested directly). A reset or confirmed-stale-game replacement
+clears the previous throw outright once it succeeds, so a new game's
 rack is never drawn under an old throw's leftover animation. Under
 `prefers-reduced-motion`, both a fresh throw and "Replay last shot" skip
 straight to the settled static state — no autoplay, and nothing to

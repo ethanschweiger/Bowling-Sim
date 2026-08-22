@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { canReplay, easeOutCubic, initialAnimationProgress, interpolatePathPosition } from './trajectoryAnimation';
+import {
+  canReplay,
+  decidePlaybackAction,
+  easeOutCubic,
+  initialAnimationProgress,
+  interpolatePathPosition,
+  type PlaybackState,
+} from './trajectoryAnimation';
 
 const PATH = [
   { distance_ft: 0, board: 28 },
@@ -8,6 +15,16 @@ const PATH = [
   { distance_ft: 45, board: 19 },
   { distance_ft: 60, board: 18 },
 ];
+
+const OTHER_PATH = [
+  { distance_ft: 0, board: 30 },
+  { distance_ft: 30, board: 26 },
+  { distance_ft: 60, board: 20 },
+];
+
+function state(overrides: Partial<PlaybackState>): PlaybackState {
+  return { latestThrowPath: null, isBusy: false, replayCount: 0, ...overrides };
+}
 
 describe('interpolatePathPosition', () => {
   it('returns exactly the first point at progress 0', () => {
@@ -107,5 +124,57 @@ describe('canReplay', () => {
     const frozenThrow = Object.freeze({ path: PATH });
     expect(() => canReplay(frozenThrow, false, false)).not.toThrow();
     expect(canReplay(frozenThrow, false, false)).toBe(true);
+  });
+});
+
+describe('decidePlaybackAction', () => {
+  it('settles immediately the instant a request starts, even with no preceding throw', () => {
+    const previous = state({ latestThrowPath: null, isBusy: false });
+    const next = state({ latestThrowPath: null, isBusy: true });
+    expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'settle' });
+  });
+
+  it('settles a still-animating preceding throw the instant a second throw begins', () => {
+    const previous = state({ latestThrowPath: PATH, isBusy: false });
+    const next = state({ latestThrowPath: PATH, isBusy: true }); // same path -- request just started, not finished
+    expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'settle' });
+  });
+
+  it('starts exactly one new animation when a successful response brings a new path', () => {
+    const previous = state({ latestThrowPath: PATH, isBusy: true });
+    const next = state({ latestThrowPath: OTHER_PATH, isBusy: false });
+    expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'start', path: OTHER_PATH });
+  });
+
+  it('leaves the preceding result settled, with no auto-replay, when a request merely fails', () => {
+    // Failure never reassigns the path -- previous and next carry the
+    // *same* path reference, only isBusy returns to false.
+    const previous = state({ latestThrowPath: PATH, isBusy: true });
+    const next = state({ latestThrowPath: PATH, isBusy: false });
+    expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'none' });
+  });
+
+  it('settles (draws nothing) when a reset/new-game clears the previous throw', () => {
+    const previous = state({ latestThrowPath: PATH, isBusy: true });
+    const next = state({ latestThrowPath: null, isBusy: false });
+    expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'settle' });
+  });
+
+  it('starts a fresh animation over the same path when replay is pressed', () => {
+    const previous = state({ latestThrowPath: PATH, isBusy: false, replayCount: 0 });
+    const next = state({ latestThrowPath: PATH, isBusy: false, replayCount: 1 });
+    expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'start', path: PATH });
+  });
+
+  it('does nothing when nothing relevant changed', () => {
+    const previous = state({ latestThrowPath: PATH, isBusy: false, replayCount: 2 });
+    const next = state({ latestThrowPath: PATH, isBusy: false, replayCount: 2 });
+    expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'none' });
+  });
+
+  it('does nothing on the very first render with no throw and no request', () => {
+    const previous = state({});
+    const next = state({});
+    expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'none' });
   });
 });

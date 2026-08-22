@@ -83,3 +83,58 @@ export function canReplay(
 ): boolean {
   return latestThrow !== null && latestThrow.path.length > 0 && !isBusy && !isStale;
 }
+
+/** The two signals a playback decision depends on, snapshotted once per
+ * render: the path to animate (or `null` if there's no completed throw to
+ * show), whether a request is currently in flight, and how many times
+ * "Replay last shot" has been pressed (an incrementing counter — a
+ * *change* in this number, not its value, is what a replay press means).
+ */
+export interface PlaybackState {
+  latestThrowPath: readonly TrajectoryPointResponse[] | null;
+  isBusy: boolean;
+  replayCount: number;
+}
+
+export type PlaybackAction =
+  | { kind: 'none' }
+  | { kind: 'settle' }
+  | { kind: 'start'; path: readonly TrajectoryPointResponse[] };
+
+/**
+ * Decides what the canvas's animation should do when moving from one
+ * `PlaybackState` to the next — the same signals `LaneCanvas` reacts to,
+ * modeled here as plain data so the decision is testable without
+ * rendering React, touching the DOM, or scheduling a real
+ * `requestAnimationFrame`.
+ *
+ * - A request *starting* (`isBusy` false -> true) always settles
+ *   immediately: any in-flight animation of the preceding result stops,
+ *   with that preceding result left visible as a static image. It never
+ *   starts a new animation itself — there's no new path yet.
+ * - A genuinely new path (reference change, meaning a fresh successful
+ *   throw or reset/new-game response actually arrived) or an explicit
+ *   replay press (`replayCount` changed) starts a fresh animation over
+ *   `next`'s path — or settles, if that path is empty/absent (a
+ *   reset/new-game clearing the previous throw).
+ * - Critically, a request merely *finishing* with the same path as
+ *   before (an ordinary failed request — nothing reassigns the path on
+ *   failure) is `none`: it must not auto-replay the still-settled
+ *   preceding result just because `isBusy` flipped back to false.
+ */
+export function decidePlaybackAction(previous: PlaybackState, next: PlaybackState): PlaybackAction {
+  if (!previous.isBusy && next.isBusy) {
+    return { kind: 'settle' };
+  }
+
+  const pathChanged = previous.latestThrowPath !== next.latestThrowPath;
+  const replayChanged = previous.replayCount !== next.replayCount;
+
+  if (replayChanged || (pathChanged && !next.isBusy)) {
+    return next.latestThrowPath && next.latestThrowPath.length > 0
+      ? { kind: 'start', path: next.latestThrowPath }
+      : { kind: 'settle' };
+  }
+
+  return { kind: 'none' };
+}

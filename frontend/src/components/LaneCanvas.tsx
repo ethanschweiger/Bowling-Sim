@@ -5,10 +5,12 @@ import { BOARD_COUNT, LANE_LENGTH_FT, PIN_DECK_LAYOUT } from '../domain/pinDeckL
 import { describeStandingPins } from '../domain/scoreDisplay';
 import { describeLatestThrow } from '../domain/throwSummary';
 import {
+  decidePlaybackAction,
   easeOutCubic,
   initialAnimationProgress,
   interpolatePathPosition,
   TRAJECTORY_ANIMATION_DURATION_MS,
+  type PlaybackState,
 } from '../domain/trajectoryAnimation';
 import styles from './LaneCanvas.module.css';
 
@@ -21,6 +23,10 @@ interface LaneCanvasProps {
    * doesn't otherwise know about); replaying itself is entirely local to
    * this component and never calls the API or touches game state. */
   replayEnabled: boolean;
+  /** Whether a throw/reset/new-game request is currently in flight.
+   * Starting a new one must settle any in-flight animation of the
+   * *preceding* result immediately — see `decidePlaybackAction`. */
+  requestPending: boolean;
 }
 
 const PIN_RADIUS_FRACTION = 0.02; // of canvas width
@@ -41,17 +47,24 @@ function prefersReducedMotion(): boolean {
  * own), then settles into the same static end-state this component
  * always showed. "Replay last shot" restarts that same animation over
  * the same stored path; it makes no request and changes no game state.
- * Under `prefers-reduced-motion`, throws (and replays) skip straight to
- * the settled static state — no autoplay. The canvas itself is
+ * Submitting a new throw/reset (`requestPending` turning true) settles
+ * any still-playing animation of the *preceding* result immediately,
+ * before the new request's own outcome is known — an ordinary failure
+ * afterward simply leaves that settled result in place, never
+ * auto-replaying it (see `decidePlaybackAction`). Under
+ * `prefers-reduced-motion`, throws (and replays) skip straight to the
+ * settled static state — no autoplay. The canvas itself is
  * `aria-hidden`; the paragraphs beneath it are the real text
  * alternative, and are never re-announced per animation frame. */
-export function LaneCanvas({ standingPinIds, latestThrow, replayEnabled }: LaneCanvasProps) {
+export function LaneCanvas({ standingPinIds, latestThrow, replayEnabled, requestPending }: LaneCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [progress, setProgress] = useState(1); // 1 = settled/static (no animation in flight)
   const [replayCount, setReplayCount] = useState(0);
   const animationFrameRef = useRef<number | null>(null);
+  const latestThrowPath = latestThrow && latestThrow.path.length > 0 ? latestThrow.path : null;
+  const previousPlaybackStateRef = useRef<PlaybackState>({ latestThrowPath: null, isBusy: false, replayCount: 0 });
 
   useEffect(() => {
     const container = containerRef.current;
@@ -70,26 +83,43 @@ export function LaneCanvas({ standingPinIds, latestThrow, replayEnabled }: LaneC
     return () => observer.disconnect();
   }, []);
 
-  // (Re)starts the trajectory animation whenever a genuinely new throw
-  // arrives or "Replay last shot" is pressed — never on resize (that
-  // effect below only redraws at whatever progress this one already
-  // reached) and never leaving a second loop running: the cleanup here
-  // cancels any still-running frame before the next run (or unmount)
-  // takes over, so a quick second throw can never animate over a stale
-  // path or race a leftover loop from the previous one.
+  // Drives playback from decidePlaybackAction's decision, never on resize
+  // (the draw effect below only redraws at whatever progress this one
+  // already reached) and never leaving a second loop running: this
+  // effect's own cleanup cancels any still-running frame before the next
+  // run (or unmount) takes over. Comparing against the *previous* snapshot
+  // (not just reacting to the current props) is what lets "settle" and
+  // "start" be told apart from "do nothing" — see decidePlaybackAction's
+  // docstring for why a request merely finishing must not auto-replay.
   useEffect(() => {
-    // Both setProgress calls below are this effect's own starting
-    // condition for the requestAnimationFrame subscription it's about to
-    // set up (or, with no path/under reduced motion, its entire job) —
-    // the "synchronize with an external system" case set-state-in-effect
-    // itself calls out as fine, not a derivable-during-render value; it
-    // runs once per (latestThrow, replayCount) change, never in a loop.
-    if (!latestThrow || latestThrow.path.length === 0) {
+    const nextState: PlaybackState = { latestThrowPath, isBusy: requestPending, replayCount };
+    const action = decidePlaybackAction(previousPlaybackStateRef.current, nextState);
+    previousPlaybackStateRef.current = nextState;
+
+    if (action.kind === 'none') {
+      return;
+    }
+
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (action.kind === 'settle') {
+      // This *is* the effect's own starting condition for the
+      // requestAnimationFrame subscription below (or, here, its entire
+      // job) — the "synchronize with an external system" case
+      // set-state-in-effect itself calls out as fine, not a
+      // derivable-during-render value; it runs once per decided action,
+      // never in a loop.
       // oxlint-disable-next-line react/set-state-in-effect
       setProgress(1);
       return;
     }
 
+    // action.kind === 'start' — the path itself isn't needed here; the
+    // draw effect below reads it straight from latestThrow, driven by
+    // the progress this loop advances.
     const reducedMotion = prefersReducedMotion();
     // oxlint-disable-next-line react/set-state-in-effect
     setProgress(initialAnimationProgress(reducedMotion));
@@ -117,12 +147,7 @@ export function LaneCanvas({ standingPinIds, latestThrow, replayEnabled }: LaneC
         animationFrameRef.current = null;
       }
     };
-    // latestThrow's identity and replayCount are exactly the two things
-    // that should (re)start playback. standingPinIds/size are
-    // deliberately not dependencies here: a reset/new-game already sets
-    // latestThrow to null (handled above), and a resize must redraw the
-    // current frame in place, not restart the animation from the start.
-  }, [latestThrow, replayCount]);
+  }, [latestThrowPath, requestPending, replayCount]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
