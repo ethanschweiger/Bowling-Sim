@@ -71,10 +71,38 @@ HOOK_GAIN = 0.18               # empirical: ft/s^2 of lateral accel per (frictio
 # approaches zero, and matches "roughly stopped" at a plausible walking pace.
 MIN_FORWARD_FPS = mph_to_fps(0.5)
 
-# Hard cap on integration steps. At STEP_FT=0.5 and a 60 ft lane this never
-# binds in practice; it exists so a pathological input can't loop forever
-# and every quantity in the simulation stays bounded.
-MAX_STEPS = 400
+# Spare steps allowed beyond the exact number a lane length needs, so the
+# cap is a runaway guard rather than a silent truncation point.
+STEP_CAP_GUARD = 8
+
+
+def step_cap_for(length_ft: float, step_ft: float = STEP_FT) -> int:
+    """The integration-step cap for a given lane length and stride.
+
+    Derived, never a fixed guess. A cap tuned for one stride silently
+    truncates a finer one: the old fixed 400 was ample for STEP_FT=0.5
+    (a 60 ft lane needs 120 steps) but a refinement to 0.1 ft needs 600
+    and would have stopped at 40 ft — while still being reported as an
+    entry result. Deriving the cap from length/stride means changing
+    integration precision can't reintroduce that failure, and
+    `reached_pin_deck` below catches it if anything ever does.
+    """
+    if step_ft <= 0:
+        raise ValueError(f"step_ft must be positive, got {step_ft}")
+    return int(math.ceil(length_ft / step_ft)) + STEP_CAP_GUARD
+
+
+# How close to the lane's stated length counts as having reached the
+# headpin plane. One tenth of a stride: comfortably tighter than a single
+# integration step, loose enough to absorb float accumulation over ~120
+# additions.
+PIN_DECK_TOLERANCE_FT = STEP_FT / 10.0
+
+# Decimal places the recorded path and the derived entry marker share.
+# One precision, applied once to one value (see TerminalState) — not two
+# independent roundings of the same quantity.
+BOARD_DECIMALS = 3
+DISTANCE_DECIMALS = 2
 
 
 @dataclass(frozen=True)
@@ -84,12 +112,43 @@ class TrajectoryPoint:
 
 
 @dataclass(frozen=True)
+class TerminalState:
+    """The exact, unrounded state the integration finished in — the single
+    source of truth for where this throw ended up.
+
+    Everything downstream derives from this one object: the last recorded
+    `TrajectoryPoint`, the API's `entry_board`/`entry_angle_deg`/
+    `speed_at_pins_mph`, the `ImpactState` the collision model consumes,
+    and the Canvas entry marker the browser draws. Before this existed
+    they were computed in parallel from the same loop variables at
+    different precisions (`round(board, 3)` for the path against
+    `round(board, 2)` for `entry_board`), so the picture and the physics
+    could disagree by a rounding step. Presentation may round this; it may
+    never recompute it.
+
+    `reached_pin_deck` records whether the loop actually got to the lane's
+    stated length. A run that stopped early is a truncated route, not an
+    entry result, and `impact.impact_state_from_result` refuses it.
+    """
+
+    distance_ft: float
+    board: float
+    heading_deg: float
+    speed_mph: float
+    reached_pin_deck: bool
+
+
+@dataclass(frozen=True)
 class SimulationResult:
     path: list[TrajectoryPoint]
     entry_board: float
     entry_angle_deg: float
     speed_at_pins_mph: float
     lane_condition_version: int
+    # The canonical unrounded endpoint the three fields above are rounded
+    # views of. Added alongside them rather than replacing them so the
+    # existing JSON contract is untouched.
+    terminal: TerminalState
 
 
 def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> SimulationResult:
@@ -111,11 +170,12 @@ def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> S
         return launch_board + ft_to_boards(offset_ft)
 
     board = board_from_offset(lateral_offset_ft)
-    path = [TrajectoryPoint(distance_ft=0.0, board=board)]
+    path = [TrajectoryPoint(distance_ft=0.0, board=round(board, BOARD_DECIMALS))]
     distance = 0.0
     steps = 0
+    max_steps = step_cap_for(lane_condition.length_ft)
 
-    while distance < lane_condition.length_ft and forward_velocity_fps > MIN_FORWARD_FPS and steps < MAX_STEPS:
+    while distance < lane_condition.length_ft and forward_velocity_fps > MIN_FORWARD_FPS and steps < max_steps:
         friction = lane_condition.friction_at(distance, board)
         dt = STEP_FT / forward_velocity_fps  # ft / (ft/s) = s — consistent units throughout
 
@@ -136,14 +196,35 @@ def simulate_throw(ball: Ball, throw: Throw, lane_condition: LaneCondition) -> S
 
         distance += STEP_FT
         steps += 1
-        path.append(TrajectoryPoint(distance_ft=round(distance, 2), board=round(board, 3)))
+        path.append(
+            TrajectoryPoint(
+                distance_ft=round(distance, DISTANCE_DECIMALS),
+                board=round(board, BOARD_DECIMALS),
+            )
+        )
 
     entry_angle = math.degrees(math.atan2(lateral_velocity_fps, max(forward_velocity_fps, 1e-6)))
 
+    # One unrounded endpoint, built once. Every field below is a rounded
+    # *view* of it, never a parallel recomputation — so the last path
+    # point, the API entry marker, and the collision model's starting
+    # state cannot drift apart.
+    terminal = TerminalState(
+        distance_ft=distance,
+        board=board,
+        heading_deg=entry_angle,
+        speed_mph=fps_to_mph(forward_velocity_fps),
+        reached_pin_deck=distance >= lane_condition.length_ft - PIN_DECK_TOLERANCE_FT,
+    )
+
     return SimulationResult(
         path=path,
-        entry_board=round(board, 2),
-        entry_angle_deg=round(entry_angle, 2),
-        speed_at_pins_mph=round(fps_to_mph(forward_velocity_fps), 2),
+        # Same value, same precision as the final recorded path point —
+        # the entry marker the browser draws is that point, not a
+        # separately rounded near-miss of it.
+        entry_board=round(terminal.board, BOARD_DECIMALS),
+        entry_angle_deg=round(terminal.heading_deg, 2),
+        speed_at_pins_mph=round(terminal.speed_mph, 2),
         lane_condition_version=lane_condition.version,
+        terminal=terminal,
     )

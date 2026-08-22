@@ -86,7 +86,7 @@ export const RELEASE_FIELDS: readonly ReleaseFieldConfig[] = [
     max: 39,
     step: 0.5,
     defaultValue: 28,
-    help: 'Starting board, 1–39 (right-handers often start around 28–30).',
+    help: 'The board the ball is laid down on at the foul line, 1–39 — not where the bowler stands.',
   },
 ];
 

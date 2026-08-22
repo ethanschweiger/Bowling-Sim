@@ -14,17 +14,23 @@
  * Distance gets one more deliberate distortion: the pin deck (a ~2.6 ft
  * band) sits at the end of a 60 ft approach, so a single honest linear
  * scale would squeeze it into a sliver a few percent of the canvas tall —
- * exactly the part a viewer most wants to read clearly. `distanceToY` maps
- * the two spans through two different linear scales instead: the first
- * `ZOOM_SPLIT_FT` feet of approach share `1 - ZOOM_BAND_SHARE` of the
- * canvas, and everything past that (the last stretch of approach plus the
- * whole pin deck) gets the remaining `ZOOM_BAND_SHARE`. The mapping is
- * still monotonic and still order-preserving — a later point on a path is
- * always drawn further up the lane — only the *rate* of feet-per-pixel
- * changes at the split, the same trade-off already made for board spacing.
+ * exactly the part a viewer most wants to read clearly. `distanceToY`
+ * therefore gives progressively more pixels per foot toward the pin deck.
+ *
+ * It does that with one smooth exponential map rather than two linear
+ * bands meeting at a split point. An earlier version handed a fixed share
+ * of the canvas to the last five feet, which put a step change in the
+ * scale's *derivative* at 55 ft: the physical path was smooth, but its
+ * drawn form acquired a visible kink there purely from the projection.
+ * `distanceEase` below is monotonic and smooth everywhere (its derivative
+ * is continuous, so no distance is a special case), which keeps the deck
+ * readable without inventing a bend the simulation never produced.
+ *
+ * This is presentation only. It never alters the server's path samples —
+ * it just chooses where on the canvas each one lands.
  */
 
-import { BOARD_COUNT, LANE_LENGTH_FT, PIN_DECK_BACK_ROW_FT } from './pinDeckLayout';
+import { BOARD_COUNT, PIN_DECK_BACK_ROW_FT } from './pinDeckLayout';
 
 // A little margin either side of the lane's own 1..39 boards and past the
 // pin deck's back row, so nothing touches the canvas edge.
@@ -33,9 +39,20 @@ const MAX_BOARD = BOARD_COUNT + 1;
 const MIN_DISTANCE_FT = 0;
 const MAX_DISTANCE_FT = PIN_DECK_BACK_ROW_FT + 2;
 
-// Where the "zoomed in" band starts, and how much of the canvas it gets.
-const ZOOM_SPLIT_FT = LANE_LENGTH_FT - 5; // the last 5 ft of approach, plus the whole pin deck
-const ZOOM_BAND_SHARE = 0.45;
+/** How strongly the far end of the lane is emphasized. 0 would be a plain
+ * linear scale; this gives the pin deck roughly five times the pixels per
+ * foot of the foul-line end, with no discontinuity anywhere between. */
+export const DISTANCE_EMPHASIS = 1.6;
+
+/**
+ * Maps a normalized downlane fraction to a normalized canvas fraction,
+ * expanding the far end. Smooth (C-infinity) and strictly increasing on
+ * [0, 1], with `distanceEase(0) === 0` and `distanceEase(1) === 1`.
+ */
+export function distanceEase(t: number): number {
+  const clamped = Math.max(0, Math.min(1, t));
+  return (Math.exp(DISTANCE_EMPHASIS * clamped) - 1) / (Math.exp(DISTANCE_EMPHASIS) - 1);
+}
 
 export interface LaneProjection {
   boardToX(board: number): number;
@@ -60,11 +77,8 @@ export function createLaneProjection(width: number, height: number, padding = 12
     },
     distanceToY(distanceFt: number): number {
       const clamped = Math.max(MIN_DISTANCE_FT, Math.min(MAX_DISTANCE_FT, distanceFt));
-      const t =
-        clamped <= ZOOM_SPLIT_FT
-          ? ((clamped - MIN_DISTANCE_FT) / (ZOOM_SPLIT_FT - MIN_DISTANCE_FT)) * (1 - ZOOM_BAND_SHARE)
-          : 1 - ZOOM_BAND_SHARE + ((clamped - ZOOM_SPLIT_FT) / (MAX_DISTANCE_FT - ZOOM_SPLIT_FT)) * ZOOM_BAND_SHARE;
-      return padding + (1 - t) * innerHeight;
+      const linear = (clamped - MIN_DISTANCE_FT) / (MAX_DISTANCE_FT - MIN_DISTANCE_FT);
+      return padding + (1 - distanceEase(linear)) * innerHeight;
     },
   };
 }

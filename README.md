@@ -143,6 +143,43 @@ touches `OilPatternSpec`/`LaneCondition.house_shot()`, the reusable pattern
 definition every game is built from; reset only ever affects the one game
 whose ID you call it on.
 
+### One endpoint: where the shot ends is a single number
+
+A throw's ending state is used by three different consumers — the path
+the browser draws, the API's `entry_board`/`entry_angle_deg`/
+`speed_at_pins_mph` fields, and the `ImpactState` the collision model
+starts from. They used to be computed in parallel from the same loop
+variables at *different* precisions: the recorded path rounded the board
+to three decimals, `entry_board` rounded the same quantity to two, and
+`ImpactState` was built from that two-decimal value. So the picture a
+bowler saw and the state the pins were resolved against could disagree by
+a rounding step.
+
+`simulate.TerminalState` is now the single source of truth: one frozen,
+**unrounded** record of the distance, board, heading, and speed the
+integration actually finished in. Everything else derives from it.
+`entry_board` is `round(terminal.board, 3)` — the exact same value, at the
+exact same precision, as the final recorded path point, so the entry
+marker the Canvas draws sits *on* the polyline rather than beside it.
+`ImpactState` reads the unrounded terminal state directly, so the
+collision starts from precisely where the drawn path ends. Presentation
+may round this state; it may never recompute it.
+
+`TerminalState.reached_pin_deck` records whether the run actually got to
+the lane's stated length. A trajectory that stopped short is a truncated
+route, not an entry result, and `impact_state_from_result` raises
+`TruncatedTrajectoryError` rather than letting the collision model score a
+throw that never arrived. That matters because the integration-step cap is
+now *derived* from lane length and stride (`simulate.step_cap_for`) rather
+than being a fixed number: a cap tuned for the current 0.5 ft stride would
+silently truncate a 0.1 ft refinement at 40 ft — while still reporting an
+entry board. Every legal release reaches the pin deck today; the guard
+exists so that can't quietly stop being true.
+
+The response's path length is bounded by that same derived cap, so raising
+visual fidelity can't turn into an unbounded payload without deliberately
+raising a documented limit.
+
 ### Pin deck, impact, and pinfall — separate concerns, on purpose
 
 Four things that will eventually combine into real pin-collision physics
@@ -514,9 +551,17 @@ outlined and faded with an "×" = fallen — never color alone, sourced from
 state throughout — see below); both board spacing and the last stretch
 of downlane distance are deliberately exaggerated for legibility (see
 `frontend/src/domain/laneProjection.ts`), not drawn to true physical
-scale. The canvas is decorative (`aria-hidden`); the visible text beside
-it is the real result summary, and it's never re-announced per animation
-frame.
+scale. Distance is expanded smoothly toward the pin deck by one
+continuous exponential map (`distanceEase`), so the deck stays readable
+without any distance being a special case — an earlier version gave the
+last five feet a fixed share of the canvas, which put a step change in the
+scale's *derivative* at 55 ft and made a physically smooth path acquire a
+visible kink there purely from the projection. The entry marker is the
+final sample of the server's own path (`trajectoryEndpoint`), not the
+separately-carried `entry_board` field, so it provably sits on the end of
+the drawn polyline. The canvas is decorative (`aria-hidden`); the visible
+text beside it is the real result summary, and it's never re-announced per
+animation frame.
 
 A completed throw plays once: a marker advances along that response's
 *exact* recorded `path`, interpolated between those exact points (never a
@@ -720,6 +765,18 @@ percentages, leave tracking, ball usage stats.
 - `FORWARD_DRAG`, `SPIN_DECAY`, and `HOOK_GAIN` (`app/physics/simulate.py`)
   are hand-tuned for bounded, credible motion, not fit to real ball-motion
   data.
+- The trajectory does not yet reproduce the skid → hook → roll phase order
+  that USBC's ball-motion work describes. Lateral force is applied
+  continuously for the whole trip, so a shot curves in one direction the
+  entire way down rather than running straight through the oiled heads,
+  turning as it finds friction, and then holding a stable line into the
+  pins. With the current defaults a right-handed release started around
+  board 28 drifts steadily toward *higher* boards (the bowler's left) —
+  the opposite of a conventional right-handed line — and an aggressive
+  launch angle can run it to the left lane edge. The path drawn is a
+  faithful rendering of what the simulation computed; the simulation
+  itself is what needs the correction. Recalibrating it is the next
+  planned milestone.
 - `launch_angle` is held constant for a throw's whole trip down the lane —
   nothing decays it back toward straight — which is why its legal range is
   a tight ±2° rather than a more generously "realistic" figure. A model

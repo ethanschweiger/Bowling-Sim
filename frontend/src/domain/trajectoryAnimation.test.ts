@@ -5,6 +5,7 @@ import {
   easeOutCubic,
   initialAnimationProgress,
   interpolatePathPosition,
+  trajectoryEndpoint,
   type PlaybackState,
 } from './trajectoryAnimation';
 
@@ -176,5 +177,41 @@ describe('decidePlaybackAction', () => {
     const previous = state({});
     const next = state({});
     expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'none' });
+  });
+});
+
+describe('trajectoryEndpoint', () => {
+  it('returns the path’s own final sample, by reference', () => {
+    const endpoint = trajectoryEndpoint(PATH);
+    // Reference identity, not deep equality: proves the client hands the
+    // canvas the server's own sample rather than a recomputed or
+    // transformed copy of it.
+    expect(endpoint).toBe(PATH[PATH.length - 1]);
+    expect(endpoint).toEqual({ distance_ft: 60, board: 18 });
+  });
+
+  it('returns null for an empty path', () => {
+    expect(trajectoryEndpoint([])).toBeNull();
+  });
+
+  it('returns the single sample of a one-point path', () => {
+    const single = [{ distance_ft: 12, board: 20 }];
+    expect(trajectoryEndpoint(single)).toBe(single[0]);
+  });
+
+  it('does not mutate or reorder the server path it was given', () => {
+    const frozen = Object.freeze([...PATH].map((p) => Object.freeze({ ...p })));
+    const before = JSON.stringify(frozen);
+    expect(() => trajectoryEndpoint(frozen)).not.toThrow();
+    expect(JSON.stringify(frozen)).toBe(before);
+  });
+
+  it('agrees with a full-progress interpolation of the same path', () => {
+    // The animation's settled position and the drawn entry marker must be
+    // the same place; otherwise the marker sits off the end of the line.
+    const endpoint = trajectoryEndpoint(PATH)!;
+    const settled = interpolatePathPosition(PATH, 1);
+    expect(settled.board).toBe(endpoint.board);
+    expect(settled.distanceFt).toBe(endpoint.distance_ft);
   });
 });

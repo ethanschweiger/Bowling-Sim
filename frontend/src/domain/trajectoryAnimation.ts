@@ -51,6 +51,24 @@ export function interpolatePathPosition(path: readonly TrajectoryPointResponse[]
   };
 }
 
+/**
+ * The path's own final sample — what the canvas draws as the entry
+ * marker. Returns the exact element from `path`, never a copy or a
+ * recomputed value, so the marker provably sits on the end of the
+ * polyline rather than beside it.
+ *
+ * The response also carries an `entry_board` field. The backend derives
+ * both it and this final sample from one unrounded terminal state, so
+ * they agree today; drawing *this* keeps them from being able to
+ * disagree tomorrow. See `backend/app/physics/simulate.py`'s
+ * `TerminalState`.
+ */
+export function trajectoryEndpoint(
+  path: readonly TrajectoryPointResponse[],
+): TrajectoryPointResponse | null {
+  return path.length > 0 ? path[path.length - 1] : null;
+}
+
 /** Ease-out cubic: fast start, gentle finish. A purely visual timing
  * curve applied to elapsed-time fraction — the ball's real deceleration
  * is already baked into `path`'s own point spacing; this only shapes how

@@ -9,6 +9,7 @@ import {
   easeOutCubic,
   initialAnimationProgress,
   interpolatePathPosition,
+  trajectoryEndpoint,
   TRAJECTORY_ANIMATION_DURATION_MS,
   type PlaybackState,
 } from '../domain/trajectoryAnimation';
@@ -280,12 +281,17 @@ function draw(
     ctx.stroke();
 
     if (isSettled) {
-      const entryX = projection.boardToX(latestThrow.entry_board);
-      const entryY = projection.distanceToY(LANE_LENGTH_FT);
-      ctx.fillStyle = colors.trajectory;
-      ctx.beginPath();
-      ctx.arc(entryX, entryY, pinRadius * 0.5, 0, Math.PI * 2);
-      ctx.fill();
+      // The marker is the last point of the server's own polyline, not the
+      // separately-rounded `entry_board` field — see `trajectoryEndpoint`.
+      const endpoint = trajectoryEndpoint(latestThrow.path);
+      if (endpoint) {
+        const entryX = projection.boardToX(endpoint.board);
+        const entryY = projection.distanceToY(endpoint.distance_ft);
+        ctx.fillStyle = colors.trajectory;
+        ctx.beginPath();
+        ctx.arc(entryX, entryY, pinRadius * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else {
       // The moving ball marker itself, mid-flight only — at rest, the
       // entry-point dot above stands in for it.

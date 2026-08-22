@@ -14,7 +14,7 @@ class Throw:
     axis_rotation: float = 45.0    # degrees; 0 = full roll, 90 = full spinner
     axis_tilt: float = 15.0        # degrees; higher tilt = more skid, later hook
     launch_angle: float = 2.0      # degrees off the lane's centerline at release
-    launch_position: float = 28.0  # starting board, 1-39 (right-handers start ~28-30)
+    launch_position: float = 28.0  # the ball's laydown board at the foul line, 1-39 — NOT the bowler's stance board
 
 
 # One standard deviation of release error per field, in the field's own
