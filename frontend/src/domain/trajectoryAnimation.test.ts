@@ -1,0 +1,111 @@
+import { describe, expect, it } from 'vitest';
+import { canReplay, easeOutCubic, initialAnimationProgress, interpolatePathPosition } from './trajectoryAnimation';
+
+const PATH = [
+  { distance_ft: 0, board: 28 },
+  { distance_ft: 15, board: 27 },
+  { distance_ft: 30, board: 24 },
+  { distance_ft: 45, board: 19 },
+  { distance_ft: 60, board: 18 },
+];
+
+describe('interpolatePathPosition', () => {
+  it('returns exactly the first point at progress 0', () => {
+    expect(interpolatePathPosition(PATH, 0)).toEqual({ board: 28, distanceFt: 0 });
+  });
+
+  it('returns exactly the last point at progress 1', () => {
+    expect(interpolatePathPosition(PATH, 1)).toEqual({ board: 18, distanceFt: 60 });
+  });
+
+  it('lands exactly on an intermediate recorded point when progress aligns with it', () => {
+    // 5 points -> 4 segments; progress 0.5 lands exactly on the middle point.
+    expect(interpolatePathPosition(PATH, 0.5)).toEqual({ board: 24, distanceFt: 30 });
+  });
+
+  it('interpolates within a segment, not just snapping to an endpoint', () => {
+    // progress 0.125 = halfway through the first of 4 segments.
+    const result = interpolatePathPosition(PATH, 0.125);
+    expect(result.distanceFt).toBeCloseTo(7.5);
+    expect(result.board).toBeCloseTo(27.5);
+  });
+
+  it('clamps out-of-range progress to the nearest endpoint', () => {
+    expect(interpolatePathPosition(PATH, -1)).toEqual({ board: 28, distanceFt: 0 });
+    expect(interpolatePathPosition(PATH, 2)).toEqual({ board: 18, distanceFt: 60 });
+  });
+
+  it('handles an empty path without throwing', () => {
+    expect(interpolatePathPosition([], 0.5)).toEqual({ board: 0, distanceFt: 0 });
+  });
+
+  it('handles a single-point path as a fixed position at any progress', () => {
+    const singlePoint = [{ distance_ft: 12, board: 20 }];
+    expect(interpolatePathPosition(singlePoint, 0)).toEqual({ board: 20, distanceFt: 12 });
+    expect(interpolatePathPosition(singlePoint, 0.9)).toEqual({ board: 20, distanceFt: 12 });
+  });
+});
+
+describe('easeOutCubic', () => {
+  it('starts at 0', () => {
+    expect(easeOutCubic(0)).toBe(0);
+  });
+
+  it('ends at 1', () => {
+    expect(easeOutCubic(1)).toBe(1);
+  });
+
+  it('is monotonically non-decreasing across the range', () => {
+    const samples = Array.from({ length: 11 }, (_, i) => easeOutCubic(i / 10));
+    for (let i = 1; i < samples.length; i += 1) {
+      expect(samples[i]).toBeGreaterThanOrEqual(samples[i - 1]);
+    }
+  });
+
+  it('clamps out-of-range input', () => {
+    expect(easeOutCubic(-1)).toBe(0);
+    expect(easeOutCubic(2)).toBe(1);
+  });
+});
+
+describe('initialAnimationProgress', () => {
+  it('starts fully settled (the static trajectory, no autoplay) under reduced motion', () => {
+    expect(initialAnimationProgress(true)).toBe(1);
+  });
+
+  it('starts at the beginning of the path otherwise', () => {
+    expect(initialAnimationProgress(false)).toBe(0);
+  });
+});
+
+describe('canReplay', () => {
+  it('is false with no completed throw', () => {
+    expect(canReplay(null, false, false)).toBe(false);
+  });
+
+  it('is false when the throw has an empty path', () => {
+    expect(canReplay({ path: [] }, false, false)).toBe(false);
+  });
+
+  it('is false while a request is in flight', () => {
+    expect(canReplay({ path: PATH }, true, false)).toBe(false);
+  });
+
+  it('is false while the game is confirmed stale', () => {
+    expect(canReplay({ path: PATH }, false, true)).toBe(false);
+  });
+
+  it('is true for a completed throw with no request pending and a live game', () => {
+    expect(canReplay({ path: PATH }, false, false)).toBe(true);
+  });
+
+  it('does not mutate the throw response it inspects (a frozen input stays intact)', () => {
+    // If canReplay ever tried to write to its latestThrow argument, this
+    // would throw (ES modules run in strict mode) -- a genuine guarantee,
+    // not just an equality check, that gating a replay never mutates the
+    // game-state object it was handed.
+    const frozenThrow = Object.freeze({ path: PATH });
+    expect(() => canReplay(frozenThrow, false, false)).not.toThrow();
+    expect(canReplay(frozenThrow, false, false)).toBe(true);
+  });
+});

@@ -4,27 +4,54 @@ import { createLaneProjection } from '../domain/laneProjection';
 import { BOARD_COUNT, LANE_LENGTH_FT, PIN_DECK_LAYOUT } from '../domain/pinDeckLayout';
 import { describeStandingPins } from '../domain/scoreDisplay';
 import { describeLatestThrow } from '../domain/throwSummary';
+import {
+  easeOutCubic,
+  initialAnimationProgress,
+  interpolatePathPosition,
+  TRAJECTORY_ANIMATION_DURATION_MS,
+} from '../domain/trajectoryAnimation';
 import styles from './LaneCanvas.module.css';
 
 interface LaneCanvasProps {
   standingPinIds: readonly number[];
   latestThrow: GameThrowResponse | null;
+  /** Whether "Replay last shot" should be enabled — see
+   * `domain/trajectoryAnimation.ts`'s `canReplay`. Computed by the parent
+   * (it depends on request-in-flight and stale-game state this component
+   * doesn't otherwise know about); replaying itself is entirely local to
+   * this component and never calls the API or touches game state. */
+  replayEnabled: boolean;
 }
 
 const PIN_RADIUS_FRACTION = 0.02; // of canvas width
 
-/** A static, post-throw lane diagram: foul line, gutters, the standard pin
- * deck (filled = standing, outlined+faded+"×" = fallen, sourced from
- * `game_state.standing_pin_ids`), and — once a throw has completed — that
- * throw's own path and pin-deck entry point. This is a single rendered
- * frame, not real-time animation: it redraws once whenever the game state
- * or the container's size changes, and does not run its own animation
- * loop. The canvas itself is `aria-hidden`; the two paragraphs beneath it
- * are the real text alternative for what it shows. */
-export function LaneCanvas({ standingPinIds, latestThrow }: LaneCanvasProps) {
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false;
+}
+
+/** A lane diagram: foul line, gutters, the standard pin deck (filled =
+ * standing, outlined+faded+"×" = fallen, sourced from
+ * `game_state.standing_pin_ids`), and — once a throw has completed —
+ * that throw's own path and pin-deck entry point. A new completed throw
+ * plays a one-time animation of the ball advancing along the server's
+ * *exact* recorded `path` (interpolated between those exact points, see
+ * `domain/trajectoryAnimation.ts` — never a recalculated path of its
+ * own), then settles into the same static end-state this component
+ * always showed. "Replay last shot" restarts that same animation over
+ * the same stored path; it makes no request and changes no game state.
+ * Under `prefers-reduced-motion`, throws (and replays) skip straight to
+ * the settled static state — no autoplay. The canvas itself is
+ * `aria-hidden`; the paragraphs beneath it are the real text
+ * alternative, and are never re-announced per animation frame. */
+export function LaneCanvas({ standingPinIds, latestThrow, replayEnabled }: LaneCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const [progress, setProgress] = useState(1); // 1 = settled/static (no animation in flight)
+  const [replayCount, setReplayCount] = useState(0);
+  const animationFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -43,13 +70,67 @@ export function LaneCanvas({ standingPinIds, latestThrow }: LaneCanvasProps) {
     return () => observer.disconnect();
   }, []);
 
+  // (Re)starts the trajectory animation whenever a genuinely new throw
+  // arrives or "Replay last shot" is pressed — never on resize (that
+  // effect below only redraws at whatever progress this one already
+  // reached) and never leaving a second loop running: the cleanup here
+  // cancels any still-running frame before the next run (or unmount)
+  // takes over, so a quick second throw can never animate over a stale
+  // path or race a leftover loop from the previous one.
+  useEffect(() => {
+    // Both setProgress calls below are this effect's own starting
+    // condition for the requestAnimationFrame subscription it's about to
+    // set up (or, with no path/under reduced motion, its entire job) —
+    // the "synchronize with an external system" case set-state-in-effect
+    // itself calls out as fine, not a derivable-during-render value; it
+    // runs once per (latestThrow, replayCount) change, never in a loop.
+    if (!latestThrow || latestThrow.path.length === 0) {
+      // oxlint-disable-next-line react/set-state-in-effect
+      setProgress(1);
+      return;
+    }
+
+    const reducedMotion = prefersReducedMotion();
+    // oxlint-disable-next-line react/set-state-in-effect
+    setProgress(initialAnimationProgress(reducedMotion));
+    if (reducedMotion) {
+      return;
+    }
+
+    const startedAt = performance.now();
+
+    function tick(now: number) {
+      const linear = Math.min(1, (now - startedAt) / TRAJECTORY_ANIMATION_DURATION_MS);
+      setProgress(easeOutCubic(linear));
+      if (linear < 1) {
+        animationFrameRef.current = requestAnimationFrame(tick);
+      } else {
+        animationFrameRef.current = null;
+      }
+    }
+
+    animationFrameRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+    // latestThrow's identity and replayCount are exactly the two things
+    // that should (re)start playback. standingPinIds/size are
+    // deliberately not dependencies here: a reset/new-game already sets
+    // latestThrow to null (handled above), and a resize must redraw the
+    // current frame in place, not restart the animation from the start.
+  }, [latestThrow, replayCount]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || size.width === 0 || size.height === 0) {
       return;
     }
-    draw(canvas, size, standingPinIds, latestThrow);
-  }, [size, standingPinIds, latestThrow]);
+    draw(canvas, size, standingPinIds, latestThrow, progress);
+  }, [size, standingPinIds, latestThrow, progress]);
 
   const standingSummary = describeStandingPins(standingPinIds);
   const throwSummary = describeLatestThrow(latestThrow);
@@ -62,6 +143,14 @@ export function LaneCanvas({ standingPinIds, latestThrow }: LaneCanvasProps) {
       </div>
       <p className={styles.resultText}>{throwSummary}</p>
       <p className={styles.standingText}>{standingSummary}</p>
+      <button
+        type="button"
+        className={styles.replayButton}
+        onClick={() => setReplayCount((count) => count + 1)}
+        disabled={!replayEnabled}
+      >
+        Replay last shot
+      </button>
     </div>
   );
 }
@@ -71,6 +160,7 @@ function draw(
   cssSize: { width: number; height: number },
   standingPinIds: readonly number[],
   latestThrow: GameThrowResponse | null,
+  progress: number,
 ): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) {
@@ -127,11 +217,28 @@ function draw(
   ctx.stroke();
 
   // This throw's own path and pin-deck entry point, if one has completed.
+  // Pins are always drawn in their final, already-server-confirmed state
+  // (see standingPinIds below) even mid-animation: reconstructing what the
+  // rack looked like *before* this throw would mean re-deriving the same
+  // fresh-rack-on-frame-completion rule this project deliberately keeps
+  // server-side (see scoreDisplay.ts's module docstring for the same
+  // principle applied to scoresheet glyphs). Only the ball's own motion
+  // along the already-recorded path animates.
   if (latestThrow && latestThrow.path.length > 0) {
+    const isSettled = progress >= 1;
+    // The same lowerIndex interpolatePathPosition computes internally —
+    // recomputed here (not returned from it) only because drawing the
+    // partial line needs the index boundary, not just the interpolated
+    // point. path[0..lowerIndex] are fully "behind" the ball; the line
+    // extends from there to the interpolated point below, never past it.
+    const clampedProgress = Math.max(0, Math.min(1, progress));
+    const lowerIndex = Math.floor(clampedProgress * (latestThrow.path.length - 1));
+    const shownPath = isSettled ? latestThrow.path : latestThrow.path.slice(0, lowerIndex + 1);
+
     ctx.strokeStyle = colors.trajectory;
     ctx.lineWidth = 2.5;
     ctx.beginPath();
-    latestThrow.path.forEach((point, index) => {
+    shownPath.forEach((point, index) => {
       const x = projection.boardToX(point.board);
       const y = projection.distanceToY(point.distance_ft);
       if (index === 0) {
@@ -140,14 +247,28 @@ function draw(
         ctx.lineTo(x, y);
       }
     });
+
+    const ballPosition = interpolatePathPosition(latestThrow.path, progress);
+    const ballX = projection.boardToX(ballPosition.board);
+    const ballY = projection.distanceToY(ballPosition.distanceFt);
+    ctx.lineTo(ballX, ballY);
     ctx.stroke();
 
-    const entryX = projection.boardToX(latestThrow.entry_board);
-    const entryY = projection.distanceToY(LANE_LENGTH_FT);
-    ctx.fillStyle = colors.trajectory;
-    ctx.beginPath();
-    ctx.arc(entryX, entryY, pinRadius * 0.5, 0, Math.PI * 2);
-    ctx.fill();
+    if (isSettled) {
+      const entryX = projection.boardToX(latestThrow.entry_board);
+      const entryY = projection.distanceToY(LANE_LENGTH_FT);
+      ctx.fillStyle = colors.trajectory;
+      ctx.beginPath();
+      ctx.arc(entryX, entryY, pinRadius * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // The moving ball marker itself, mid-flight only — at rest, the
+      // entry-point dot above stands in for it.
+      ctx.fillStyle = colors.trajectory;
+      ctx.beginPath();
+      ctx.arc(ballX, ballY, pinRadius * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // Pin deck: filled + labeled if standing, outlined + faded + "×" if fallen.

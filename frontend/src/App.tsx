@@ -11,6 +11,7 @@ import { ThrowControls, type ThrowStatus } from './components/ThrowControls';
 import { DEFAULT_BALL_ID } from './domain/ballCatalog';
 import { bootstrapGame, classifyThrowFailure, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
 import { defaultReleaseValues, type ReleaseFieldId } from './domain/releaseFields';
+import { canReplay } from './domain/trajectoryAnimation';
 
 interface GameSnapshot {
   gameId: string;
@@ -227,7 +228,11 @@ function App() {
             <h2 id="lane-heading" className={styles.panelHeading}>
               Lane
             </h2>
-            <LaneCanvas standingPinIds={game.gameState.standing_pin_ids} latestThrow={latestThrow} />
+            <LaneCanvas
+              standingPinIds={game.gameState.standing_pin_ids}
+              latestThrow={latestThrow}
+              replayEnabled={canReplay(latestThrow, isBusy, isStale)}
+            />
           </section>
 
           <section aria-labelledby="scorecard-heading" className={styles.scorePanel}>

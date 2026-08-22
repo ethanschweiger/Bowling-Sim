@@ -433,8 +433,9 @@ pytest
 
 `frontend/` (Vite + React + TypeScript, the official `react-ts` template)
 is a first connected shell, not the polished v1 experience the roadmap
-describes — it renders one static post-throw lane diagram, not real-time
-animation, and has no charts, accounts, or persistence. It talks to the
+describes — it plays one fixed-duration replay animation of a completed
+throw's own server-recorded path, not a real-time physics simulation of
+its own, and has no charts, accounts, or persistence. It talks to the
 real API and nothing else: on load it creates a game (or resumes the one
 this browser created last time, from `localStorage`, if the server still
 has it) and renders exactly the `game_state`/trajectory a response
@@ -476,13 +477,41 @@ UI can't offer a value the API would reject. The ball catalog
 four ball IDs — there's no `GET /api/v1/balls` yet — and only the `house`
 oil pattern is shown as available, matching what `POST /api/v1/games`
 actually accepts. The lane `<canvas>` draws the documented 39-board/60 ft
-lane, the foul line, the standard pin deck (filled = standing, outlined
-and faded with an "×" = fallen — never color alone), and, once a throw
-completes, that throw's own path and pin-deck entry point; both board
-spacing and the last stretch of downlane distance are deliberately
-exaggerated for legibility (see `frontend/src/domain/laneProjection.ts`),
-not drawn to true physical scale. The canvas is decorative
-(`aria-hidden`); the visible text beside it is the real result summary.
+lane, the foul line, and the standard pin deck (filled = standing,
+outlined and faded with an "×" = fallen — never color alone, sourced from
+`game_state.standing_pin_ids` in its final, already-server-confirmed
+state throughout — see below); both board spacing and the last stretch
+of downlane distance are deliberately exaggerated for legibility (see
+`frontend/src/domain/laneProjection.ts`), not drawn to true physical
+scale. The canvas is decorative (`aria-hidden`); the visible text beside
+it is the real result summary, and it's never re-announced per animation
+frame.
+
+A completed throw plays once: a marker advances along that response's
+*exact* recorded `path`, interpolated between those exact points (never a
+recalculated path of its own — `frontend/src/domain/trajectoryAnimation.ts`),
+then settles into the same static trajectory/entry-marker end-state the
+canvas always showed. `path` points are recorded at fixed downlane-*distance*
+steps, not fixed *time* steps, so there's no per-point timestamp to
+animate against — playback runs over one fixed, documented visual
+duration (900 ms, eased), not a reproduction of the throw's real speed or
+travel time. The standing/fallen pins shown during that playback are
+still the throw's *final* rack the whole time, never a client-reconstructed
+"before this throw" rack — building that correctly would mean re-deriving
+the same fresh-rack-on-frame-completion rule this project keeps
+server-side (the same principle `scoreDisplay.ts` already applies to
+scoresheet glyphs). A "Replay last shot" button appears once a throw has
+completed: it restarts that same animation over the same stored path,
+makes no request, and cannot change score, pins, lane condition, game id,
+or release values (`trajectoryAnimation.ts`'s `canReplay` — a pure
+predicate with no access to the API client); it's disabled while no shot
+exists yet, a request is in flight, or the game is confirmed stale.
+Starting a new shot, a reset, or a confirmed-stale-game replacement all
+clear the previous throw before any of this can apply, so a new game's
+rack is never drawn under an old throw's leftover animation. Under
+`prefers-reduced-motion`, both a fresh throw and "Replay last shot" skip
+straight to the settled static state — no autoplay, and nothing to
+replay differently.
 
 ### Run it locally
 
@@ -602,8 +631,9 @@ instead.
 
 **v1** — draw the lane, pick an oil pattern and ball, enter throw parameters,
 animate the throw, show pin impact, score the frame. The frontend shell
-(see "Frontend" above) covers the lane/ball/parameter/scoring parts of
-this with a static post-throw render; real-time animation is still ahead.
+(see "Frontend" above) now covers all of this: a fixed-duration replay
+animation of each throw's own server-recorded path, not a from-scratch
+physics simulation or true-to-real-time playback.
 
 **v2** — more balls and surfaces, adjustable drilling layouts, an oil-pattern
 editor, pin carry, misses and gutters, full 10-frame games.
@@ -662,9 +692,15 @@ percentages, leave tracking, ball usage stats.
   writes to Postgres yet, and no migrations exist.
 - Release-error bounds (`_RELEASE_NOISE_STD` in `app/physics/throw.py`) are
   reasoned estimates of human variance, not measured from real bowlers.
-- The frontend shell (`frontend/`) renders one static lane diagram per
-  throw, not real-time animation, and has no chart suite, accounts, or
+- The frontend shell (`frontend/`) has no chart suite, accounts, or
   persistence — see "Frontend" above for what it does cover.
+- The trajectory animation's timing is visual only, not calibrated to the
+  throw's own `speed_at_pins_mph` or any real ball-travel time: `path`
+  points are recorded at fixed downlane-distance steps, not fixed time
+  steps, so there's no per-point timestamp to play back against. Every
+  throw animates over the same fixed, eased duration regardless of how
+  fast or slow that ball actually traveled. See
+  `frontend/src/domain/trajectoryAnimation.ts`.
 - The ball catalog and "only house is available" pattern notice are
   hardcoded in the frontend (`frontend/src/domain/ballCatalog.ts`), not
   fetched from the API — there's no `GET /api/v1/balls` yet.
