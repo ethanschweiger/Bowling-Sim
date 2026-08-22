@@ -1,0 +1,100 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tableScroll {
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-border);
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 34rem;
+}
+
+.caption {
+  caption-side: top;
+  text-align: left;
+  font-weight: 600;
+  padding: 0.5rem 0.625rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table th,
+.table td {
+  padding: 0.5rem 0.5rem;
+  text-align: center;
+  border-bottom: 1px solid var(--color-border);
+  border-left: 1px solid var(--color-border);
+  font-variant-numeric: tabular-nums;
+}
+
+.table th:first-child,
+.table td:first-child {
+  border-left: none;
+}
+
+.table tbody tr:last-child th,
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.rowLabel {
+  text-align: left;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  background: var(--color-surface-inset);
+}
+
+.currentColumn {
+  background: var(--color-highlight);
+}
+
+.rolls {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.rollChip {
+  display: inline-block;
+  min-width: 1.1rem;
+}
+
+.emptyCell {
+  color: var(--color-text-muted);
+}
+
+.scoreCell {
+  font-weight: 600;
+}
+
+.totalRow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.totalLabel {
+  font-weight: 600;
+}
+
+.totalValue {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.completeBadge {
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  font-size: 0.8rem;
+  font-weight: 600;
+}

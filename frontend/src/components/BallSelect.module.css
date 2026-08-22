@@ -1,0 +1,43 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.select {
+  font: inherit;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.select:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.help {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.patternInfo {
+  margin-top: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
+  background: var(--color-surface-inset);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.patternInfo strong {
+  color: var(--color-text);
+}

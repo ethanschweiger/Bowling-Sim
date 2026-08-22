@@ -1,0 +1,126 @@
+/* Reset -------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+img,
+canvas {
+  max-width: 100%;
+  display: block;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+}
+
+/* Design tokens -------------------------------------------------------
+   Light palette lives on bare :root. Dark overrides are layered on top,
+   guarded so an explicit [data-theme] always wins over the OS preference,
+   and the OS preference only applies when no explicit theme is set. This
+   app doesn't ship a theme toggle, so in practice only the media-query
+   block below is reachable — but the tokens are structured the same way
+   regardless, on one canonical set of names. */
+
+:root {
+  color-scheme: light dark;
+
+  --color-bg: #f4f5f7;
+  --color-surface: #ffffff;
+  --color-surface-inset: #eef0f3;
+  --color-border: #d6dae0;
+  --color-text: #1a1d23;
+  --color-text-muted: #5b6270;
+
+  --color-primary: #1d4ed8;
+  --color-primary-hover: #1e40af;
+  --color-on-primary: #ffffff;
+
+  --color-danger-text: #b91c1c;
+  --color-success-bg: #dcfce7;
+  --color-success-text: #15803d;
+
+  --color-highlight: #fef3c7;
+
+  --focus-ring: 2px solid #1d4ed8;
+
+  /* Lane canvas */
+  --color-lane: #dcb67b;
+  --color-gutter: #9c8058;
+  --color-lane-line: rgba(26, 29, 35, 0.35);
+  --color-pin-standing: #fdfdfb;
+  --color-pin-fallen: #6b7280;
+  --color-pin-outline: #1a1d23;
+  --color-trajectory: #1d4ed8;
+
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  color: var(--color-text);
+  background: var(--color-bg);
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-bg: #14161a;
+    --color-surface: #1c1f26;
+    --color-surface-inset: #262a33;
+    --color-border: #363c47;
+    --color-text: #e7e9ee;
+    --color-text-muted: #a0a7b4;
+
+    --color-primary: #5b8def;
+    --color-primary-hover: #7ba3f2;
+    --color-on-primary: #0b1220;
+
+    --color-danger-text: #f87171;
+    --color-success-bg: #123321;
+    --color-success-text: #4ade80;
+
+    --color-highlight: #3a3320;
+
+    --focus-ring: 2px solid #5b8def;
+
+    --color-lane: #7a5a34;
+    --color-gutter: #33291a;
+    --color-lane-line: rgba(231, 233, 238, 0.35);
+    --color-pin-standing: #f4f2ea;
+    --color-pin-fallen: #6b7280;
+    --color-pin-outline: #14161a;
+    --color-trajectory: #7ba3f2;
+  }
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

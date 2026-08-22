@@ -6,15 +6,18 @@ the ball's path down the lane and reports what happens at the pins.
 
 ## Status
 
-Backend only. No frontend, no database, no auth. Each game gets its own
-lane: create one, throw in it, reset it back to a fresh house shot whenever
-you want. A deprecated single-lane endpoint from an earlier milestone still
-works, shared by every caller that still uses it.
+A backend, and a first connected frontend shell. No database, no auth. Each
+game gets its own lane: create one, throw in it, reset it back to a fresh
+house shot whenever you want. A deprecated single-lane endpoint from an
+earlier milestone still works, shared by every caller that still uses it.
+The frontend (`frontend/`) is a Vite + React + TypeScript single-page shell
+that drives one game against the real API — see "Frontend" below for what
+it does and doesn't do yet.
 
 ## Architecture
 
 ```
-React frontend (later)
+React + TypeScript frontend  <- frontend/src — Vite dev server proxies /api to the backend
       |
    REST API  <- FastAPI, backend/app/api
       |
@@ -426,6 +429,61 @@ source .venv/bin/activate
 pytest
 ```
 
+## Frontend
+
+`frontend/` (Vite + React + TypeScript, the official `react-ts` template)
+is a first connected shell, not the polished v1 experience the roadmap
+describes — it renders one static post-throw lane diagram, not real-time
+animation, and has no charts, accounts, or persistence. It talks to the
+real API and nothing else: on load it creates a game (or resumes the one
+this browser created last time, from `localStorage`, if the server still
+has it) and renders exactly the `game_state`/trajectory a response
+contains. No score, rack, or completion rule is re-derived client-side —
+`is_strike`/`is_spare`/`score`/`is_complete`/`total_score` are read
+straight off the response; the frontend only formats them (see
+`frontend/src/domain/scoreDisplay.ts`'s module docstring for the one
+deliberately-incomplete corner: a bonus ball that lands on a fresh rack
+after a 10th-frame strike shows its own plain pin count rather than a
+synthesized "X", since telling which bonus ball was fresh is a rack rule
+this client leaves to the server).
+
+The six release inputs share `RELEASE_BOUNDS` and `ThrowRequest`'s field
+defaults with the backend (`frontend/src/domain/releaseFields.ts`), so the
+UI can't offer a value the API would reject. The ball catalog
+(`frontend/src/domain/ballCatalog.ts`) is a small hardcoded list of today's
+four ball IDs — there's no `GET /api/v1/balls` yet — and only the `house`
+oil pattern is shown as available, matching what `POST /api/v1/games`
+actually accepts. The lane `<canvas>` draws the documented 39-board/60 ft
+lane, the foul line, the standard pin deck (filled = standing, outlined
+and faded with an "×" = fallen — never color alone), and, once a throw
+completes, that throw's own path and pin-deck entry point; both board
+spacing and the last stretch of downlane distance are deliberately
+exaggerated for legibility (see `frontend/src/domain/laneProjection.ts`),
+not drawn to true physical scale. The canvas is decorative
+(`aria-hidden`); the visible text beside it is the real result summary.
+
+### Run it locally
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+This starts the Vite dev server at `http://localhost:5173`. Its dev-server
+proxy (`frontend/vite.config.ts`) forwards relative `/api/...` requests to
+`http://127.0.0.1:8000`, so start the backend first (see "Run" above) —
+no CORS configuration was needed on the FastAPI side; the browser only
+ever talks to the Vite server, which makes the cross-origin hop itself.
+Copy `frontend/.env.example` to `.env.local` and set `VITE_API_BASE_URL`
+only if the backend runs somewhere other than the proxy's default.
+
+```bash
+cd frontend
+npm run build   # TypeScript check + production build
+npm run test    # vitest — request mapping and game-state display logic
+```
+
 ## API
 
 ### Create a game
@@ -513,7 +571,9 @@ instead.
 ## Roadmap
 
 **v1** — draw the lane, pick an oil pattern and ball, enter throw parameters,
-animate the throw, show pin impact, score the frame.
+animate the throw, show pin impact, score the frame. The frontend shell
+(see "Frontend" above) covers the lane/ball/parameter/scoring parts of
+this with a static post-throw render; real-time animation is still ahead.
 
 **v2** — more balls and surfaces, adjustable drilling layouts, an oil-pattern
 editor, pin carry, misses and gutters, full 10-frame games.
@@ -572,4 +632,30 @@ percentages, leave tracking, ball usage stats.
   writes to Postgres yet, and no migrations exist.
 - Release-error bounds (`_RELEASE_NOISE_STD` in `app/physics/throw.py`) are
   reasoned estimates of human variance, not measured from real bowlers.
-- No frontend yet. The endpoint is exercised through `curl`, `/docs`, or tests.
+- The frontend shell (`frontend/`) renders one static lane diagram per
+  throw, not real-time animation, and has no chart suite, accounts, or
+  persistence — see "Frontend" above for what it does cover.
+- The ball catalog and "only house is available" pattern notice are
+  hardcoded in the frontend (`frontend/src/domain/ballCatalog.ts`), not
+  fetched from the API — there's no `GET /api/v1/balls` yet.
+- The frontend's "create or load" flow only checks whether its saved
+  `game_id` still exists when the page first loads. If the backend process
+  restarts (dropping all in-memory games, per the limitation above) while
+  a tab is already open, that tab's next throw or reset gets a real 404
+  from the server and displays it, but doesn't recover on its own — a page
+  reload does, hitting the same load-time check again.
+- A 10th-frame bonus ball that lands on a fresh rack after an opening
+  strike (e.g. the frame's 2nd or 3rd ball) displays as its own plain pin
+  count rather than a traditional synthesized "X" glyph — deriving that
+  would mean the client re-deriving which rack a bonus ball faced, a rack
+  rule this frontend deliberately leaves to the server. See the module
+  docstring in `frontend/src/domain/scoreDisplay.ts`.
+- The lane canvas's board spacing and its last stretch of downlane
+  distance are both deliberately exaggerated for legibility (see
+  `frontend/src/domain/laneProjection.ts`) — the diagram is faithful to
+  ordering and relative position, not to true physical scale.
+- In development, React's `StrictMode` double-invokes the frontend's
+  load effect, so opening the page creates one extra, immediately
+  orphaned game server-side per mount (harmless — `GameService` already
+  never expires old games, per the limitation above — and StrictMode's
+  double-invoke doesn't happen in a production build).

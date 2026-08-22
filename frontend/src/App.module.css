@@ -1,0 +1,98 @@
+.page {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Flex/grid items default to min-width: auto, which lets a wide descendant
+   (the scorecard table's own overflow-x: auto container is only as good as
+   everything above it) force this whole column wider than the viewport.
+   Overriding it on every item in the chain is what actually keeps a narrow
+   viewport from growing a horizontal scrollbar. */
+.page > * {
+  min-width: 0;
+}
+
+.header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.75rem;
+}
+
+.header p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.loadingText,
+.initError {
+  margin: 0;
+}
+
+.initError {
+  color: var(--color-danger-text);
+  font-weight: 600;
+}
+
+.main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+@media (min-width: 860px) {
+  .main {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'controls lane'
+      'score score';
+  }
+
+  .controlsPanel {
+    grid-area: controls;
+  }
+
+  .lanePanel {
+    grid-area: lane;
+  }
+
+  .scorePanel {
+    grid-area: score;
+  }
+}
+
+.controlsPanel,
+.lanePanel,
+.scorePanel {
+  min-width: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+}
+
+.panelHeading {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+}
+
+.controlsStack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.footer {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.footer p {
+  margin: 0;
+}
+
+.footer code {
+  font-size: 0.8rem;
+}
