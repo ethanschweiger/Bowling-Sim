@@ -234,6 +234,47 @@ tips over an axis, this one just displaces), loft off the foul line,
 kickbacks, string-pinsetter interaction, and pinsetter placement variance
 (real pin spots drift slightly, tested to their own ±1/16 in tolerance).
 
+### Scoring — a separate, pure domain model
+
+`app/scoring/scorecard.py` turns a sequence of pinfall counts into frame
+states and a score, per standard USBC ten-pin rules. It's deliberately
+isolated from everything above it: `Scorecard` takes one `int` (0-10) per
+roll and knows nothing about a lane, a collision, HTTP, or a database — it
+doesn't decide which pins are standing for the next ball, only what a
+given sequence of pinfall counts *means* as a score. A future
+game-session integration supplies each roll from a `PinfallResult.pins_knocked`
+and separately manages the rack between rolls; this module isn't wired
+into the API yet.
+
+```python
+from app.scoring.scorecard import Scorecard, ScorecardError
+
+card = Scorecard()
+card.add_roll(10)   # frame 1: strike — its score is unresolved until the next two balls land
+card.add_roll(7)
+card.add_roll(3)    # frame 2: spare — frame 1 now resolves to 10+7+3=20; frame 2 needs one more ball
+card.add_roll(4)    # frame 3, ball 1 — resolves frame 2 to 20+(10+4)=34
+
+card.frames[0].score   # 20
+card.total_score       # 34 — cumulative through the last frame that's been resolved
+
+try:
+    card.add_roll(11)  # out of range
+except ScorecardError:
+    pass  # the scorecard is exactly as it was before the call
+```
+
+A frame's `score` is `None` — never a number computed by treating a
+missing bonus as zero — until every ball it depends on has actually been
+thrown; once any frame is unresolved, every later frame's cumulative
+score is `None` too, since a running total can't skip past a gap. Frame
+10 is self-contained (its own strike/spare bonus balls live inside its own
+`rolls`), so it never depends on anything outside itself. Every
+`add_roll` call is validate-then-commit: an illegal roll — out of 0-10,
+more pins than remain in that frame, an illegal tenth-frame bonus
+sequence, or a roll after the game is already complete — raises
+`ScorecardError` and leaves the scorecard exactly as it was.
+
 ### Release variance
 
 Real bowlers don't repeat a shot exactly. `sample_release` (`app/physics/throw.py`)
