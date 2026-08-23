@@ -70,10 +70,12 @@ function replay(): CollisionReplayResponse {
   }
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-    // Reaching the cap is what `step_cap` means, and it is the reason
-    // every real seeded throw currently reports — so the lifecycle tests
-    // below exercise the terminal-frame handoff for a run that ended
-    // mid-motion, which is the case that most needs to behave.
+    // A full-length run that never settled — the reason every real seeded
+    // throw currently reports — so the lifecycle tests below exercise the
+    // terminal-frame handoff for a run that ended mid-motion, the case that
+    // most needs to behave. (A 4,000-step run can also report `settled`, if
+    // it crosses the threshold exactly on the final step; the controller
+    // treats both identically, since it never reads the reason.)
     termination_reason: 'step_cap',
     dt_s: 0.0005,
     sample_every_steps: 100,

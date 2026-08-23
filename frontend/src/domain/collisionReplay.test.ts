@@ -27,12 +27,21 @@ function body(body_id: number, x_in: number, y_in: number) {
 // used 4,000 steps ending at 0.1 s, which no real recorder could produce
 // -- and which the strengthened validator now correctly rejects.
 
-// Each fixture below carries the `termination_reason` the real solver
-// would have recorded for its step count, rather than a convenient
-// constant: stopping short of the 4,000-step cap is only reachable through
-// the settle branch, and reaching the cap is by definition `step_cap`.
-// Fixtures that contradicted that would be describing runs the backend
-// cannot produce.
+// Each fixture below carries a `termination_reason` the real solver could
+// actually have recorded alongside its step count, rather than a
+// convenient constant.
+//
+// Only one implication constrains that pairing: stopping short of the
+// 4,000-step cap is reachable only through the settle branch, so a fixture
+// with `steps_taken < 4000` must say `settled`. The converse does NOT
+// hold -- a run whose bodies cross the velocity threshold on the final
+// permitted step records `settled` with `steps_taken === 4000` -- so at
+// the cap either reason describes a producible run. See "The reason is not
+// a function of steps_taken" in backend/app/physics/replay.py.
+//
+// None of this is something the client may reason from: `acceptReplay`
+// validates the reason as one of two strings and never checks it against
+// the step count. These notes are about keeping the fixtures honest.
 
 /** A pocket-shaped replay: ball arriving left of center, headpin ahead.
  * 200 steps at 0.0005 s = 0.1 s, with frames on the 0.05 s cadence. */
@@ -78,7 +87,9 @@ function fullLengthReplay(): CollisionReplayResponse {
   }
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-    // Reaching the cap is exactly what `step_cap` means.
+    // A full-length run that never settled. `settled` at 4,000 steps would
+    // be equally producible; this fixture is the common case, not the only
+    // legal pairing.
     termination_reason: 'step_cap',
     dt_s: 0.0005,
     sample_every_steps: 100,
@@ -293,9 +304,10 @@ describe('acceptReplay', () => {
     }));
     const nonCadenceTerminal: CollisionReplayResponse = {
       model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-      // Stopping at step 250 means the settle branch fired — and this is
-      // the shape a real low-energy run produces, since settling lands on
-      // an arbitrary step rather than a cadence tick.
+      // Stopping at step 250 means the settle branch fired, and this is
+      // the shape a real low-energy run produces: settling usually lands
+      // on an arbitrary step rather than a cadence tick. (Not always — a
+      // crossing on step 4,000 settles exactly on one.)
       termination_reason: 'settled',
       dt_s: 0.0005,
       sample_every_steps: 100,

@@ -58,6 +58,28 @@ and must not derive scoring from it. Which pins fell is decided solely by
 `collision.FALL_DISPLACEMENT_THRESHOLD_IN` and published as
 `fallen_pin_ids`, independently of how the loop terminated.
 
+### The reason is not a function of `steps_taken`
+
+Only these two implications hold, and only in this direction:
+
+- `steps_taken < MAX_COLLISION_STEPS` implies `settled` — stopping early is
+  reachable only by the threshold branch.
+- `step_cap` implies `steps_taken == MAX_COLLISION_STEPS` — exhausting the
+  loop is what the value means.
+
+**At the cap, either reason is possible.** The settle predicate is
+evaluated after every step including the last permitted one, so a run whose
+final step is exactly where every body crosses below the threshold records
+`settled` with `steps_taken == MAX_COLLISION_STEPS`. That is a real,
+reachable case, not a technicality: `tests/test_collision_replay.py`
+derives one from the damping factor and pins it.
+
+So the converses are false. `steps_taken == MAX_COLLISION_STEPS` does not
+imply `step_cap`, and `settled` does not imply an early stop. Reading the
+count instead of the field re-introduces exactly the guess this field was
+added to eliminate — which is why the value is recorded at the exit and
+never recomputed from the data.
+
 ## Why 2D only
 
 Flat circles sliding on a plane: no height, tilt, rotation, or toppling

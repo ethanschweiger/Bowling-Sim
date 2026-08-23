@@ -128,10 +128,12 @@ export const V2_SAMPLE_EVERY_STEPS = 100;
 export const MAX_ACCEPTED_REPLAY_FRAMES = 64;
 /** `MAX_COLLISION_STEPS` — the solver's own iteration cap. */
 export const MAX_ACCEPTED_STEPS = 4000;
-/** `MAX_COLLISION_SECONDS` — the solver stops at this cap even if bodies
- * are still moving, which is the `'step_cap'` termination reason. A
- * terminal frame is therefore the last state the solver computed, not a
- * state in which anything came to rest. */
+/** `MAX_COLLISION_SECONDS` — the solver stops here at the latest, even if
+ * bodies are still moving. A terminal frame is therefore the last state the
+ * solver computed, not a state in which anything came to rest. A run that
+ * reaches this cap usually reports `'step_cap'`, but reports `'settled'` if
+ * its bodies crossed the velocity threshold on that final step, so the
+ * duration alone never determines the reason. */
 export const MAX_ACCEPTED_DURATION_S = 2.0;
 /** The ball plus at most a full rack. */
 export const MAX_ACCEPTED_BODIES = 11;

@@ -362,6 +362,15 @@ def _simulate_collision_detail(
     # because that is what running the loop to exhaustion means: reaching
     # the last iteration without the settle condition ever holding. The
     # only way this stays `step_cap` is for `break` never to be taken.
+    #
+    # Note this is genuinely about the *predicate*, not the step count. The
+    # settle check below runs after every step including the last permitted
+    # one, so a run that crosses the threshold exactly on step
+    # MAX_COLLISION_STEPS records `settled` even though it used every
+    # iteration. `steps_taken == MAX_COLLISION_STEPS` therefore does not
+    # imply `step_cap` — see "The reason is not a function of steps_taken"
+    # in replay.py.
+    #
     # Deliberately not derived afterwards from `steps_taken`, frame count,
     # or terminal positions — those are consequences of the exit, not the
     # exit itself, and inferring backwards from them is exactly the kind of

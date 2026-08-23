@@ -13,8 +13,12 @@ import pytest
 
 from app.models.schemas import CollisionReplayResponse
 from app.physics.collision import (
+    COLLISION_DT_S,
     DEFAULT_PINFALL_MODEL,
+    LINEAR_DAMPING_PER_S,
+    MAX_COLLISION_SECONDS,
     MAX_COLLISION_STEPS,
+    SETTLE_SPEED_IN_S,
     _simulate_collision_detail,
     simulate_collision,
 )
@@ -28,6 +32,7 @@ from app.physics.replay import (
     REPLAY_SAMPLE_EVERY_STEPS,
     TERMINATION_REASONS,
 )
+from app.physics.units import mph_to_in_per_s
 
 
 def _impact(lateral_position_in, heading_deg, speed_mph=17.0):
@@ -222,11 +227,19 @@ def test_heuristic_model_reports_no_replay():
 # --- How the run ended ---------------------------------------------------
 #
 # The solver loop has exactly two exits, and `termination_reason` reports
-# which one fired. The tests below pin both, and pin the relationship
-# between the reason and the step count in *both* directions -- so a future
-# change that starts inferring the reason from `steps_taken` (rather than
-# recording it where the loop actually leaves) still has to keep the two
-# genuinely consistent.
+# which one fired.
+#
+# The reason is NOT a function of `steps_taken`. Only two implications
+# hold, each in one direction only:
+#
+#   steps_taken < MAX_COLLISION_STEPS  =>  settled
+#   step_cap                           =>  steps_taken == MAX_COLLISION_STEPS
+#
+# At the cap either reason is possible, because the settle predicate is
+# evaluated after every step including the last permitted one. An earlier
+# version of this file asserted the bidirectional equivalence and was
+# wrong; `test_a_threshold_crossing_on_the_final_step_is_still_settled`
+# below constructs the counterexample from the solver's own constants.
 
 
 # A deliberately low-energy impact: slow enough that damping alone carries
@@ -238,6 +251,38 @@ def test_heuristic_model_reports_no_replay():
 # margin, and is placed off to the side so the run is pure damping with no
 # contact. Derived from the constants, not tuned by trial.
 LOW_ENERGY = _impact(-8.0, 0.0, speed_mph=0.05)
+
+
+def _terminal_step_settle_speed_mph() -> float:
+    """The release speed whose damping curve crosses `SETTLE_SPEED_IN_S`
+    exactly on the last permitted step.
+
+    Derived from the solver's own constants rather than searched for, so it
+    stays correct if the damping rate, timestep, threshold, or cap change.
+
+    Undamped-contact motion decays by `damping_factor` per step, so after
+    `n` steps a body's speed is `v0 * damping_factor**n`. For the crossing
+    to land on step `MAX_COLLISION_STEPS` and not before, `v0` must satisfy
+
+        v0 * damping_factor**(cap - 1) >= SETTLE_SPEED_IN_S   (still moving)
+        v0 * damping_factor**cap        <  SETTLE_SPEED_IN_S   (now settled)
+
+    which is a real interval, not a single value. Taking its midpoint lands
+    comfortably inside rather than on either edge, where float rounding
+    could tip the result a step either way.
+    """
+    damping_factor = 1.0 - LINEAR_DAMPING_PER_S * COLLISION_DT_S
+    still_moving_at = SETTLE_SPEED_IN_S / damping_factor ** (MAX_COLLISION_STEPS - 1)
+    settled_at = SETTLE_SPEED_IN_S / damping_factor**MAX_COLLISION_STEPS
+    midpoint_in_s = (still_moving_at + settled_at) / 2.0
+    return midpoint_in_s / mph_to_in_per_s(1.0)
+
+
+# Far enough off to the side that no pin is ever within contact range, so
+# the run is pure damping and the arithmetic above is the whole story. It is
+# handed straight to the solver, which does not gutter-check — that lives in
+# `PlanarCollisionPinfallModel.resolve`, and this is a read-only direct call.
+TERMINAL_STEP_SETTLE = _impact(-30.0, 0.0, speed_mph=_terminal_step_settle_speed_mph())
 
 
 def test_a_normal_legal_impact_ends_at_the_step_cap():
@@ -270,27 +315,84 @@ def test_a_low_energy_run_ends_at_the_settle_threshold():
         # Straddles the derived ~0.31 mph boundary from both sides.
         ("just below the settle boundary", _impact(-8.0, 0.0, speed_mph=0.3)),
         ("just above the settle boundary", _impact(-8.0, 0.0, speed_mph=0.32)),
+        ("threshold crossing on the final step", TERMINAL_STEP_SETTLE),
     ],
 )
-def test_the_reason_and_the_step_count_always_agree(label, impact):
+def test_only_the_one_way_count_implications_hold(label, impact):
     run = _simulate_collision_detail(impact, record_replay=True)
     reason = run.replay.termination_reason
 
     assert reason in TERMINATION_REASONS, label
-    # Both directions: settled implies stopping early, and stopping early
-    # implies settled.
-    assert (reason == "settled") == (run.steps_taken < MAX_COLLISION_STEPS), label
-    assert (reason == "step_cap") == (run.steps_taken == MAX_COLLISION_STEPS), label
+    # Stopping early is reachable only through the threshold branch.
+    if run.steps_taken < MAX_COLLISION_STEPS:
+        assert reason == "settled", label
+    # Exhausting the loop is what `step_cap` means.
+    if reason == "step_cap":
+        assert run.steps_taken == MAX_COLLISION_STEPS, label
+    # Deliberately NOT asserted, because both are false: that reaching the
+    # cap implies `step_cap`, or that `settled` implies stopping early.
 
 
-def test_both_exits_are_actually_exercised_by_these_fixtures():
-    # Guards the pair of tests above against quietly collapsing into one
-    # case if the solver's constants ever change.
-    reasons = {
-        _simulate_collision_detail(impact, record_replay=True).replay.termination_reason
-        for impact in (POCKET, LOW_ENERGY)
+def test_a_threshold_crossing_on_the_final_step_is_still_settled():
+    """The counterexample to `steps_taken == cap implies step_cap`.
+
+    The settle predicate runs after every step, the last one included. A
+    run engineered to cross the threshold precisely there uses every
+    permitted iteration *and* exits through the threshold branch, so it is
+    `settled` at `steps_taken == MAX_COLLISION_STEPS`. Labelling it
+    `step_cap` because the counts match would be reporting the arithmetic
+    instead of what the loop did.
+    """
+    run = _simulate_collision_detail(TERMINAL_STEP_SETTLE, record_replay=True)
+
+    assert run.steps_taken == MAX_COLLISION_STEPS
+    assert run.replay.termination_reason == "settled"
+
+    # Contact-free: damping alone drove this, so the derivation above is
+    # the entire explanation and no impulse perturbed the speed curve.
+    assert run.fallen_pin_ids == ()
+
+    # The recorder is unaffected by which exit fired. 4,000 is a whole
+    # number of 100-step intervals, so the terminal frame is a cadence
+    # frame rather than an appended one, and the run is a full 2 s.
+    replay = run.replay
+    assert len(replay.frames) == MAX_COLLISION_STEPS // REPLAY_SAMPLE_EVERY_STEPS + 1
+    assert replay.frames[-1].t_s == pytest.approx(MAX_COLLISION_STEPS * COLLISION_DT_S)
+    assert replay.frames[-1].t_s == pytest.approx(MAX_COLLISION_SECONDS)
+
+    # And the public tuple contract is identical either way — the reason is
+    # published metadata, not something the solver's own result depends on.
+    assert simulate_collision(TERMINAL_STEP_SETTLE) == (run.fallen_pin_ids, run.steps_taken)
+
+
+def test_the_boundary_fixture_really_does_straddle_the_final_step():
+    # Without this, a constants change could slide the crossing earlier or
+    # later and the test above would still pass -- for the wrong reason,
+    # having quietly become an ordinary early-settle or cap case.
+    damping_factor = 1.0 - LINEAR_DAMPING_PER_S * COLLISION_DT_S
+    v0_in_s = mph_to_in_per_s(TERMINAL_STEP_SETTLE.speed_mph)
+
+    assert v0_in_s * damping_factor ** (MAX_COLLISION_STEPS - 1) >= SETTLE_SPEED_IN_S
+    assert v0_in_s * damping_factor**MAX_COLLISION_STEPS < SETTLE_SPEED_IN_S
+
+
+def test_all_three_situations_are_actually_exercised():
+    # Guards the tests above against quietly collapsing into fewer cases if
+    # the solver's constants ever change: an early settle, a normal run that
+    # exhausts the loop, and a threshold crossing on the final step.
+    early = _simulate_collision_detail(LOW_ENERGY, record_replay=True)
+    capped = _simulate_collision_detail(POCKET, record_replay=True)
+    boundary = _simulate_collision_detail(TERMINAL_STEP_SETTLE, record_replay=True)
+
+    situations = {
+        (early.replay.termination_reason, early.steps_taken < MAX_COLLISION_STEPS),
+        (capped.replay.termination_reason, capped.steps_taken < MAX_COLLISION_STEPS),
+        (boundary.replay.termination_reason, boundary.steps_taken < MAX_COLLISION_STEPS),
     }
-    assert reasons == set(TERMINATION_REASONS)
+    assert situations == {("settled", True), ("step_cap", False), ("settled", False)}
+    assert {early.replay.termination_reason, capped.replay.termination_reason} == set(
+        TERMINATION_REASONS
+    )
 
 
 def test_the_reason_does_not_disturb_fallen_ids_or_step_count():
