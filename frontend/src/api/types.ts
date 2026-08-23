@@ -63,12 +63,29 @@ export interface ReplayFrameResponse {
  * Every field here is typed as it arrives on the wire, not as it will be
  * once trusted: this is the *unvalidated* shape. `domain/collisionReplay.ts`
  * is what turns it into something playable, and only it may narrow these. */
+/** When one pin first met the planar fall threshold, as it arrives on the
+ * wire — unvalidated, like everything else here.
+ *
+ * `step_index` is a solver step, not a time: multiply by the replay's own
+ * validated `dt_s` for seconds. It is *not* a topple, rotation, or fall
+ * duration; it says the sliding circle had moved the model's displacement
+ * threshold from its spot, which is the same criterion behind
+ * `PinfallInfo.fallen_pin_ids`. */
+export interface ThresholdCrossingResponse {
+  pin_id: number;
+  step_index: number;
+}
+
 export interface CollisionReplayResponse {
   model_version: string;
   dt_s: number;
   sample_every_steps: number;
   steps_taken: number;
   frames: ReplayFrameResponse[];
+  /** Ordered by step then pin id, empty when nothing fell, and absent
+   * entirely on a pre-v4 payload — which is why it is optional here and
+   * narrowed only by `acceptReplay`. */
+  threshold_crossings?: ThresholdCrossingResponse[];
   /**
    * Which of the solver's two loop exits produced the final frame —
    * `'settled'` or `'step_cap'` (see `backend/app/physics/replay.py`).

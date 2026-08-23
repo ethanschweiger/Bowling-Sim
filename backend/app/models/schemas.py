@@ -99,6 +99,25 @@ class ReplayFrameResponse(BaseModel):
     bodies: list[ReplayBodyResponse] = Field(default_factory=list)
 
 
+class ThresholdCrossingResponse(BaseModel):
+    """When one pin first met the planar fall threshold.
+
+    `step_index` is a solver step, not a time. A client multiplies by the
+    replay's own `dt_s` if it wants seconds; publishing the integer keeps the
+    event exact and stops a consumer inventing a wall-clock moment the solver
+    never had.
+
+    This is *not* a topple, a rotation, or a fall duration. It says the
+    sliding circle had moved `FALL_DISPLACEMENT_THRESHOLD_IN` from its spot,
+    which is the same criterion that produces `PinfallInfo.fallen_pin_ids` —
+    the two come from one decision, so they can be checked against each
+    other.
+    """
+
+    pin_id: int  # always a real 1-10 pin, never the ball
+    step_index: int
+
+
 class CollisionReplayResponse(BaseModel):
     """Bounded, deterministic playback of a planar collision run.
 
@@ -117,6 +136,11 @@ class CollisionReplayResponse(BaseModel):
     sample_every_steps: int
     steps_taken: int
     frames: list[ReplayFrameResponse] = Field(default_factory=list)
+    # When each fallen pin first crossed the displacement threshold, ordered
+    # by step then pin id, and empty when nothing fell. Its pin ids are
+    # exactly `PinfallInfo.fallen_pin_ids` by construction; a client should
+    # verify that rather than trusting either list alone.
+    threshold_crossings: list[ThresholdCrossingResponse] = Field(default_factory=list)
     # Which of the solver's two loop exits produced the final frame, so a
     # client never has to guess whether playback ended because motion
     # stopped or because the run was cut off.

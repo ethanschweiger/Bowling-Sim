@@ -80,6 +80,28 @@ count instead of the field re-introduces exactly the guess this field was
 added to eliminate — which is why the value is recorded at the exit and
 never recomputed from the data.
 
+## Threshold crossings
+
+`threshold_crossings` records, for each pin the solver classified as fallen,
+the exact solver step at which the *existing* displacement rule first said
+so — the same `pin.fell` flip that produces `fallen_pin_ids`, timestamped
+rather than recomputed.
+
+What that is: the moment this 2D model's own criterion changed its mind
+about one sliding circle. A renderer may turn a step index into simulation
+time as `step_index * dt_s`, and may use it to stop drawing that pin as
+standing.
+
+What it is not: a measured topple, a rotation, a fall duration, or anything
+about how a real pin behaves. There is no pose here, no tilt, no height, and
+no carry. A crossing says the circle had slid `FALL_DISPLACEMENT_THRESHOLD_IN`
+from its spot; the pin keeps moving afterwards, and its recorded positions
+continue to be the only thing describing where it is.
+
+The event set is exactly `fallen_pin_ids`, by construction — the same flag
+produces both — so a consumer can and should check them against each other
+rather than trusting either alone.
+
 ## Why 2D only
 
 Flat circles sliding on a plane: no height, tilt, rotation, or toppling
@@ -122,7 +144,17 @@ from typing import Literal, Protocol
 # samples, so an impulse the solver resolved could not become visible until
 # up to one whole interval later. 10 ms cuts that to about 4.4 in. This
 # records the same run more finely; it does not change the run.
-REPLAY_MODEL_VERSION = "planar-collision-replay-2d-v3"
+#
+# v3 -> v4 adds `threshold_crossings`: for each pin the solver classified as
+# fallen, the exact solver step at which the *existing* displacement rule
+# first said so. Until v4 a client had no honest way to show *when* a scored
+# pin fell -- positions alone do not carry that decision -- so every replay
+# pin had to be drawn standing right up to the static-rack handoff, and a
+# knocked-down pin appeared to sit still and then vanish. A version bump
+# rather than a merely additive field, because the events are validated
+# against the response's own `fallen_pin_ids`: a consumer that ignored them
+# would be rendering a run it does not actually understand.
+REPLAY_MODEL_VERSION = "planar-collision-replay-2d-v4"
 
 # Why a `Literal` alias rather than an `Enum`: these two values are a wire
 # contract shared with the API layer and the browser, and a Literal keeps
@@ -197,6 +229,23 @@ class ReplayBody:
 
 
 @dataclass(frozen=True)
+class ThresholdCrossing:
+    """One pin's first crossing of the planar fall threshold.
+
+    `step_index` is a solver step, not a time: the caller multiplies by
+    `dt_s` if it wants seconds. Storing the integer keeps the event exact
+    and keeps the client from inventing a wall-clock moment the solver
+    never had.
+
+    Never the ball: `pin_id` is always a real participating pin, because the
+    only place this is produced is the loop that flips `pin.fell`.
+    """
+
+    pin_id: int
+    step_index: int
+
+
+@dataclass(frozen=True)
 class ReplayFrame:
     """All participating bodies at one simulation timestamp."""
 
@@ -224,6 +273,10 @@ class CollisionReplay:
     # Which of the solver loop's two exits produced the terminal frame.
     # Recorded at the exit itself, never inferred from the data.
     termination_reason: TerminationReason
+    # When each fallen pin first met the displacement threshold, ordered by
+    # step and then pin id. Empty when nothing fell. See "Threshold
+    # crossings" above for what this does and does not claim.
+    threshold_crossings: tuple[ThresholdCrossing, ...] = ()
 
 
 class _ReplayRecorder:
@@ -241,6 +294,22 @@ class _ReplayRecorder:
         self._sample_every_steps = sample_every_steps
         self._max_frames = max_frames
         self._frames: list[ReplayFrame] = []
+        self._crossings: list[ThresholdCrossing] = []
+
+    def record_threshold_crossing(self, pin_id: int, step_index: int) -> None:
+        """Note that `pin_id` first met the fall threshold at `step_index`.
+
+        Called by the solver at the same place it flips `pin.fell`, so the
+        event and `fallen_pin_ids` come from one decision rather than two.
+        Append-only and read-nothing, like every other recorder method: it
+        cannot influence a body, an impulse, termination, or a score.
+
+        Ordering falls out of the call site rather than being imposed here —
+        the solver's step loop ascends, and within a step it walks pins in
+        ascending id — so the list is already sorted by (step, pin id).
+        `finish` asserts nothing; `collision.py`'s tests pin the order.
+        """
+        self._crossings.append(ThresholdCrossing(pin_id=pin_id, step_index=step_index))
 
     def capture(self, step_index: int, bodies: Sequence[_RecordableBody]) -> None:
         """Record the state after `step_index` completed steps (0 = the
@@ -287,4 +356,5 @@ class _ReplayRecorder:
             steps_taken=steps_taken,
             frames=tuple(self._frames),
             termination_reason=termination_reason,
+            threshold_crossings=tuple(self._crossings),
         )

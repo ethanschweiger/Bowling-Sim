@@ -6,6 +6,7 @@ IDs and step counts — if recording could perturb the solver, replay data
 would be describing a different collision than the one that was scored.
 """
 
+import math
 from dataclasses import FrozenInstanceError
 from typing import get_args
 
@@ -445,12 +446,12 @@ def test_a_run_that_never_happened_has_no_reason_to_report():
 # --- The published version names these semantics -------------------------
 
 
-def test_the_model_version_is_pinned_to_v3():
+def test_the_model_version_is_pinned_to_v4():
     # Deliberately the literal string, not the imported constant: the other
     # assertions in this file follow a bump automatically, so without this
     # one a version change -- the very thing that tells consumers the
     # meaning of the payload moved -- would pass unnoticed.
-    assert REPLAY_MODEL_VERSION == "planar-collision-replay-2d-v3"
+    assert REPLAY_MODEL_VERSION == "planar-collision-replay-2d-v4"
 
 
 def test_the_domain_and_the_api_allow_exactly_the_same_reasons():
@@ -583,3 +584,136 @@ def test_a_fixed_release_replays_byte_identically_at_the_new_cadence():
     assert len(first.replay.frames) == 201
     assert first.fallen_pin_ids == second.fallen_pin_ids
     assert first.steps_taken == second.steps_taken
+
+
+# --- v4 threshold crossings ----------------------------------------------
+#
+# A crossing timestamps the *existing* displacement decision: the same
+# `pin.fell` flip that produces `fallen_pin_ids`, recorded at the step it
+# happened rather than recomputed afterwards. It is not a topple, a rotation,
+# or a fall duration -- the pin keeps moving after it, and its recorded
+# positions remain the only description of where it is.
+
+
+def _crossings(run):
+    return run.replay.threshold_crossings
+
+
+def test_crossing_ids_are_exactly_the_fallen_pins():
+    # The two come from one decision, so they must agree exactly -- not
+    # merely overlap. This is the correspondence the client validates on.
+    for impact, standing_ids in (
+        (POCKET, None),
+        (BROOKLYN, None),
+        (LIGHT_HIT, None),
+        (POCKET, {3, 6, 10}),
+        (POCKET, {10}),
+    ):
+        run = _simulate_collision_detail(impact, standing_ids=standing_ids, record_replay=True)
+        ids = tuple(sorted(c.pin_id for c in _crossings(run)))
+
+        assert ids == run.fallen_pin_ids
+        assert len(ids) == len({c.pin_id for c in _crossings(run)}), "one event per pin"
+
+
+def test_crossings_are_ordered_by_step_then_pin_id():
+    run = _simulate_collision_detail(POCKET, record_replay=True)
+    events = _crossings(run)
+
+    assert list(events) == sorted(events, key=lambda c: (c.step_index, c.pin_id))
+    assert len(events) > 1, "the pocket fixture must exercise a real ordering"
+
+
+def test_every_crossing_step_is_positive_and_within_the_run():
+    for impact, standing_ids in ((POCKET, None), (BROOKLYN, {3, 6, 10})):
+        run = _simulate_collision_detail(impact, standing_ids=standing_ids, record_replay=True)
+        for crossing in _crossings(run):
+            # Positive: step 0 is the initial placement, before any stepping,
+            # so nothing can have crossed yet.
+            assert crossing.step_index > 0
+            assert crossing.step_index <= run.steps_taken
+
+
+def test_no_crossing_is_ever_the_ball():
+    run = _simulate_collision_detail(POCKET, record_replay=True)
+    for crossing in _crossings(run):
+        assert crossing.pin_id != BALL_BODY_ID
+        assert 1 <= crossing.pin_id <= 10
+
+
+def test_a_crossing_id_is_always_a_pin_that_was_standing():
+    standing = {3, 6, 10}
+    run = _simulate_collision_detail(POCKET, standing_ids=standing, record_replay=True)
+
+    for crossing in _crossings(run):
+        assert crossing.pin_id in standing
+
+
+def test_a_run_where_nothing_falls_records_no_crossings():
+    run = _simulate_collision_detail(LOW_ENERGY, record_replay=True)
+
+    assert run.fallen_pin_ids == ()
+    assert _crossings(run) == ()
+
+
+def test_no_run_means_no_replay_and_so_no_crossings():
+    for run in (
+        _simulate_collision_detail(_impact(-2.6, 1.4, speed_mph=0.0), record_replay=True),
+        _simulate_collision_detail(POCKET, standing_ids=set(), record_replay=True),
+    ):
+        assert run.replay is None
+
+
+def test_each_crossing_step_is_the_first_step_the_predicate_holds():
+    """The strongest form: replay the solver's own rule step by step and
+    check each event lands on the first step at which that pin's
+    displacement actually reaches the threshold -- not one step early or
+    late, and not merely 'somewhere in range'."""
+    from app.physics.collision import FALL_DISPLACEMENT_THRESHOLD_IN
+
+    run = _simulate_collision_detail(POCKET, record_replay=True)
+    replay = run.replay
+    origin = {b.body_id: (b.x_in, b.y_in) for b in replay.frames[0].bodies if b.body_id}
+
+    for crossing in _crossings(run):
+        # The sampled frame at or just after the crossing must already show
+        # the pin past the threshold...
+        after = next(
+            f
+            for f in replay.frames
+            if f.t_s >= crossing.step_index * replay.dt_s - 1e-12
+        )
+        body = next(b for b in after.bodies if b.body_id == crossing.pin_id)
+        x0, y0 = origin[crossing.pin_id]
+        displacement = math.hypot(body.x_in - x0, body.y_in - y0)
+        assert displacement >= FALL_DISPLACEMENT_THRESHOLD_IN, crossing.pin_id
+
+        # ...and the last sampled frame strictly before it must not, unless
+        # the crossing happened within that same sampling interval.
+        before = [f for f in replay.frames if f.t_s < crossing.step_index * replay.dt_s]
+        if before:
+            gap_steps = crossing.step_index - round(before[-1].t_s / replay.dt_s)
+            assert 0 < gap_steps <= REPLAY_SAMPLE_EVERY_STEPS, crossing.pin_id
+
+
+def test_recording_crossings_leaves_the_run_byte_identical():
+    # Passivity, restated for the new field: the crossing is observation, so
+    # a recorded and an unrecorded run agree on everything the game uses.
+    for impact, standing_ids in ((POCKET, None), (BROOKLYN, {3, 6, 10}), (LOW_ENERGY, None)):
+        plain = simulate_collision(impact, standing_ids=standing_ids)
+        recorded = _simulate_collision_detail(
+            impact, standing_ids=standing_ids, record_replay=True
+        )
+
+        assert recorded.fallen_pin_ids == plain[0]
+        assert recorded.steps_taken == plain[1]
+
+
+def test_crossings_are_deterministic_and_immutable():
+    first = _simulate_collision_detail(POCKET, standing_ids={1, 3, 5}, record_replay=True)
+    second = _simulate_collision_detail(POCKET, standing_ids={1, 3, 5}, record_replay=True)
+
+    assert first.replay.threshold_crossings == second.replay.threshold_crossings
+
+    with pytest.raises(FrozenInstanceError):
+        first.replay.threshold_crossings[0].step_index = 0

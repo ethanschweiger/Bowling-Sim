@@ -218,24 +218,24 @@ def test_heuristic_model_maps_to_a_null_replay():
 # --- Termination is published, on both routes ----------------------------
 
 
-def test_game_throw_publishes_the_v3_model_and_a_valid_termination_reason():
+def test_game_throw_publishes_the_v4_model_and_a_valid_termination_reason():
     replay = _throw(_create_game())["pinfall"]["replay"]
 
     # The literal string, not the constant: a consumer keys its firewall off
     # this exact value, so the response must be pinned independently of
     # whatever the backend currently defines.
-    assert replay["model_version"] == "planar-collision-replay-2d-v3"
+    assert replay["model_version"] == "planar-collision-replay-2d-v4"
     assert replay["termination_reason"] in ("settled", "step_cap")
 
 
-def test_legacy_route_publishes_the_same_v3_termination_contract():
+def test_legacy_route_publishes_the_same_v4_termination_contract():
     client.post("/api/v1/games/legacy-default/reset")
 
     response = client.post("/api/v1/simulations/throws", json=THROW_PAYLOAD)
     assert response.status_code == 200
     replay = response.json()["pinfall"]["replay"]
 
-    assert replay["model_version"] == "planar-collision-replay-2d-v3"
+    assert replay["model_version"] == "planar-collision-replay-2d-v4"
     assert replay["termination_reason"] in ("settled", "step_cap")
 
 
@@ -311,10 +311,10 @@ def _expected_frame_count(steps_taken, sample_every_steps):
     return len(schedule)
 
 
-def test_game_throw_serializes_the_full_v3_schedule():
+def test_game_throw_serializes_the_full_v4_schedule():
     replay = _throw(_create_game())["pinfall"]["replay"]
 
-    assert replay["model_version"] == "planar-collision-replay-2d-v3"
+    assert replay["model_version"] == "planar-collision-replay-2d-v4"
     assert replay["sample_every_steps"] == 20
     assert replay["dt_s"] * replay["sample_every_steps"] == pytest.approx(0.01)
     # A normal seeded throw runs the full cap, so it carries every one of
@@ -331,14 +331,14 @@ def test_game_throw_serializes_the_full_v3_schedule():
         assert time == pytest.approx(index * 20 * replay["dt_s"], abs=1e-9)
 
 
-def test_legacy_route_serializes_the_same_v3_schedule():
+def test_legacy_route_serializes_the_same_v4_schedule():
     client.post("/api/v1/games/legacy-default/reset")
 
     response = client.post("/api/v1/simulations/throws", json=THROW_PAYLOAD)
     assert response.status_code == 200
     replay = response.json()["pinfall"]["replay"]
 
-    assert replay["model_version"] == "planar-collision-replay-2d-v3"
+    assert replay["model_version"] == "planar-collision-replay-2d-v4"
     assert replay["sample_every_steps"] == 20
     assert len(replay["frames"]) == 201
     assert len(replay["frames"]) == _expected_frame_count(
@@ -393,3 +393,105 @@ def test_the_serialized_replay_matches_the_domain_run_frame_for_frame():
         for body_index in range(len(recorded.bodies)):
             assert published.bodies[body_index].x_in == recorded.bodies[body_index].x_in
             assert published.bodies[body_index].y_in == recorded.bodies[body_index].y_in
+
+
+# --- v4 threshold crossings, on both routes ------------------------------
+
+
+def _assert_crossings_agree(replay, fallen_pin_ids):
+    """Every invariant a client is entitled to rely on, in one place."""
+    crossings = replay["threshold_crossings"]
+
+    # Exactly the fallen set -- the two come from one decision.
+    assert sorted(c["pin_id"] for c in crossings) == sorted(fallen_pin_ids)
+    # One event per pin, never the ball, always a real pin id.
+    ids = [c["pin_id"] for c in crossings]
+    assert len(set(ids)) == len(ids)
+    assert BALL_BODY_ID not in ids
+    assert all(1 <= pin_id <= 10 for pin_id in ids)
+    # Ordered by step, then pin id, and inside the run.
+    assert crossings == sorted(crossings, key=lambda c: (c["step_index"], c["pin_id"]))
+    assert all(0 < c["step_index"] <= replay["steps_taken"] for c in crossings)
+    assert all(isinstance(c["step_index"], int) for c in crossings)
+
+
+def test_game_throw_publishes_v4_threshold_crossings():
+    body = _throw(_create_game())
+    replay = body["pinfall"]["replay"]
+
+    assert replay["model_version"] == "planar-collision-replay-2d-v4"
+    assert body["pinfall"]["fallen_pin_ids"], "need a scoring throw for this to mean anything"
+    _assert_crossings_agree(replay, body["pinfall"]["fallen_pin_ids"])
+
+
+def test_legacy_route_publishes_the_same_v4_crossings():
+    client.post("/api/v1/games/legacy-default/reset")
+
+    response = client.post("/api/v1/simulations/throws", json=THROW_PAYLOAD)
+    assert response.status_code == 200
+    body = response.json()
+    replay = body["pinfall"]["replay"]
+
+    assert replay["model_version"] == "planar-collision-replay-2d-v4"
+    _assert_crossings_agree(replay, body["pinfall"]["fallen_pin_ids"])
+
+
+def test_a_second_ball_partial_rack_only_crosses_pins_it_could_hit():
+    game_id = _create_game()
+    first = _throw(game_id, {**THROW_PAYLOAD, "ball_id": "house_ball", "seed": 3})
+    standing = first["game_state"]["standing_pin_ids"]
+    assert standing, "need a non-strike first ball"
+
+    second = _throw(game_id, {**THROW_PAYLOAD, "ball_id": "house_ball", "seed": 4})
+    replay = second["pinfall"]["replay"]
+
+    _assert_crossings_agree(replay, second["pinfall"]["fallen_pin_ids"])
+    for crossing in replay["threshold_crossings"]:
+        assert crossing["pin_id"] in standing, "a pin that was not up cannot cross"
+
+
+def test_a_gutter_throw_has_no_replay_and_so_no_crossings():
+    body = _throw(_create_game(), GUTTER_PAYLOAD)
+
+    assert body["pinfall"]["replay"] is None
+    assert body["pinfall"]["fallen_pin_ids"] == []
+
+
+def test_crossings_map_through_unchanged_from_the_domain_run():
+    # The mapping must copy, not re-derive or re-sort.
+    from app.api.routes.games import pinfall_to_response
+    from app.physics.collision import DEFAULT_PINFALL_MODEL
+    from app.physics.impact import ImpactState
+
+    impact = ImpactState(
+        lateral_position_in=-2.6,
+        heading_deg=1.4,
+        speed_mph=17.0,
+        ball_mass_lbs=15.0,
+        ball_radius_in=4.29,
+        lane_condition_version=1,
+    )
+    result = DEFAULT_PINFALL_MODEL.resolve(impact)
+    mapped = pinfall_to_response(result)
+
+    recorded = result.replay.threshold_crossings
+    published = mapped.replay.threshold_crossings
+    assert len(published) == len(recorded)
+    for index in range(len(recorded)):
+        assert published[index].pin_id == recorded[index].pin_id
+        assert published[index].step_index == recorded[index].step_index
+    assert sorted(c.pin_id for c in published) == sorted(mapped.fallen_pin_ids)
+
+
+def test_the_response_model_defaults_crossings_to_empty_not_missing():
+    # A no-fall run publishes an empty list, never a null or absent field:
+    # the client validates the array's shape before using it.
+    valid = {
+        "model_version": REPLAY_MODEL_VERSION,
+        "dt_s": 0.0005,
+        "sample_every_steps": 20,
+        "steps_taken": 4000,
+        "frames": [],
+        "termination_reason": "step_cap",
+    }
+    assert CollisionReplayResponse(**valid).threshold_crossings == []

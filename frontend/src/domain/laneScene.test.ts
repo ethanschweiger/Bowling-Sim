@@ -42,6 +42,7 @@ function buildReplay(
   stepsTaken: number,
   bodyIds: readonly number[],
   positionAt: (bodyId: number, tS: number) => { x_in: number; y_in: number },
+  crossings: { pin_id: number; step_index: number }[] = [],
 ): CollisionReplayResponse {
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
@@ -49,6 +50,7 @@ function buildReplay(
     dt_s: V3_DT_S,
     sample_every_steps: V3_SAMPLE_EVERY_STEPS,
     steps_taken: stepsTaken,
+    threshold_crossings: crossings,
     frames: scheduledSteps(stepsTaken).map((step) => {
       const tS = step * V3_DT_S;
       return {
@@ -380,5 +382,154 @@ describe('buildLaneScene — second ball and fresh rack', () => {
 
     expect(scene.pins).toEqual({ source: 'rack', standingPinIds: [] });
     expect(scene.showEntryMarker).toBe(true);
+  });
+});
+
+
+describe('buildLaneScene — v4 threshold crossings', () => {
+  // A crossing changes one thing: the pin's glyph. It keeps its recorded
+  // position, keeps moving with the run, and is never removed or animated
+  // falling -- the model has no pose to animate.
+
+  const CROSS_STEP = 900;
+  const CROSS_T_S = CROSS_STEP * V3_DT_S; // 0.45 s
+
+  function crossingReplay(): CollisionReplayResponse {
+    return buildReplay(
+      4000,
+      [BALL_BODY_ID, 1, 3],
+      // Deliberately inverted: pin 1 barely moves and *does* have an event,
+      // pin 3 travels far and has none. A scene deriving crossings from
+      // displacement would get both backwards.
+      (id, tS) => ({
+        x_in: id === BALL_BODY_ID ? -3 + tS : id === 1 ? tS * 0.5 : -6 - tS * 8,
+        y_in: id === BALL_BODY_ID ? tS * 6 : id === 1 ? tS * 0.5 : tS * 8,
+      }),
+      [{ pin_id: 1, step_index: CROSS_STEP }],
+    );
+  }
+
+  const acceptedCrossing = () => {
+    const value = acceptReplay(crossingReplay(), [1]);
+    if (!value) {
+      throw new Error('fixture must be acceptable');
+    }
+    return value;
+  };
+
+  const pin = (scene: LaneScene, pinId: number) =>
+    scene.pins.source === 'replay'
+      ? scene.pins.bodies.find((b) => b.pinId === pinId)
+      : undefined;
+
+  it('draws a pin as standing right up to its crossing', () => {
+    const replay = acceptedCrossing();
+    const justBefore = buildLaneScene(
+      { kind: 'deck', tS: CROSS_T_S - V3_DT_S, isTerminal: false },
+      replay,
+      PATH,
+      POST_SCORE_RACK,
+    );
+
+    expect(pin(justBefore, 1)!.thresholdCrossed).toBe(false);
+  });
+
+  it('marks it threshold-crossed exactly at its crossing and after', () => {
+    const replay = acceptedCrossing();
+    const at = buildLaneScene(
+      { kind: 'deck', tS: CROSS_T_S, isTerminal: false },
+      replay,
+      PATH,
+      POST_SCORE_RACK,
+    );
+    const after = buildLaneScene(
+      { kind: 'deck', tS: CROSS_T_S + 0.5, isTerminal: false },
+      replay,
+      PATH,
+      POST_SCORE_RACK,
+    );
+
+    expect(pin(at, 1)!.thresholdCrossed).toBe(true);
+    expect(pin(after, 1)!.thresholdCrossed).toBe(true);
+  });
+
+  it('keeps the same recorded body when it crosses', () => {
+    // Only the flag changes: the position is still the server's, and the
+    // pin is still present.
+    const replay = acceptedCrossing();
+    const before = pin(
+      buildLaneScene(
+        { kind: 'deck', tS: CROSS_T_S - V3_DT_S, isTerminal: false },
+        replay,
+        PATH,
+        POST_SCORE_RACK,
+      ),
+      1,
+    )!;
+    const at = pin(
+      buildLaneScene({ kind: 'deck', tS: CROSS_T_S, isTerminal: false }, replay, PATH, POST_SCORE_RACK),
+      1,
+    )!;
+
+    expect(at.pinId).toBe(before.pinId);
+    expect(at.thresholdCrossed).toBe(true);
+    expect(before.thresholdCrossed).toBe(false);
+    // Still moving with the run -- not frozen, not removed.
+    expect(at.board).not.toBe(before.board);
+  });
+
+  it('leaves a pin with no crossing standing for the whole run', () => {
+    const replay = acceptedCrossing();
+    for (const tS of [0, 0.5, 1.0, 1.5, 2.0]) {
+      const scene = buildLaneScene({ kind: 'deck', tS, isTerminal: tS >= 2 }, replay, PATH, POST_SCORE_RACK);
+      expect(pin(scene, 3)!.thresholdCrossed, `pin 3 at ${tS}s`).toBe(false);
+    }
+  });
+
+  it('shows nothing crossed during the approach, which is frame zero', () => {
+    const replay = acceptedCrossing();
+    for (const progress of [0, 0.5, 1]) {
+      const scene = buildLaneScene({ kind: 'path', progress }, replay, PATH, POST_SCORE_RACK);
+      expect(pin(scene, 1)!.thresholdCrossed).toBe(false);
+      expect(pin(scene, 3)!.thresholdCrossed).toBe(false);
+    }
+  });
+
+  it('still holds the crossed pin through the terminal hold', () => {
+    const replay = acceptedCrossing();
+    const sequence = { replay };
+    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const held = buildLaneScene(
+      phaseAt(sequence, end + TERMINAL_HOLD_MS / 2),
+      replay,
+      PATH,
+      POST_SCORE_RACK,
+    );
+
+    // Present, crossed, and still a replay body -- not handed to the rack yet.
+    expect(held.pins.source).toBe('replay');
+    expect(pin(held, 1)!.thresholdCrossed).toBe(true);
+    expect(pin(held, 3)!.thresholdCrossed).toBe(false);
+  });
+
+  it('is driven only by the event, never by displacement', () => {
+    // Pin 3 travels much further than pin 1 in this fixture, yet only pin 1
+    // has an event -- so a scene that derived crossings from movement would
+    // get this exactly backwards.
+    const replay = acceptedCrossing();
+    const late = buildLaneScene(
+      { kind: 'deck', tS: 1.9, isTerminal: false },
+      replay,
+      PATH,
+      POST_SCORE_RACK,
+    );
+    const one = pin(late, 1)!;
+    const three = pin(late, 3)!;
+
+    const moved = (p: typeof one, startBoard: number) => Math.abs(p.board - startBoard);
+    const zero = buildLaneScene({ kind: 'deck', tS: 0, isTerminal: false }, replay, PATH, POST_SCORE_RACK);
+    expect(moved(three, pin(zero, 3)!.board)).toBeGreaterThan(moved(one, pin(zero, 1)!.board));
+    expect(three.thresholdCrossed).toBe(false);
+    expect(one.thresholdCrossed).toBe(true);
   });
 });

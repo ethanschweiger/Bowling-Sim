@@ -50,7 +50,11 @@
  * eye.
  */
 
-import type { CollisionReplayResponse, ReplayFrameResponse } from '../api/types';
+import type {
+  CollisionReplayResponse,
+  ReplayFrameResponse,
+  ThresholdCrossingResponse,
+} from '../api/types';
 
 /** The one replay shape this client understands. Must match
  * `REPLAY_MODEL_VERSION` in `backend/app/physics/replay.py`.
@@ -65,10 +69,15 @@ import type { CollisionReplayResponse, ReplayFrameResponse } from '../api/types'
  *   *complete frame schedule* is derived from the cadence and checked
  *   exactly, a v2 payload does not merely look sparse — it fails to be the
  *   contract this client validates against.
+ * - v3 carried no `threshold_crossings`, so there was no honest way to show
+ *   *when* a scored pin fell and every replay pin had to stay drawn as
+ *   standing until the static-rack handoff. The events cannot be recovered
+ *   from positions — that would be deriving the server's decision here —
+ *   so a v3 payload falls back rather than being played without them.
  *
  * Both fall back to the static server rack, like any other unknown
  * version. Nothing is reinterpreted. */
-export const SUPPORTED_REPLAY_MODEL_VERSION = 'planar-collision-replay-2d-v3';
+export const SUPPORTED_REPLAY_MODEL_VERSION = 'planar-collision-replay-2d-v4';
 
 /**
  * How the recorded run ended. Mirrors `TerminationReason` in
@@ -105,6 +114,81 @@ export const REPLAY_TERMINATION_REASONS: readonly ReplayTerminationReason[] = [
  */
 export interface AcceptedReplay extends CollisionReplayResponse {
   termination_reason: ReplayTerminationReason;
+  /** Validated: ordered by step then pin id, one per pin, every id a real
+   * participating pin, every step inside the run, and the id set exactly
+   * equal to the response's own `fallen_pin_ids`. */
+  threshold_crossings: ThresholdCrossingResponse[];
+}
+
+/** The ball is body 0; a crossing is only ever a pin. */
+const MIN_PIN_ID = 1;
+const MAX_PIN_ID = 10;
+
+/**
+ * Validates the v4 crossing events against the response's authoritative
+ * `fallen_pin_ids`.
+ *
+ * The correspondence check is the important one and is why this takes the
+ * fallen set at all: the events and that list come from a single server
+ * decision, so if they disagree the payload is not describing one coherent
+ * run and nothing here should try to reconcile them. Everything else is
+ * shape and bounds.
+ *
+ * Deliberately no fallback to deriving a crossing from displacement. That
+ * would be recomputing the server's fall rule in the browser, which is the
+ * whole thing v4 exists to avoid.
+ */
+function acceptThresholdCrossings(
+  crossings: unknown,
+  stepsTaken: number,
+  fallenPinIds: readonly number[],
+): ThresholdCrossingResponse[] | null {
+  if (!Array.isArray(crossings)) {
+    return null;
+  }
+  if (crossings.length !== fallenPinIds.length) {
+    return null;
+  }
+
+  let previousStep = 0;
+  let previousPin = 0;
+  const seen = new Set<number>();
+
+  for (const crossing of crossings) {
+    if (!crossing || typeof crossing !== 'object') {
+      return null;
+    }
+    const { pin_id: pinId, step_index: stepIndex } = crossing as ThresholdCrossingResponse;
+
+    if (!Number.isSafeInteger(pinId) || pinId < MIN_PIN_ID || pinId > MAX_PIN_ID) {
+      return null;
+    }
+    // Step 0 is the initial placement, before any stepping, so nothing can
+    // have crossed there; and nothing can cross after the run ended.
+    if (!Number.isSafeInteger(stepIndex) || stepIndex <= 0 || stepIndex > stepsTaken) {
+      return null;
+    }
+    if (seen.has(pinId)) {
+      return null; // one event per pin
+    }
+    seen.add(pinId);
+
+    // Ordered by step, then pin id — the order the recorder produces.
+    if (stepIndex < previousStep || (stepIndex === previousStep && pinId <= previousPin)) {
+      return null;
+    }
+    previousStep = stepIndex;
+    previousPin = pinId;
+  }
+
+  // Exactly the pins the server says fell — not a subset, not a superset.
+  for (const pinId of fallenPinIds) {
+    if (!seen.has(pinId)) {
+      return null;
+    }
+  }
+
+  return crossings as ThresholdCrossingResponse[];
 }
 
 function isTerminationReason(value: unknown): value is ReplayTerminationReason {
@@ -214,6 +298,7 @@ function isInBounds(value: number): boolean {
  */
 export function acceptReplay(
   replay: CollisionReplayResponse | null | undefined,
+  fallenPinIds: readonly number[] = [],
 ): AcceptedReplay | null {
   if (!replay || typeof replay !== 'object') {
     return null;
@@ -347,9 +432,16 @@ export function acceptReplay(
     }
   }
 
+  // v4's crossing events, checked against the response's own fallen set.
+  // Last because it is the only check that needs data from outside the
+  // replay itself.
+  if (acceptThresholdCrossings(replay.threshold_crossings, replay.steps_taken, fallenPinIds) === null) {
+    return null;
+  }
+
   // The very same object the caller passed in — the assertion only records
-  // the `termination_reason` narrowing checked at the top, and copies or
-  // rewrites nothing. The server's data stays the server's.
+  // the narrowings checked above, and copies or rewrites nothing. The
+  // server's data stays the server's.
   return replay as AcceptedReplay;
 }
 

@@ -400,6 +400,13 @@ def _simulate_collision_detail(
         for pin in pins:
             if not pin.fell and pin.displacement_in() >= FALL_DISPLACEMENT_THRESHOLD_IN:
                 pin.fell = True
+                # The same decision, timestamped. Recording is observation
+                # only: this appends to the recorder and touches no body,
+                # impulse, damping, termination, score, or rack, so a
+                # recorded and an unrecorded run stay byte-identical in
+                # everything except the presence of the replay itself.
+                if recorder is not None:
+                    recorder.record_threshold_crossing(pin.pin_id, steps_taken)
 
         # Read-only sampling, after this step's physics has fully resolved
         # (moves, impulses, and positional corrections all applied).

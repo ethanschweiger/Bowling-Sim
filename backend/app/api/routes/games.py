@@ -33,6 +33,7 @@ from app.models.schemas import (
     ReleaseValues,
     ReplayBodyResponse,
     ReplayFrameResponse,
+    ThresholdCrossingResponse,
     ThrowRequest,
     TrajectoryPointResponse,
 )
@@ -111,6 +112,15 @@ def pinfall_to_response(pinfall: object) -> PinfallInfo:
                 # response rather than let this layer invent a plausible
                 # value.
                 termination_reason=replay.termination_reason,
+                # Likewise the threshold crossings: copied in recorded order,
+                # never re-sorted, re-derived from positions, or filtered
+                # against the fallen set. If the two ever disagreed, that is
+                # a fact the client should see and reject on, not something
+                # this layer should quietly reconcile.
+                threshold_crossings=[
+                    ThresholdCrossingResponse(pin_id=c.pin_id, step_index=c.step_index)
+                    for c in replay.threshold_crossings
+                ],
             )
         ),
     )

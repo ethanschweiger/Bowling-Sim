@@ -66,6 +66,7 @@ function buildReplay(
   terminationReason: 'settled' | 'step_cap',
   bodyIds: readonly number[],
   positionAt: (bodyId: number, tS: number) => { x_in: number; y_in: number },
+  thresholdCrossings: { pin_id: number; step_index: number }[] = [],
 ): CollisionReplayResponse {
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
@@ -73,6 +74,10 @@ function buildReplay(
     dt_s: V3_DT_S,
     sample_every_steps: V3_SAMPLE_EVERY_STEPS,
     steps_taken: stepsTaken,
+    // Empty by default: these fixtures describe runs in which nothing
+    // crossed the threshold, so `acceptReplay`'s default empty fallen set
+    // matches. Crossing-specific tests pass their own.
+    threshold_crossings: thresholdCrossings,
     frames: scheduledSteps(stepsTaken).map((step) => {
       const tS = step * V3_DT_S;
       return {
@@ -151,11 +156,11 @@ describe('acceptReplay', () => {
   // unrecognized value, or v2's sparser schedule -- since each would
   // otherwise leave the client guessing or interpolating over gaps.
 
-  it('is pinned to the v3 model version', () => {
+  it('is pinned to the v4 model version', () => {
     // The literal string, not the constant: every other assertion in this
     // file follows a bump automatically, so without this one a version
     // change would pass unnoticed on both sides of the contract.
-    expect(SUPPORTED_REPLAY_MODEL_VERSION).toBe('planar-collision-replay-2d-v3');
+    expect(SUPPORTED_REPLAY_MODEL_VERSION).toBe('planar-collision-replay-2d-v4');
   });
 
   it('refuses a v1 payload rather than assuming how its run ended', () => {
@@ -201,7 +206,7 @@ describe('acceptReplay', () => {
     expect(acceptReplay({ ...v2, model_version: SUPPORTED_REPLAY_MODEL_VERSION })).toBeNull();
   });
 
-  it('refuses a v3-labelled payload carrying only the old 50 ms samples', () => {
+  it('refuses a v4-labelled payload carrying only the old 50 ms samples', () => {
     // The sparse case stated precisely: correct version, correct cadence
     // metadata, but only every fifth scheduled frame present.
     const dense = fullLengthReplay();
@@ -222,7 +227,7 @@ describe('acceptReplay', () => {
     expect(acceptReplay(sparse)).toBeNull();
   });
 
-  it('refuses a v3 payload missing a single interior frame', () => {
+  it('refuses a v4 payload missing a single interior frame', () => {
     const dense = fullLengthReplay();
     const missingOne = {
       ...dense,
@@ -233,7 +238,7 @@ describe('acceptReplay', () => {
     expect(acceptReplay(missingOne)).toBeNull();
   });
 
-  it('refuses a v3 payload with one extra frame the recorder would not emit', () => {
+  it('refuses a v4 payload with one extra frame the recorder would not emit', () => {
     const dense = fullLengthReplay();
     const extra = {
       ...dense,
@@ -248,7 +253,7 @@ describe('acceptReplay', () => {
     expect(acceptReplay(extra)).toBeNull();
   });
 
-  it('refuses a v3 payload whose frame bodies are malformed', () => {
+  it('refuses a v4 payload whose frame bodies are malformed', () => {
     const missingBody = fullLengthReplay();
     missingBody.frames[50] = { t_s: missingBody.frames[50].t_s, bodies: [] };
     expect(acceptReplay(missingBody)).toBeNull();
@@ -263,6 +268,110 @@ describe('acceptReplay', () => {
     const notFinite = fullLengthReplay();
     notFinite.frames[50].bodies[0].x_in = Number.NaN;
     expect(acceptReplay(notFinite)).toBeNull();
+  });
+
+  // --- v4 threshold crossings ---------------------------------------------
+  //
+  // The events are validated against the response's own `fallen_pin_ids`,
+  // because both come from one server decision. Nothing here may derive a
+  // crossing from displacement -- that would recompute the server's fall
+  // rule in the browser, which is exactly what v4 exists to avoid.
+
+  const CROSSING_FIXTURE = () =>
+    buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1, 3], (id, tS) => ({
+      x_in: id === BALL_BODY_ID ? -3 + tS : id === 1 ? tS * 2 : -6 - tS,
+      y_in: id === BALL_BODY_ID ? tS * 6 : tS * 4,
+    }), [
+      { pin_id: 1, step_index: 40 },
+      { pin_id: 3, step_index: 900 },
+    ]);
+
+  it('accepts crossings that match the response fallen set', () => {
+    const replay = CROSSING_FIXTURE();
+    expect(acceptReplay(replay, [1, 3])).toBe(replay);
+  });
+
+  it('refuses crossings that disagree with the fallen set', () => {
+    const replay = CROSSING_FIXTURE();
+    // A pin the server never said fell.
+    expect(acceptReplay(replay, [1])).toBeNull();
+    // A fallen pin with no event.
+    expect(acceptReplay(replay, [1, 3, 5])).toBeNull();
+    // Nothing fell, yet events exist.
+    expect(acceptReplay(replay, [])).toBeNull();
+  });
+
+  it('refuses a duplicate crossing for one pin', () => {
+    const replay = buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1], () => ({ x_in: 0, y_in: 0 }), [
+      { pin_id: 1, step_index: 40 },
+      { pin_id: 1, step_index: 900 },
+    ]);
+    expect(acceptReplay(replay, [1])).toBeNull();
+  });
+
+  it('refuses crossings that are out of order', () => {
+    const replay = buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1, 3], () => ({ x_in: 0, y_in: 0 }), [
+      { pin_id: 3, step_index: 900 },
+      { pin_id: 1, step_index: 40 },
+    ]);
+    expect(acceptReplay(replay, [1, 3])).toBeNull();
+  });
+
+  it('refuses a crossing step outside the run', () => {
+    const atZero = buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1], () => ({ x_in: 0, y_in: 0 }), [
+      { pin_id: 1, step_index: 0 }, // step 0 is before any stepping
+    ]);
+    expect(acceptReplay(atZero, [1])).toBeNull();
+
+    const pastEnd = buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1], () => ({ x_in: 0, y_in: 0 }), [
+      { pin_id: 1, step_index: 4001 },
+    ]);
+    expect(acceptReplay(pastEnd, [1])).toBeNull();
+
+    const negative = buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1], () => ({ x_in: 0, y_in: 0 }), [
+      { pin_id: 1, step_index: -40 },
+    ]);
+    expect(acceptReplay(negative, [1])).toBeNull();
+  });
+
+  it('refuses a crossing that is not a real pin', () => {
+    for (const pinId of [BALL_BODY_ID, 0, 11, -1, 1.5]) {
+      const replay = buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1], () => ({ x_in: 0, y_in: 0 }), [
+        { pin_id: pinId, step_index: 40 },
+      ]);
+      expect(acceptReplay(replay, [pinId])).toBeNull();
+    }
+  });
+
+  it('refuses non-integer or non-finite crossing steps', () => {
+    for (const step of [40.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 2]) {
+      const replay = buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1], () => ({ x_in: 0, y_in: 0 }), [
+        { pin_id: 1, step_index: step },
+      ]);
+      expect(acceptReplay(replay, [1])).toBeNull();
+    }
+  });
+
+  it('refuses a malformed crossings array', () => {
+    const base = buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1], () => ({ x_in: 0, y_in: 0 }));
+    for (const bad of [null, undefined, 'nope', 5, {}, [null], [{}], ['x']]) {
+      expect(
+        acceptReplay({ ...base, threshold_crossings: bad } as CollisionReplayResponse, [1]),
+      ).toBeNull();
+    }
+  });
+
+  it('accepts an empty crossings list for a run where nothing fell', () => {
+    const replay = buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1], () => ({ x_in: 0, y_in: 0 }));
+    expect(acceptReplay(replay, [])).toBe(replay);
+  });
+
+  it('refuses a v3 payload, which has no crossings at all', () => {
+    const v3 = { ...CROSSING_FIXTURE(), model_version: 'planar-collision-replay-2d-v3' };
+    expect(acceptReplay(v3, [1, 3])).toBeNull();
+
+    const { threshold_crossings: _omitted, ...withoutEvents } = v3;
+    expect(acceptReplay(withoutEvents as CollisionReplayResponse, [1, 3])).toBeNull();
   });
 
   it('refuses a payload with no termination reason', () => {

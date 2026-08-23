@@ -114,7 +114,13 @@ export function LaneCanvas({
   // Validated once per response, not per frame: an unknown version or a
   // malformed payload becomes `null` here and the deck phase simply
   // doesn't exist for this throw. Never throws — see `acceptReplay`.
-  const replay = useMemo(() => acceptReplay(latestThrow?.pinfall?.replay), [latestThrow]);
+  // The fallen set is passed in because v4 crossings are validated against
+  // it: the events and that list come from one server decision, so a
+  // disagreement means the payload is not one coherent run.
+  const replay = useMemo(
+    () => acceptReplay(latestThrow?.pinfall?.replay, latestThrow?.pinfall?.fallen_pin_ids ?? []),
+    [latestThrow],
+  );
 
   // One viewport for this throw's entire sequence, spanning both ends of
   // the accepted replay's recorded extent. Held for the whole sequence —
@@ -424,6 +430,16 @@ function draw(
       const x = projection.boardToX(pin.board);
       const y = projection.distanceToY(pin.distanceFt);
 
+      if (pin.thresholdCrossed) {
+        // Past its own server-recorded crossing: the same limited
+        // knocked-down glyph the static rack uses, drawn at the pin's
+        // *recorded* position. It is not removed, not moved, and not
+        // animated toppling — the model has no pose to animate, and the
+        // body keeps travelling with the rest of the run.
+        drawFallenPin(ctx, x, y, pinRadius, colors.pinFallen);
+        continue;
+      }
+
       ctx.beginPath();
       ctx.arc(x, y, pinRadius, 0, Math.PI * 2);
       ctx.fillStyle = colors.pinStanding;
@@ -449,9 +465,9 @@ function draw(
     const y = projection.distanceToY(pin.distanceFt);
     const isStanding = standing.has(pin.id);
 
-    ctx.beginPath();
-    ctx.arc(x, y, pinRadius, 0, Math.PI * 2);
     if (isStanding) {
+      ctx.beginPath();
+      ctx.arc(x, y, pinRadius, 0, Math.PI * 2);
       ctx.fillStyle = colors.pinStanding;
       ctx.fill();
       ctx.strokeStyle = colors.pinOutline;
@@ -463,18 +479,34 @@ function draw(
       ctx.textBaseline = 'middle';
       ctx.fillText(String(pin.id), x, y);
     } else {
-      ctx.globalAlpha = 0.5;
-      ctx.strokeStyle = colors.pinFallen;
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.beginPath();
-      const offset = pinRadius * 0.5;
-      ctx.moveTo(x - offset, y - offset);
-      ctx.lineTo(x + offset, y + offset);
-      ctx.moveTo(x + offset, y - offset);
-      ctx.lineTo(x - offset, y + offset);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
+      drawFallenPin(ctx, x, y, pinRadius, colors.pinFallen);
     }
   }
+}
+
+/** The one knocked-down mark: a faded outline with an ×. Shared by the
+ * static rack and by a replay pin past its server-recorded crossing, so the
+ * two never drift into meaning different things visually. Deliberately the
+ * same limited 2D glyph either way — this model has no pose to draw. */
+function drawFallenPin(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  pinRadius: number,
+  fallenColor: string,
+): void {
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  ctx.arc(x, y, pinRadius, 0, Math.PI * 2);
+  ctx.strokeStyle = fallenColor;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.beginPath();
+  const offset = pinRadius * 0.5;
+  ctx.moveTo(x - offset, y - offset);
+  ctx.lineTo(x + offset, y + offset);
+  ctx.moveTo(x + offset, y - offset);
+  ctx.lineTo(x - offset, y + offset);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
 }

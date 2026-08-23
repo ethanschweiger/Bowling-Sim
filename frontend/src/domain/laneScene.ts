@@ -53,29 +53,32 @@ import type { PlaybackPhase } from './playbackController';
 import { easeOutCubic, interpolatePathPosition } from './trajectoryAnimation';
 
 /**
- * The v3 replay records *positions over time*, not fall events. A pin's
- * `fallen` status comes from `fallen_pin_ids`, decided server-side by a
- * displacement threshold, and the frames never say at which timestamp that
- * threshold was crossed.
+ * What v4's threshold crossings do and do not license.
  *
- * So this module deliberately does not colour, fade, or cross out a pin
- * mid-playback: doing so would require inventing a fall time from
- * displacement, which is client-side physics wearing a costume. Every pin
- * is drawn as a body at its recorded position for the whole sequence, and
- * the standing/fallen distinction appears only when the static rack takes
- * over — where it is the server's answer.
+ * They are server-authored: each says the solver's *existing* displacement
+ * rule first classified that sliding circle as fallen at that exact step.
+ * So this module may stop drawing a pin as standing at its own crossing,
+ * and does — the timing is the server's, never derived here from
+ * displacement or contact.
  *
- * Making that moment legible is what the terminal hold is for. Finer fall
- * timing needs either a versioned backend fall-event or a denser sampling
- * decision, and is out of scope here.
+ * What remains unmodelled is everything about *pose*. There is no topple,
+ * no rotation, no tilt, no height, no fall duration, and no carry. A
+ * crossed pin keeps its recorded position and keeps moving with the rest of
+ * the run; only its glyph changes, to the same limited 2D knocked-down
+ * treatment the static rack already uses. Nothing here animates a fall.
  */
 export const FALL_TIMING_LIMITATION =
-  'v3 replay frames carry positions, not fall-event times; no fall timing is inferred here.';
+  'v4 crossings give server-authored threshold times; pose, topple, rotation, ' +
+  'height and carry remain unmodelled, and no timing is inferred client-side.';
 
 export interface ScenePin {
   pinId: number;
   board: number;
   distanceFt: number;
+  /** True once this pin has passed its own server-recorded threshold
+   * crossing. Drawn with the limited knocked-down glyph at its recorded
+   * position — it is not removed, moved, or animated falling. */
+  thresholdCrossed: boolean;
 }
 
 export interface SceneBall {
@@ -101,7 +104,26 @@ export interface LaneScene {
   showEntryMarker: boolean;
 }
 
-function pinsFromPositions(positions: readonly ReplayLanePosition[]): ScenePin[] {
+/**
+ * Which pins have passed their server-recorded crossing by `tS`.
+ *
+ * The only arithmetic is `step_index * dt_s`, both already validated, which
+ * is the one derivation the contract permits. Nothing consults a position.
+ */
+function crossedByTime(replay: CollisionReplayResponse, tS: number): Set<number> {
+  const crossed = new Set<number>();
+  for (const crossing of replay.threshold_crossings ?? []) {
+    if (crossing.step_index * replay.dt_s <= tS) {
+      crossed.add(crossing.pin_id);
+    }
+  }
+  return crossed;
+}
+
+function pinsFromPositions(
+  positions: readonly ReplayLanePosition[],
+  crossed: ReadonlySet<number>,
+): ScenePin[] {
   // The ball is excluded here and re-added as `ball`, so a scene can never
   // end up drawing it twice or labelling it as a pin.
   return positions
@@ -110,6 +132,7 @@ function pinsFromPositions(positions: readonly ReplayLanePosition[]): ScenePin[]
       pinId: position.bodyId,
       board: position.board,
       distanceFt: position.distanceFt,
+      thresholdCrossed: crossed.has(position.bodyId),
     }));
 }
 
@@ -143,7 +166,10 @@ export function buildLaneScene(
     // Only what the solver recorded, at the timestamp asked for.
     const positions = replayPositionsAt(replay, phase.tS);
     return {
-      pins: { source: 'replay', bodies: pinsFromPositions(positions) },
+      pins: {
+        source: 'replay',
+        bodies: pinsFromPositions(positions, crossedByTime(replay, phase.tS)),
+      },
       ball: ballFromPositions(positions),
       pathProgress: 1,
       showEntryMarker: false,
@@ -157,8 +183,14 @@ export function buildLaneScene(
       // With a playable replay the approach already shows the rack this
       // throw is about to hit — frame 0, the same bodies deck `t=0` will
       // resolve to. Without one, the static rack, exactly as before.
+      // Frame 0 is before any stepping, so no crossing has happened yet —
+      // `crossedByTime(replay, 0)` is empty and every pin draws standing,
+      // exactly as it did before v4.
       pins: replay
-        ? { source: 'replay', bodies: pinsFromPositions(replayPositionsAt(replay, 0)) }
+        ? {
+            source: 'replay',
+            bodies: pinsFromPositions(replayPositionsAt(replay, 0), crossedByTime(replay, 0)),
+          }
         : { source: 'rack', standingPinIds },
       ball: { board: position.board, distanceFt: position.distanceFt },
       pathProgress: progress,

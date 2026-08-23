@@ -88,6 +88,10 @@ function replay(): CollisionReplayResponse {
     sample_every_steps: 20,
     steps_taken: 4000,
     frames,
+    // No pins in this fixture, so nothing crosses -- the controller never
+    // reads crossings anyway; playback timing is cadence- and
+    // event-independent.
+    threshold_crossings: [],
   };
 }
 
