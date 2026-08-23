@@ -125,6 +125,12 @@ from app.physics.pin_deck import (
 )
 from app.physics.pinfall import PinfallModel, PinfallResult
 from app.physics.rack import validate_pin_ids
+from app.physics.replay import (
+    MAX_REPLAY_FRAMES,
+    REPLAY_SAMPLE_EVERY_STEPS,
+    CollisionReplay,
+    _ReplayRecorder,
+)
 from app.physics.units import IN_PER_FT, mph_to_in_per_s, weight_lbf_to_mass_blob
 
 COLLISION_DT_S = 0.0005
@@ -215,6 +221,21 @@ def _resolve_pair(a: _Body, b: _Body) -> None:
     b.y_in += ny * penetration * (a.mass_blob / total_mass)
 
 
+@dataclass(frozen=True)
+class _CollisionRun:
+    """Everything one internal run produced. A detail of this module, not a
+    public return type — `simulate_collision` still returns its original
+    plain tuple, and `PlanarCollisionPinfallModel` reaches for the replay
+    through `_simulate_collision_detail` instead of changing that."""
+
+    fallen_pin_ids: tuple[int, ...]
+    steps_taken: int
+    # None exactly when no run happened (non-positive speed, or an empty
+    # validated rack). A replay of a run that never occurred would be an
+    # invented collision; absence says so honestly.
+    replay: CollisionReplay | None
+
+
 def simulate_collision(impact: ImpactState, standing_ids: Iterable[int] | None = None):
     """Runs the fixed-timestep collision simulation for one impact.
 
@@ -237,6 +258,28 @@ def simulate_collision(impact: ImpactState, standing_ids: Iterable[int] | None =
     overlapping. Validation of `standing_ids` happens first, before that
     (or any other) short circuit — an invalid selection raises regardless
     of whether the ball could physically have hit anything.
+
+    This is the stable public entry point and its tuple return shape is
+    unchanged. Callers that also want replay frames use
+    `_simulate_collision_detail`, which runs the identical solver.
+    """
+    run = _simulate_collision_detail(impact, standing_ids=standing_ids, record_replay=False)
+    return run.fallen_pin_ids, run.steps_taken
+
+
+def _simulate_collision_detail(
+    impact: ImpactState,
+    standing_ids: Iterable[int] | None = None,
+    *,
+    record_replay: bool = False,
+) -> _CollisionRun:
+    """The actual solver, plus optional passive replay recording.
+
+    `record_replay=False` reproduces `simulate_collision`'s behavior
+    exactly. Recording only reads body positions at a fixed step cadence
+    and appends immutable frames — it never touches timestep, damping,
+    impulse, restitution, the fall threshold, or termination, so both
+    modes compute byte-identical fallen IDs and step counts.
     """
     # None keeps the pre-selection default (every pin); anything else is
     # routed through the same validation Rack itself uses, raising the
@@ -248,10 +291,15 @@ def simulate_collision(impact: ImpactState, standing_ids: Iterable[int] | None =
     # whether the ball could physically hit anything.
     standing_set = ALL_PIN_IDS if standing_ids is None else validate_pin_ids(standing_ids)
 
+    # Both no-run cases return `replay=None` rather than a single-frame
+    # replay: no collision happened, and fabricating bodies for one would
+    # be inventing a scene the solver never simulated. Validation above
+    # still runs first, so an invalid rack raises before either.
     if impact.speed_mph <= 0.0:
-        return (), 0
+        return _CollisionRun(fallen_pin_ids=(), steps_taken=0, replay=None)
     if not standing_set:
-        return (), 0  # nothing to fall — a valid no-op, not an error
+        # nothing to fall — a valid no-op, not an error
+        return _CollisionRun(fallen_pin_ids=(), steps_taken=0, replay=None)
 
     speed_in_s = mph_to_in_per_s(impact.speed_mph)
     heading_rad = math.radians(impact.heading_deg)
@@ -286,6 +334,19 @@ def simulate_collision(impact: ImpactState, standing_ids: Iterable[int] | None =
     bodies = [ball] + pins
     damping_factor = max(0.0, 1.0 - LINEAR_DAMPING_PER_S * COLLISION_DT_S)
 
+    recorder = (
+        _ReplayRecorder(
+            dt_s=COLLISION_DT_S,
+            sample_every_steps=REPLAY_SAMPLE_EVERY_STEPS,
+            max_frames=MAX_REPLAY_FRAMES,
+        )
+        if record_replay
+        else None
+    )
+    if recorder is not None:
+        # The initial frame: bodies as placed, before any stepping.
+        recorder.capture(0, bodies)
+
     steps_taken = 0
     for step in range(MAX_COLLISION_STEPS):
         steps_taken = step + 1
@@ -304,11 +365,17 @@ def simulate_collision(impact: ImpactState, standing_ids: Iterable[int] | None =
             if not pin.fell and pin.displacement_in() >= FALL_DISPLACEMENT_THRESHOLD_IN:
                 pin.fell = True
 
+        # Read-only sampling, after this step's physics has fully settled.
+        # Nothing below influences the loop's own state or termination.
+        if recorder is not None and recorder.should_capture(steps_taken):
+            recorder.capture(steps_taken, bodies)
+
         if all(body.speed_in_s() < SETTLE_SPEED_IN_S for body in bodies):
             break
 
     fallen_ids = tuple(sorted(pin.pin_id for pin in pins if pin.fell))
-    return fallen_ids, steps_taken
+    replay = recorder.finish(steps_taken, bodies) if recorder is not None else None
+    return _CollisionRun(fallen_pin_ids=fallen_ids, steps_taken=steps_taken, replay=replay)
 
 
 class PlanarCollisionPinfallModel(PinfallModel):
@@ -338,19 +405,26 @@ class PlanarCollisionPinfallModel(PinfallModel):
         )
 
         if abs(impact.lateral_position_in) >= GUTTER_ABS_LATERAL_IN:
+            # A gutter ball never reaches the deck, so no run happens and
+            # there is nothing to replay — `replay=None`, not an empty or
+            # fabricated one.
             return PinfallResult(
                 pins_knocked=0,
                 model_id=self.model_id,
                 limitations=self.LIMITATIONS,
                 fallen_pin_ids=(),
+                replay=None,
             )
 
-        fallen_ids, _steps_taken = simulate_collision(impact, standing_ids=validated_standing_ids)
+        run = _simulate_collision_detail(
+            impact, standing_ids=validated_standing_ids, record_replay=True
+        )
         return PinfallResult(
-            pins_knocked=len(fallen_ids),
+            pins_knocked=len(run.fallen_pin_ids),
             model_id=self.model_id,
             limitations=self.LIMITATIONS,
-            fallen_pin_ids=fallen_ids,
+            fallen_pin_ids=run.fallen_pin_ids,
+            replay=run.replay,
         )
 
 

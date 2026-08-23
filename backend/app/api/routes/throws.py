@@ -17,10 +17,13 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.routes.games import snapshot_to_game_state, truncated_trajectory_http_error
+from app.api.routes.games import (
+    pinfall_to_response,
+    snapshot_to_game_state,
+    truncated_trajectory_http_error,
+)
 from app.games.service import GameCompleteError, default_game_service
 from app.models.schemas import (
-    PinfallInfo,
     ReleaseValues,
     ThrowRequest,
     ThrowResponse,
@@ -82,11 +85,7 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
         entry_angle_deg=result.entry_angle_deg,
         speed_at_pins_mph=result.speed_at_pins_mph,
         pins_knocked=pinfall.pins_knocked,
-        pinfall=PinfallInfo(
-            model_id=pinfall.model_id,
-            limitations=pinfall.limitations,
-            fallen_pin_ids=list(pinfall.fallen_pin_ids),
-        ),
+        pinfall=pinfall_to_response(pinfall),
         lane_condition_version=result.lane_condition_version,
         game_state=snapshot_to_game_state(snapshot),
     )

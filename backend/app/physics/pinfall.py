@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 from app.physics.impact import ImpactState
 from app.physics.pin_deck import GUTTER_ABS_LATERAL_IN, LANE_CENTER_BOARD
+from app.physics.replay import CollisionReplay
 from app.physics.units import BOARD_WIDTH_IN
 
 
@@ -37,6 +38,19 @@ class PinfallResult:
     # pins_knocked == len(fallen_pin_ids) across every implementation, only
     # ones that actually resolve individual pins.
     fallen_pin_ids: tuple = ()
+    # Bounded frame-by-frame playback of a run that actually happened, for
+    # a client to animate (see app/physics/replay.py). Additive and
+    # optional: `None` means no replay is available, which is the honest
+    # answer for a model that doesn't simulate bodies at all (the
+    # heuristic) and for a planar case where no run occurred — a gutter
+    # miss, a non-positive impact speed, or an empty validated rack.
+    # Absence is never a failure; it says no collision was simulated.
+    # `pins_knocked`/`fallen_pin_ids` are unaffected either way.
+    #
+    # Importing the concrete type is safe in this direction: `replay` has no
+    # imports of its own from this package, and `collision` imports both of
+    # us — so this states the real type instead of a bare `object`.
+    replay: CollisionReplay | None = None
 
 
 class PinfallModel(ABC):

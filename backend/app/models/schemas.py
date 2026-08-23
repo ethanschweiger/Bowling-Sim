@@ -73,6 +73,57 @@ class TrajectoryPointResponse(BaseModel):
     board: float
 
 
+class ReplayBodyResponse(BaseModel):
+    """One body's position at one instant of a collision replay.
+
+    Coordinates are inches in the same frame `app/physics/pin_deck.py`
+    uses: `x_in` lateral from lane center, positive toward higher board
+    numbers (the bowler's left); `y_in` downlane from the headpin plane,
+    which is y=0, increasing toward the back of the deck.
+    """
+
+    body_id: int  # 0 = ball; otherwise the pin's own 1-10 id
+    x_in: float
+    y_in: float
+
+
+class ReplayFrameResponse(BaseModel):
+    """All participating bodies at one simulation timestamp.
+
+    `t_s` is seconds of *simulation* time since impact — solver steps times
+    the fixed timestep, not wall-clock and not tied to browser paint rate.
+    It increases strictly across a replay's frames.
+    """
+
+    t_s: float
+    bodies: list[ReplayBodyResponse] = Field(default_factory=list)
+
+
+class CollisionReplayResponse(BaseModel):
+    """Bounded, deterministic playback of a planar collision run.
+
+    Present only when a run actually happened. See `PinfallInfo.replay`
+    for when it's absent, and `app/physics/replay.py` for the recording
+    cadence, frame bound, and coordinate/time conventions.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    # Names the replay *shape/semantics*, distinct from `PinfallInfo.model_id`
+    # which names the model that resolved the pins. Stamped so a future
+    # solver can't silently reinterpret data recorded by this one.
+    model_version: str
+    dt_s: float
+    sample_every_steps: int
+    steps_taken: int
+    frames: list[ReplayFrameResponse] = Field(default_factory=list)
+
+
+# Same Pydantic/Python-3.9 constraint as `NullableInt` above, for an
+# optional nested model rather than an int.
+NullableReplay = Optional.__getitem__(CollisionReplayResponse)
+
+
 class PinfallInfo(BaseModel):
     """Which pinfall model produced `pins_knocked`, and its honest
     limitations — added so swapping in a different pinfall model later is
@@ -90,6 +141,12 @@ class PinfallInfo(BaseModel):
     # default needs default_factory, not a bare `[]`, so every response
     # gets its own list rather than one shared across instances.
     fallen_pin_ids: list[int] = Field(default_factory=list)
+    # Null whenever no collision run was simulated: the heuristic model
+    # (which has no bodies at all), a gutter miss, a non-positive impact
+    # speed, or an empty validated rack. Never a fabricated single-frame
+    # scene for a collision that didn't happen. Additive — `pins_knocked`
+    # and `fallen_pin_ids` are unchanged whether this is present or not.
+    replay: NullableReplay = None
 
 
 class FrameStateResponse(BaseModel):

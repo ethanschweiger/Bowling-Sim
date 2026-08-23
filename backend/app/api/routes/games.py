@@ -21,6 +21,7 @@ from app.games.service import (
     default_game_service,
 )
 from app.models.schemas import (
+    CollisionReplayResponse,
     CreateGameRequest,
     CreateGameResponse,
     FrameStateResponse,
@@ -30,6 +31,8 @@ from app.models.schemas import (
     GameThrowResponse,
     PinfallInfo,
     ReleaseValues,
+    ReplayBodyResponse,
+    ReplayFrameResponse,
     ThrowRequest,
     TrajectoryPointResponse,
 )
@@ -66,6 +69,45 @@ def truncated_trajectory_http_error() -> HTTPException:
     complete this attempt and a retry is reasonable.
     """
     return HTTPException(status_code=503, detail=TRUNCATED_TRAJECTORY_DETAIL)
+
+
+def pinfall_to_response(pinfall: object) -> PinfallInfo:
+    """The one place a domain `PinfallResult` turns into the API's
+    `PinfallInfo` shape — used by both throw routes (game-scoped and the
+    deprecated legacy one), so the serialized contract can't drift between
+    them. Pure mapping over already-immutable data.
+
+    A `replay` of `None` stays `None`: no collision was simulated (the
+    heuristic model, a gutter miss, a non-positive speed, or an empty
+    rack), and inventing frames for one would describe a scene the solver
+    never produced.
+    """
+    replay = getattr(pinfall, "replay", None)
+    return PinfallInfo(
+        model_id=pinfall.model_id,
+        limitations=pinfall.limitations,
+        fallen_pin_ids=list(pinfall.fallen_pin_ids),
+        replay=(
+            None
+            if replay is None
+            else CollisionReplayResponse(
+                model_version=replay.model_version,
+                dt_s=replay.dt_s,
+                sample_every_steps=replay.sample_every_steps,
+                steps_taken=replay.steps_taken,
+                frames=[
+                    ReplayFrameResponse(
+                        t_s=frame.t_s,
+                        bodies=[
+                            ReplayBodyResponse(body_id=b.body_id, x_in=b.x_in, y_in=b.y_in)
+                            for b in frame.bodies
+                        ],
+                    )
+                    for frame in replay.frames
+                ],
+            )
+        ),
+    )
 
 
 def snapshot_to_game_state(snapshot: GameStateSnapshot) -> GameStateResponse:
@@ -172,11 +214,7 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
         entry_angle_deg=result.entry_angle_deg,
         speed_at_pins_mph=result.speed_at_pins_mph,
         pins_knocked=pinfall.pins_knocked,
-        pinfall=PinfallInfo(
-            model_id=pinfall.model_id,
-            limitations=pinfall.limitations,
-            fallen_pin_ids=list(pinfall.fallen_pin_ids),
-        ),
+        pinfall=pinfall_to_response(pinfall),
         lane_condition_version=result.lane_condition_version,
         game_state=snapshot_to_game_state(snapshot),
     )
