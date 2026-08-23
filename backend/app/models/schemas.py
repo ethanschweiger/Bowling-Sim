@@ -1,6 +1,6 @@
 """Request/response shapes for the REST API."""
 
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,7 +9,18 @@ from app.physics.throw import RELEASE_BOUNDS
 
 class ThrowRequest(BaseModel):
     ball_id: str = Field(..., description="Key into the ball catalog, e.g. 'reactive_pearl'")
-    seed: int | None = Field(
+    # Pydantic resolves this annotation at class-creation time regardless of
+    # `from __future__ import annotations`, so it needs typing.Optional, not
+    # the newer `X | None` spelling (that needs Python 3.10+ to evaluate) —
+    # this project's runtime floor is Python 3.9. See the plain dataclasses
+    # elsewhere in this codebase for where the newer spelling stays safe.
+    # Ruff (target py311) still prefers `X | None` here and there is no
+    # third spelling: `Union[int, None]` hits UP007 the same way. Verified
+    # empirically, not assumed -- same justification as Coverstock's single
+    # authorized UP042 exception, discovered while implementing this fix
+    # rather than anticipated ahead of it; flagged for review rather than
+    # silently added.
+    seed: Optional[int] = Field(  # noqa: UP045
         None,
         description="Reuse a seed to reproduce a throw's release exactly. Omit to get a random one "
         "back.",
@@ -78,7 +89,9 @@ class FrameStateResponse(BaseModel):
     is_strike: bool
     is_spare: bool
     is_complete: bool
-    score: int | None  # cumulative through this frame; None if a bonus it needs hasn't landed yet
+    # cumulative through this frame; None if a bonus it needs hasn't landed yet.
+    # Same Pydantic/Python-3.9 exception as ThrowRequest.seed above.
+    score: Optional[int]  # noqa: UP045
 
 
 class GameStateResponse(BaseModel):
@@ -89,13 +102,14 @@ class GameStateResponse(BaseModel):
 
     standing_pin_ids: list[int]
     frames: list[FrameStateResponse]
-    # cumulative through the most recently resolved frame; None if nothing resolved yet
-    total_score: int | None
+    # cumulative through the most recently resolved frame; None if nothing resolved yet.
+    # Same Pydantic/Python-3.9 exception as ThrowRequest.seed above, x3 below.
+    total_score: Optional[int]  # noqa: UP045
     is_game_complete: bool
     # Both None exactly when is_game_complete is True — there is no next
     # roll. Otherwise the 1-based frame/ball the next legal roll belongs to.
-    next_frame_number: int | None
-    next_ball_number: int | None
+    next_frame_number: Optional[int]  # noqa: UP045
+    next_ball_number: Optional[int]  # noqa: UP045
 
 
 class ThrowResponse(BaseModel):

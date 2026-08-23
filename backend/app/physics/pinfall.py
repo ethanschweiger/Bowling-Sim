@@ -13,6 +13,10 @@ below is a pure function of its input; `PlanarCollisionPinfallModel`
 applying a formula.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass

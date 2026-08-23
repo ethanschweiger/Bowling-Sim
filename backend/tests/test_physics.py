@@ -11,6 +11,27 @@ THROW = Throw(
 )
 
 
+def test_coverstock_keeps_its_str_enum_mixin_string_behavior():
+    """Pins the `str, Enum` behavior `app/physics/ball.py` deliberately keeps
+    instead of `enum.StrEnum` (see its `# noqa: UP042`): `str()` uses Enum's
+    own default (`"Coverstock.REACTIVE"`, not the plain value) while
+    equality/`.value`/`isinstance` against a plain string still hold.
+    `enum.StrEnum` would change `str()` silently -- this is what would catch
+    that regression, not just a comment.
+
+    Deliberately does NOT assert `format()`/f-string output: CPython 3.11
+    changed how a plain (non-ReprEnum) `str, Enum` mixin formats -- 'reactive'
+    on 3.9, 'Coverstock.REACTIVE' on 3.11 -- for any such class, independent
+    of this file's choices. Nothing in this codebase formats a Coverstock
+    value, so that difference has no production effect; asserting a specific
+    side of it here would make this test fail on whichever Python version
+    it wasn't written against, in a project that now has to run both."""
+    assert str(Coverstock.REACTIVE) == "Coverstock.REACTIVE"
+    assert Coverstock.REACTIVE == "reactive"
+    assert Coverstock.REACTIVE.value == "reactive"
+    assert isinstance(Coverstock.REACTIVE, str)
+
+
 def test_plastic_ball_hooks_less_than_a_comparable_reactive_ball():
     plastic = Ball(id="p", name="plastic-test", coverstock=Coverstock.PLASTIC, **BASE_BALL_SPECS)
     reactive = Ball(id="r", name="reactive-test", coverstock=Coverstock.REACTIVE, **BASE_BALL_SPECS)

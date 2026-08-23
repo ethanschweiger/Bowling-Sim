@@ -36,6 +36,26 @@ from tests.trajectory_fixture import (
 LANE_CENTER_BOARD = 20.0
 
 
+def _paired(*iterables):
+    """Iterate several iterables in lockstep, stopping at the shortest --
+    the explicit, 3.9-safe equivalent of `zip(..., strict=False)`. Python's
+    own `strict` keyword to `zip()` needs 3.10+, one minor version above
+    this project's runtime floor, and there's no annotation to defer here
+    (it's a real call, not a type) so `from __future__ import annotations`
+    doesn't help. Deliberately doesn't call `zip()` at all -- a wrapper
+    that just forwarded to a bare `zip()` would still be exactly the
+    implicit-length call Ruff's B905 flags, one layer down."""
+    iterators = [iter(iterable) for iterable in iterables]
+    while True:
+        values = []
+        for iterator in iterators:
+            try:
+                values.append(next(iterator))
+            except StopIteration:
+                return
+        yield tuple(values)
+
+
 # --- The right-handed pocket line ---------------------------------------
 
 
@@ -254,7 +274,7 @@ def test_axis_rotation_is_a_continuum_across_its_whole_range():
 
     assert entries == sorted(entries), entries
     assert headings == sorted(headings), headings
-    for a, b in zip(headings, headings[1:], strict=False):
+    for a, b in _paired(headings, headings[1:]):
         assert b - a > 0.05, f"rotations too close to distinguish: {headings}"
 
 
@@ -345,7 +365,7 @@ def test_axis_tilt_delays_the_hook_without_forbidding_it():
     tilts = [0.0, 30.0, 60.0, RELEASE_BOUNDS["axis_tilt"][1]]
     runs = [run(t) for t in tilts]
 
-    for tilt, result in zip(tilts, runs, strict=False):
+    for tilt, result in _paired(tilts, runs):
         # No tilt value suppresses hook entirely: the heading always turns
         # substantially back toward higher boards from where it launched.
         developed = result.terminal.heading_deg - launch_angle
@@ -421,7 +441,7 @@ def test_launch_position_shifts_the_whole_route_laterally():
 
     # Every recorded sample is offset by very nearly the same amount — this
     # is a translation of the route, not a change to its shape.
-    for a, b in zip(near.path, far.path, strict=False):
+    for a, b in _paired(near.path, far.path):
         assert a.distance_ft == b.distance_ft
         assert abs((b.board - a.board) - board_gap) < 0.75, (a, b)
 

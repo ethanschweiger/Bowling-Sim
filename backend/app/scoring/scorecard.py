@@ -39,6 +39,10 @@ unresolved, every later frame's cumulative score is `None` too — a
 running total can't skip past a gap.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 FRAME_COUNT = 10
@@ -163,7 +167,7 @@ def _layout(rolls: list) -> list:
     return frames
 
 
-def _own_points(raw: "_RawFrame", rolls: list, is_last_frame: bool) -> int | None:
+def _own_points(raw: _RawFrame, rolls: list, is_last_frame: bool) -> int | None:
     """This frame's own point contribution (not cumulative), or None if a
     strike/spare bonus it needs hasn't been thrown yet. Frame 10 is
     self-contained — its bonus balls are already inside raw.rolls, so it

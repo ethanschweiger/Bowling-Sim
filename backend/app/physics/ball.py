@@ -18,10 +18,25 @@ milestone, both documented rather than silently dropped:
 """
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 
 
-class Coverstock(StrEnum):
+# Ruff's UP042 (target py311) suggests `enum.StrEnum` here. Deliberately
+# not used: StrEnum needs Python 3.11 — one minor version above this
+# project's Python 3.9 floor — and it isn't a drop-in swap even where the
+# interpreter allows it: StrEnum overrides __str__ to always return the
+# plain value ("reactive"), while this str+Enum mixin keeps Enum's default
+# __str__ ("Coverstock.REACTIVE") on every Python version this project
+# supports. Switching would be a silent, real behavior change, not a
+# spelling update. No behavior-preserving, 3.9-safe rewrite satisfies
+# UP042 for this declaration — see test_physics.py's regression pinning
+# the exact str() behavior (deliberately not format()/f-strings, which a
+# plain str+Enum mixin spells differently on 3.9 vs. 3.11 regardless of
+# anything here; nothing in this codebase formats a Coverstock value).
+# This and the five Optional[int] cases in app/models/schemas.py are the
+# only noqa exceptions on the whole baseline; each is individually
+# documented at its own declaration.
+class Coverstock(str, Enum):  # noqa: UP042
     PLASTIC = "plastic"       # spares balls — near-zero hook
     URETHANE = "urethane"     # smooth, predictable arc
     REACTIVE = "reactive"     # strong, sudden backend motion

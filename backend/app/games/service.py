@@ -79,6 +79,10 @@ for read-only callers (game creation, the `GET` endpoint) that aren't
 mid-mutation.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 import threading
 import uuid
 from collections.abc import Callable

@@ -2,6 +2,16 @@
 error that shows up even when a bowler is trying to repeat a shot exactly.
 """
 
+# Keeps the modern `X | None` annotation spelling usable on this project's
+# Python 3.9 runtime floor: with this import, annotations are never
+# evaluated at class/function-definition time, only read as strings (by
+# a human, or by an explicit `typing.get_type_hints` call this codebase
+# never makes) — so the `|` operator here doesn't need Python 3.10's
+# support for it on plain types. Pydantic models are the one exception:
+# they resolve annotations eagerly regardless of this import, so
+# app/models/schemas.py still spells optional fields with typing.Optional.
+from __future__ import annotations
+
 import random
 from dataclasses import dataclass, replace
 

@@ -22,6 +22,10 @@ from. See `app.games.service` for the game-scoped owner of one `LaneSession`
 per game, including reset back to that game's own starting condition.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 import threading
 from collections.abc import Callable
 

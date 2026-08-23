@@ -105,6 +105,10 @@ that same normal so overlaps don't persist step to step. Nothing here
 calls a random-number generator.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass

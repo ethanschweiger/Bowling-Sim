@@ -82,6 +82,10 @@ is a separate step (`app.physics.lane.apply_wear`), applied atomically
 alongside this call by `LaneSession.run_throw`.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass
 
