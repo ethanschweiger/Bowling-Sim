@@ -17,8 +17,8 @@ itself, which is always a real `frozenset` and so has no mutating methods
 to call) can never change a `Rack` that already exists.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import FrozenSet, Iterable
 
 from app.physics.pin_deck import ALL_PIN_IDS
 
@@ -37,7 +37,7 @@ class RackError(Exception):
     """
 
 
-def validate_pin_ids(ids: Iterable[int]) -> FrozenSet[int]:
+def validate_pin_ids(ids: Iterable[int]) -> frozenset[int]:
     """Canonicalizes an arbitrary iterable of candidate pin IDs into an
     owned, validated `frozenset`. See `RackError` for exactly what's
     rejected. Used by `Rack` itself and by the planar collision model's
@@ -47,7 +47,7 @@ def validate_pin_ids(ids: Iterable[int]) -> FrozenSet[int]:
     try:
         candidates = list(ids)
     except TypeError:
-        raise RackError(f"pin IDs must come from an iterable, got {ids!r}")
+        raise RackError(f"pin IDs must come from an iterable, got {ids!r}") from None
 
     seen: set = set()
     for pin_id in candidates:
@@ -63,7 +63,7 @@ def validate_pin_ids(ids: Iterable[int]) -> FrozenSet[int]:
 
 @dataclass(frozen=True)
 class Rack:
-    standing_ids: FrozenSet[int]
+    standing_ids: frozenset[int]
 
     def __post_init__(self) -> None:
         # Canonicalize whatever was passed in — even a plain, currently-

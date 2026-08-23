@@ -14,8 +14,8 @@ applying a formula.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
 from app.physics.impact import ImpactState
 from app.physics.pin_deck import GUTTER_ABS_LATERAL_IN, LANE_CENTER_BOARD
@@ -55,7 +55,9 @@ class PinfallModel(ABC):
     model_id: str
 
     @abstractmethod
-    def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult: ...
+    def resolve(
+        self, impact: ImpactState, *, standing_ids: Iterable[int] | None = None
+    ) -> PinfallResult: ...
 
 
 # The pocket (board 17.5, the 1-3 pocket for a right-handed bowler),
@@ -89,7 +91,9 @@ class EntryAngleHeuristicPinfallModel(PinfallModel):
         "the formula has no notion of which specific pins remain."
     )
 
-    def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult:
+    def resolve(
+        self, impact: ImpactState, *, standing_ids: Iterable[int] | None = None
+    ) -> PinfallResult:
         return PinfallResult(
             pins_knocked=self._pins_knocked(impact),
             model_id=self.model_id,

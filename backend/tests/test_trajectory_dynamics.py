@@ -24,8 +24,7 @@ from app.physics.simulate import (
     step_cap_for,
 )
 from app.physics.throw import RELEASE_BOUNDS, Throw, sample_release
-from app.physics.units import ft_to_boards, fps_to_mph, mph_to_fps, rpm_to_rad_per_s
-
+from app.physics.units import fps_to_mph, ft_to_boards, mph_to_fps, rpm_to_rad_per_s
 from tests.trajectory_fixture import (
     DIAGNOSTIC_BALL_ID,
     DIAGNOSTIC_REQUEST,
@@ -94,7 +93,9 @@ def test_the_heads_are_essentially_straight_and_the_back_end_is_not():
     hook_linearity = trace.max_deviation_from_straight(30.0, 60.0)
 
     # Through the oiled heads the path barely departs from a straight line.
-    assert skid_linearity < 0.10, f"heads should skid straight, deviated {skid_linearity:.3f} boards"
+    assert skid_linearity < 0.10, (
+        f"heads should skid straight, deviated {skid_linearity:.3f} boards"
+    )
     # Past the pattern it clearly does.
     assert hook_linearity > skid_linearity * 3
 
@@ -196,7 +197,8 @@ def _initial_lateral_slip(ball, throw):
 def _late_slope(result):
     breakpoint = min(result.path, key=lambda p: p.board)
     assert breakpoint.distance_ft < result.terminal.distance_ft
-    return (result.path[-1].board - breakpoint.board) / (result.path[-1].distance_ft - breakpoint.distance_ft)
+    last = result.path[-1]
+    return (last.board - breakpoint.board) / (last.distance_ft - breakpoint.distance_ft)
 
 
 def test_axis_rotation_sets_how_much_hook_is_available():
@@ -252,7 +254,7 @@ def test_axis_rotation_is_a_continuum_across_its_whole_range():
 
     assert entries == sorted(entries), entries
     assert headings == sorted(headings), headings
-    for a, b in zip(headings, headings[1:]):
+    for a, b in zip(headings, headings[1:], strict=False):
         assert b - a > 0.05, f"rotations too close to distinguish: {headings}"
 
 
@@ -343,7 +345,7 @@ def test_axis_tilt_delays_the_hook_without_forbidding_it():
     tilts = [0.0, 30.0, 60.0, RELEASE_BOUNDS["axis_tilt"][1]]
     runs = [run(t) for t in tilts]
 
-    for tilt, result in zip(tilts, runs):
+    for tilt, result in zip(tilts, runs, strict=False):
         # No tilt value suppresses hook entirely: the heading always turns
         # substantially back toward higher boards from where it launched.
         developed = result.terminal.heading_deg - launch_angle
@@ -410,12 +412,16 @@ def test_launch_position_shifts_the_whole_route_laterally():
     ball = BALL_CATALOG["reactive_pearl"]
     board_gap = 5.0
 
-    near = simulate_throw(ball, Throw(launch_position=25.0, launch_angle=-1.5, axis_rotation=0.0), lane)
-    far = simulate_throw(ball, Throw(launch_position=25.0 + board_gap, launch_angle=-1.5, axis_rotation=0.0), lane)
+    near = simulate_throw(
+        ball, Throw(launch_position=25.0, launch_angle=-1.5, axis_rotation=0.0), lane
+    )
+    far = simulate_throw(
+        ball, Throw(launch_position=25.0 + board_gap, launch_angle=-1.5, axis_rotation=0.0), lane
+    )
 
     # Every recorded sample is offset by very nearly the same amount — this
     # is a translation of the route, not a change to its shape.
-    for a, b in zip(near.path, far.path):
+    for a, b in zip(near.path, far.path, strict=False):
         assert a.distance_ft == b.distance_ft
         assert abs((b.board - a.board) - board_gap) < 0.75, (a, b)
 
@@ -432,7 +438,9 @@ def test_launch_angle_changes_initial_direction():
     ball = BALL_CATALOG["reactive_pearl"]
 
     def early_slope(angle):
-        result = simulate_throw(ball, Throw(launch_position=20.0, launch_angle=angle, axis_rotation=0.0), lane)
+        result = simulate_throw(
+            ball, Throw(launch_position=20.0, launch_angle=angle, axis_rotation=0.0), lane
+        )
         sample = min(result.path, key=lambda p: abs(p.distance_ft - 2.0))
         return (sample.board - result.path[0].board) / sample.distance_ft
 
@@ -459,13 +467,17 @@ def test_speed_changes_terminal_state_with_units_preserved():
 
     terminals = []
     for speed in requested_speeds:
-        result = simulate_throw(ball, Throw(launch_position=28.0, launch_angle=-1.5, speed_mph=speed), lane)
+        result = simulate_throw(
+            ball, Throw(launch_position=28.0, launch_angle=-1.5, speed_mph=speed), lane
+        )
         terminal_speed = result.terminal.speed_mph
 
         # Friction only ever removes forward speed in this model, and never
         # by an implausible amount over one 60 ft lane.
         assert 0.0 < terminal_speed < speed
-        assert speed - terminal_speed < 3.0, "one lane's friction should not bleed off more than a few mph"
+        assert speed - terminal_speed < 3.0, (
+            "one lane's friction should not bleed off more than a few mph"
+        )
 
         # Round-tripping through the same conversion the simulator itself
         # uses must reproduce the value exactly — proof this is genuinely
@@ -523,7 +535,9 @@ def test_refining_the_integration_step_does_not_move_the_answer(fine_step):
     coarse = simulate_throw(ball, sampled, lane)
     fine = simulate_throw(ball, sampled, lane, step_ft=fine_step)
 
-    assert abs(fine.terminal.board - coarse.terminal.board) < 0.25, "endpoint should be step-independent"
+    assert abs(fine.terminal.board - coarse.terminal.board) < 0.25, (
+        "endpoint should be step-independent"
+    )
     assert abs(fine.terminal.heading_deg - coarse.terminal.heading_deg) < 0.25
     # And the qualitative shape is unchanged.
     assert fine.terminal.heading_deg > 0
@@ -543,7 +557,9 @@ def test_the_path_has_no_single_sample_kink():
     changes = [abs(slopes[i + 1] - slopes[i]) for i in range(len(slopes) - 1)]
     largest = max(changes)
     median = sorted(changes)[len(changes) // 2]
-    assert largest < median * 12 + 1e-6, f"one sample turned much harder than its neighbours ({largest:.4f})"
+    assert largest < median * 12 + 1e-6, (
+        f"one sample turned much harder than its neighbours ({largest:.4f})"
+    )
 
 
 def test_returned_path_stays_bounded_even_at_a_fine_integration_step():

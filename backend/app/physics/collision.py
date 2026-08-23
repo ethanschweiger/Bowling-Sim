@@ -106,8 +106,8 @@ calls a random-number generator.
 """
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
 from app.physics.impact import ImpactState
 from app.physics.pin_deck import (
@@ -211,7 +211,7 @@ def _resolve_pair(a: _Body, b: _Body) -> None:
     b.y_in += ny * penetration * (a.mass_blob / total_mass)
 
 
-def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]] = None):
+def simulate_collision(impact: ImpactState, standing_ids: Iterable[int] | None = None):
     """Runs the fixed-timestep collision simulation for one impact.
 
     `standing_ids` restricts which pins exist in the simulation at all —
@@ -321,17 +321,24 @@ class PlanarCollisionPinfallModel(PinfallModel):
         "entry-angle heuristic, not a claim to real pin-deck fidelity."
     )
 
-    def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult:
+    def resolve(
+        self, impact: ImpactState, *, standing_ids: Iterable[int] | None = None
+    ) -> PinfallResult:
         # Validated before the gutter check (or any other short circuit)
         # below: an invalid selection must raise even for an impact that
         # never could have hit a pin anyway. `simulate_collision` also
         # validates independently, since it can be called directly without
         # going through resolve() at all — this isn't relying on that.
-        validated_standing_ids = ALL_PIN_IDS if standing_ids is None else validate_pin_ids(standing_ids)
+        validated_standing_ids = (
+            ALL_PIN_IDS if standing_ids is None else validate_pin_ids(standing_ids)
+        )
 
         if abs(impact.lateral_position_in) >= GUTTER_ABS_LATERAL_IN:
             return PinfallResult(
-                pins_knocked=0, model_id=self.model_id, limitations=self.LIMITATIONS, fallen_pin_ids=()
+                pins_knocked=0,
+                model_id=self.model_id,
+                limitations=self.LIMITATIONS,
+                fallen_pin_ids=(),
             )
 
         fallen_ids, _steps_taken = simulate_collision(impact, standing_ids=validated_standing_ids)

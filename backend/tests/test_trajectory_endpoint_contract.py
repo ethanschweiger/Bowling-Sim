@@ -9,6 +9,7 @@ model consumed could therefore differ by a rounding step. These tests
 pin that contract down so it can't silently regress.
 """
 
+import dataclasses
 import math
 
 import pytest
@@ -32,7 +33,6 @@ from app.physics.simulate import (
 )
 from app.physics.throw import RELEASE_BOUNDS, Throw
 from app.physics.units import BOARD_WIDTH_IN, boards_to_in
-
 from tests.trajectory_fixture import trace_diagnostic_throw
 
 # `entry_board` is `round(terminal.board, BOARD_DECIMALS)`, so it can sit at
@@ -87,7 +87,7 @@ def test_rounded_entry_fields_stay_within_the_documented_tolerance_of_the_endpoi
 
 def test_endpoint_agreement_holds_across_balls_and_seeds():
     lane = LaneCondition.house_shot()
-    for ball_id, ball in BALL_CATALOG.items():
+    for ball_id, _ball in BALL_CATALOG.items():
         for seed in (1, 7, 99, 4242):
             trace = trace_diagnostic_throw(ball_id=ball_id, seed=seed)
             assert trace.result.entry_board == trace.last_path_point.board, (ball_id, seed)
@@ -148,13 +148,20 @@ def test_a_truncated_route_cannot_mutate_any_part_of_the_game():
 
     def truncated_simulate(condition):
         return SimulationResult(
-            path=[TrajectoryPoint(distance_ft=0.0, board=28.0), TrajectoryPoint(distance_ft=40.0, board=22.0)],
+            path=[
+                TrajectoryPoint(distance_ft=0.0, board=28.0),
+                TrajectoryPoint(distance_ft=40.0, board=22.0),
+            ],
             entry_board=22.0,
             entry_angle_deg=2.0,
             speed_at_pins_mph=14.0,
             lane_condition_version=condition.version,
             terminal=TerminalState(
-                distance_ft=40.0, board=22.0, heading_deg=2.0, speed_mph=14.0, reached_pin_deck=False
+                distance_ft=40.0,
+                board=22.0,
+                heading_deg=2.0,
+                speed_mph=14.0,
+                reached_pin_deck=False,
             ),
         )
 
@@ -165,7 +172,9 @@ def test_a_truncated_route_cannot_mutate_any_part_of_the_game():
         game.throw(simulate=truncated_simulate, resolve_pinfall=resolve_must_not_run)
 
     after = game.current_snapshot()
-    assert game.lane.condition.version == version_before, "the lane was worn by a throw that never arrived"
+    assert game.lane.condition.version == version_before, (
+        "the lane was worn by a throw that never arrived"
+    )
     assert after.frames == before.frames
     assert after.standing_pin_ids == before.standing_pin_ids
     assert after.total_score == before.total_score
@@ -290,7 +299,7 @@ def test_the_diagnostic_fixture_is_reproducible():
 
 def test_the_terminal_state_is_immutable():
     terminal = trace_diagnostic_throw().result.terminal
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         terminal.board = 1.0  # type: ignore[misc]
 
 

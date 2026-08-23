@@ -13,7 +13,6 @@ sampled release (and therefore every downstream value) repeats exactly.
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple
 
 from app.physics.ball import BALL_CATALOG
 from app.physics.collision import DEFAULT_PINFALL_MODEL
@@ -104,7 +103,9 @@ class TrajectoryTrace:
         nearest = min(self.result.path, key=lambda p: abs(p.distance_ft - distance_ft))
         return nearest.board
 
-    def selected_points(self, distances: Tuple[float, ...] = (0.0, 20.0, 40.0, 60.0)) -> List[Tuple[float, float]]:
+    def selected_points(
+        self, distances: tuple[float, ...] = (0.0, 20.0, 40.0, 60.0)
+    ) -> list[tuple[float, float]]:
         return [(d, self.sampled_at(d)) for d in distances]
 
 

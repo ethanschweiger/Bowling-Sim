@@ -33,11 +33,15 @@ def _scripted_throw(session, pins_knocked, fallen_pin_ids):
     def resolve_pinfall(sim_result, standing_ids):
         seen["standing_ids"] = standing_ids
         return PinfallResult(
-            pins_knocked=pins_knocked, model_id="test-scripted", limitations="", fallen_pin_ids=tuple(fallen_pin_ids)
+            pins_knocked=pins_knocked,
+            model_id="test-scripted",
+            limitations="",
+            fallen_pin_ids=tuple(fallen_pin_ids),
         )
 
     result, pinfall, _snapshot = session.throw(
-        simulate=lambda condition: simulate_throw(BALL, THROW, condition), resolve_pinfall=resolve_pinfall
+        simulate=lambda condition: simulate_throw(BALL, THROW, condition),
+        resolve_pinfall=resolve_pinfall,
     )
     return result, pinfall, seen["standing_ids"]
 
@@ -109,7 +113,8 @@ def test_spare_resets_before_its_bonus_next_frame_ball():
     _, _, standing_ball2 = _scripted_throw(session, 4, (7, 8, 9, 10))  # 6+4=10, spare
     assert standing_ball2 == ALL_PIN_IDS - {1, 2, 3, 4, 5, 6}
     assert session.current_snapshot().frames[0].is_spare
-    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS  # fresh for frame 2 / the bonus ball that scores it
+    # fresh for frame 2 / the bonus ball that scores it
+    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS
 
 
 def _run_to_frame_10(session):
@@ -141,7 +146,8 @@ def test_tenth_frame_non_strike_second_bonus_ball_leaves_remainder_for_ball_3():
     _run_to_frame_10(session)
     _scripted_throw(session, 10, tuple(ALL_PIN_IDS))  # ball 1: strike -> ball 2 fresh
     _scripted_throw(session, 6, (1, 2, 3, 4, 5, 6))  # ball 2: not a strike
-    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS - {1, 2, 3, 4, 5, 6}  # NOT reset
+    # NOT reset
+    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS - {1, 2, 3, 4, 5, 6}
 
     _, _, standing_ball3 = _scripted_throw(session, 4, (7, 8, 9, 10))  # ball 3 clears what's left
     assert standing_ball3 == ALL_PIN_IDS - {1, 2, 3, 4, 5, 6}
@@ -157,7 +163,8 @@ def test_tenth_frame_spare_resets_before_its_one_bonus_ball():
     _, _, standing_bonus = _scripted_throw(session, 4, (7, 8, 9, 10))  # ball 2: spare (6+4=10)
     assert standing_bonus == ALL_PIN_IDS - {1, 2, 3, 4, 5, 6}  # ball 2 itself ran on the remainder
     assert session.current_snapshot().frames[9].is_spare
-    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS  # fresh for the one bonus ball
+    # fresh for the one bonus ball
+    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS
 
 
 def test_completed_game_rejects_further_throws_without_changing_any_state():
@@ -209,10 +216,16 @@ def _throw_and_capture_snapshot(session, pins_knocked, fallen_pin_ids):
 
     def resolve_pinfall(sim_result, standing_ids):
         return PinfallResult(
-            pins_knocked=pins_knocked, model_id="test-scripted", limitations="", fallen_pin_ids=tuple(fallen_pin_ids)
+            pins_knocked=pins_knocked,
+            model_id="test-scripted",
+            limitations="",
+            fallen_pin_ids=tuple(fallen_pin_ids),
         )
 
-    return session.throw(simulate=lambda condition: simulate_throw(BALL, THROW, condition), resolve_pinfall=resolve_pinfall)
+    return session.throw(
+        simulate=lambda condition: simulate_throw(BALL, THROW, condition),
+        resolve_pinfall=resolve_pinfall,
+    )
 
 
 def test_an_earlier_snapshot_is_unaffected_by_a_later_throw_or_reset():
@@ -272,7 +285,8 @@ def test_a_throws_snapshot_is_immune_to_a_second_throw_completing_before_it_is_r
     # Proof the second throw really happened and really changed the live
     # session (otherwise this test would be vacuous):
     assert session.current_snapshot().frames[0].rolls == (3, 4)
-    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS  # frame 1 completed -> fresh rack
+    # frame 1 completed -> fresh rack
+    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS
 
     # snapshot_1, read only now — strictly after the second throw
     # committed — still describes exactly what throw 1 produced.
@@ -305,7 +319,8 @@ def test_game_session_has_no_public_live_scorecard_or_rack_accessor():
     live_snapshot = session.current_snapshot()
     assert isinstance(snapshot_1, GameStateSnapshot)
     assert isinstance(live_snapshot, GameStateSnapshot)
-    assert live_snapshot.standing_pin_ids == ALL_PIN_IDS - {1, 2, 3}  # the same standing-pin info .rack used to expose
+    # the same standing-pin info .rack used to expose
+    assert live_snapshot.standing_pin_ids == ALL_PIN_IDS - {1, 2, 3}
     captured_frames = live_snapshot.frames
     captured_total = live_snapshot.total_score
     captured_standing = live_snapshot.standing_pin_ids
@@ -321,4 +336,5 @@ def test_game_session_has_no_public_live_scorecard_or_rack_accessor():
     assert live_snapshot.total_score == captured_total
     assert live_snapshot.standing_pin_ids == captured_standing
     assert session.current_snapshot().frames == ()  # proves the session really did move on
-    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS  # reset really did return a fresh rack
+    # reset really did return a fresh rack
+    assert session.current_snapshot().standing_pin_ids == ALL_PIN_IDS

@@ -84,7 +84,6 @@ alongside this call by `LaneSession.run_throw`.
 
 import math
 from dataclasses import dataclass
-from typing import Optional
 
 from app.physics.ball import Ball
 from app.physics.lane import DRY_FRICTION, LaneCondition
@@ -280,7 +279,7 @@ def simulate_throw(
     ball: Ball,
     throw: Throw,
     lane_condition: LaneCondition,
-    step_ft: Optional[float] = None,
+    step_ft: float | None = None,
 ) -> SimulationResult:
     """Integrate one throw down the lane.
 
@@ -332,7 +331,11 @@ def simulate_throw(
     # spinner's own contribution.
     side_fraction = rotation_side + (1.0 - rotation_side) * flare_side
     lateral_slip_fps = (
-        angular_velocity_rad_s * ball_radius_ft * side_fraction * SLIP_EFFICIENCY * ball.hook_potential
+        angular_velocity_rad_s
+        * ball_radius_ft
+        * side_fraction
+        * SLIP_EFFICIENCY
+        * ball.hook_potential
     )
     # Accumulated dry-equivalent contact length. Oil contributes only its
     # declared traction fraction, so a higher-rotation release carries more
@@ -383,7 +386,9 @@ def simulate_throw(
         friction = lane_condition.friction_at(distance, board)
         dt = this_step_ft / forward_velocity_fps  # ft / (ft/s) = s — consistent units throughout
 
-        forward_velocity_fps = max(0.0, forward_velocity_fps - friction * FORWARD_DRAG * forward_velocity_fps * dt)
+        forward_velocity_fps = max(
+            0.0, forward_velocity_fps - friction * FORWARD_DRAG * forward_velocity_fps * dt
+        )
 
         # --- skid / hook / roll, from one mechanism ---------------------
         # Lateral acceleration is Coulomb friction acting on the remaining
@@ -428,7 +433,8 @@ def simulate_throw(
         # else: rolling — no sideways slip left, so no lateral force, and
         # the ball holds whatever heading the hook left it with.
 
-        lateral_offset_ft += lateral_velocity_fps * dt  # length + length — never a raw feet-onto-board add
+        # length + length — never a raw feet-onto-board add
+        lateral_offset_ft += lateral_velocity_fps * dt
         raw_board = board_from_offset(lateral_offset_ft)
         board = max(board_lo, min(board_hi, raw_board))
         if board != raw_board:

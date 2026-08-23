@@ -18,10 +18,10 @@ milestone, both documented rather than silently dropped:
 """
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Coverstock(str, Enum):
+class Coverstock(StrEnum):
     PLASTIC = "plastic"       # spares balls — near-zero hook
     URETHANE = "urethane"     # smooth, predictable arc
     REACTIVE = "reactive"     # strong, sudden backend motion
@@ -63,7 +63,8 @@ class Ball:
     id: str
     name: str
     mass_lbs: float = 15.0
-    radius_in: float = 4.29           # regulation radius, ~8.6" diameter — unused this milestone, see module docstring
+    # regulation radius, ~8.6" diameter — unused this milestone, see module docstring
+    radius_in: float = 4.29
     rg_in: float = 2.54               # radius of gyration — lower flares earlier
     differential: float = 0.045       # RG differential — higher flares more
     surface: str = "1500-grit"        # finish on the coverstock

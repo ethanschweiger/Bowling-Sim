@@ -63,8 +63,8 @@ def require_reached_pin_deck(result: SimulationResult) -> SimulationResult:
     """
     if not result.terminal.reached_pin_deck:
         raise TruncatedTrajectoryError(
-            f"trajectory stopped at {result.terminal.distance_ft:.3f} ft, short of the headpin plane; "
-            "it has no entry state and must not be resolved as pinfall"
+            f"trajectory stopped at {result.terminal.distance_ft:.3f} ft, short of the headpin "
+            "plane; it has no entry state and must not be resolved as pinfall"
         )
     return result
 

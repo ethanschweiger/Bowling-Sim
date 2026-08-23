@@ -42,8 +42,10 @@ from app.physics.units import BOARD_WIDTH_IN
 
 # --- Geometry -----------------------------------------------------------
 
-HEADPIN_DISTANCE_FT = 60.0  # "60 feet, +/- 1/2 inch, from the foul line to the center of the No. 1 pin spot"
-PIN_SPACING_IN = 12.0       # "Spaced 12 inches, +/- 1/16 inch, (non accumulative) in an equilateral triangle"
+# "60 feet, +/- 1/2 inch, from the foul line to the center of the No. 1 pin spot"
+HEADPIN_DISTANCE_FT = 60.0
+# "Spaced 12 inches, +/- 1/16 inch, (non accumulative) in an equilateral triangle"
+PIN_SPACING_IN = 12.0
 ROW_SPACING_IN = PIN_SPACING_IN * math.sqrt(3) / 2  # equilateral triangle row height, ~10.392 in
 
 # Board 20 of 39 is the lane's exact geometric center (19 boards to a side).

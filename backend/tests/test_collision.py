@@ -78,7 +78,8 @@ def test_zero_speed_at_center_and_overlapping_offsets_knock_down_nothing():
 def test_a_centered_impact_hits_the_headpin_and_stays_bounded():
     result = MODEL.resolve(_impact(lateral_position_in=0.0, heading_deg=0.0, speed_mph=16.0))
     assert 0 <= result.pins_knocked <= 10
-    assert 1 in result.fallen_pin_ids  # a dead-straight shot must at least topple the pin it hits directly
+    # a dead-straight shot must at least topple the pin it hits directly
+    assert 1 in result.fallen_pin_ids
 
 
 def _kinetic_energy(*bodies) -> float:

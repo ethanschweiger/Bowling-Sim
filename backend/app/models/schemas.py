@@ -1,6 +1,6 @@
 """Request/response shapes for the REST API."""
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,14 +9,26 @@ from app.physics.throw import RELEASE_BOUNDS
 
 class ThrowRequest(BaseModel):
     ball_id: str = Field(..., description="Key into the ball catalog, e.g. 'reactive_pearl'")
-    seed: Optional[int] = Field(
-        None, description="Reuse a seed to reproduce a throw's release exactly. Omit to get a random one back."
+    seed: int | None = Field(
+        None,
+        description="Reuse a seed to reproduce a throw's release exactly. Omit to get a random one "
+        "back.",
     )
-    speed_mph: float = Field(17.0, ge=RELEASE_BOUNDS["speed_mph"][0], le=RELEASE_BOUNDS["speed_mph"][1])
-    rev_rate: float = Field(350.0, ge=RELEASE_BOUNDS["rev_rate"][0], le=RELEASE_BOUNDS["rev_rate"][1])
-    axis_rotation: float = Field(45.0, ge=RELEASE_BOUNDS["axis_rotation"][0], le=RELEASE_BOUNDS["axis_rotation"][1])
-    axis_tilt: float = Field(15.0, ge=RELEASE_BOUNDS["axis_tilt"][0], le=RELEASE_BOUNDS["axis_tilt"][1])
-    launch_angle: float = Field(-1.5, ge=RELEASE_BOUNDS["launch_angle"][0], le=RELEASE_BOUNDS["launch_angle"][1])
+    speed_mph: float = Field(
+        17.0, ge=RELEASE_BOUNDS["speed_mph"][0], le=RELEASE_BOUNDS["speed_mph"][1]
+    )
+    rev_rate: float = Field(
+        350.0, ge=RELEASE_BOUNDS["rev_rate"][0], le=RELEASE_BOUNDS["rev_rate"][1]
+    )
+    axis_rotation: float = Field(
+        45.0, ge=RELEASE_BOUNDS["axis_rotation"][0], le=RELEASE_BOUNDS["axis_rotation"][1]
+    )
+    axis_tilt: float = Field(
+        15.0, ge=RELEASE_BOUNDS["axis_tilt"][0], le=RELEASE_BOUNDS["axis_tilt"][1]
+    )
+    launch_angle: float = Field(
+        -1.5, ge=RELEASE_BOUNDS["launch_angle"][0], le=RELEASE_BOUNDS["launch_angle"][1]
+    )
     launch_position: float = Field(
         28.0, ge=RELEASE_BOUNDS["launch_position"][0], le=RELEASE_BOUNDS["launch_position"][1]
     )
@@ -66,7 +78,7 @@ class FrameStateResponse(BaseModel):
     is_strike: bool
     is_spare: bool
     is_complete: bool
-    score: Optional[int]  # cumulative through this frame; None if a bonus it needs hasn't landed yet
+    score: int | None  # cumulative through this frame; None if a bonus it needs hasn't landed yet
 
 
 class GameStateResponse(BaseModel):
@@ -77,12 +89,13 @@ class GameStateResponse(BaseModel):
 
     standing_pin_ids: list[int]
     frames: list[FrameStateResponse]
-    total_score: Optional[int]  # cumulative through the most recently resolved frame; None if nothing resolved yet
+    # cumulative through the most recently resolved frame; None if nothing resolved yet
+    total_score: int | None
     is_game_complete: bool
     # Both None exactly when is_game_complete is True — there is no next
     # roll. Otherwise the 1-based frame/ball the next legal roll belongs to.
-    next_frame_number: Optional[int]
-    next_ball_number: Optional[int]
+    next_frame_number: int | None
+    next_ball_number: int | None
 
 
 class ThrowResponse(BaseModel):

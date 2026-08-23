@@ -23,13 +23,13 @@ per game, including reset back to that game's own starting condition.
 """
 
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from app.physics.lane import LaneCondition, apply_wear
 
 
 class LaneSession:
-    def __init__(self, condition: Optional[LaneCondition] = None):
+    def __init__(self, condition: LaneCondition | None = None):
         self._condition = condition or LaneCondition.house_shot()
         self._lock = threading.Lock()
 

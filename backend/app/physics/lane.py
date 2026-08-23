@@ -162,12 +162,17 @@ class LaneCondition:
         return LaneCondition._build(HOUSE_SHOT_SPEC, temperature_f=temperature_f)
 
     @staticmethod
-    def _build(spec: OilPatternSpec, temperature_f: float = REFERENCE_TEMPERATURE_F) -> "LaneCondition":
+    def _build(
+        spec: OilPatternSpec, temperature_f: float = REFERENCE_TEMPERATURE_F
+    ) -> "LaneCondition":
         shape: list[list[float]] = []
         for board in range(1, BOARD_COUNT + 1):
             lateral = _lateral_factor(board, spec)
             shape.append(
-                [lateral * _longitudinal_factor(i * GRID_RESOLUTION_FT, spec) for i in range(GRID_LENGTH_CELLS)]
+                [
+                    lateral * _longitudinal_factor(i * GRID_RESOLUTION_FT, spec)
+                    for i in range(GRID_LENGTH_CELLS)
+                ]
             )
 
         shape_sum = sum(sum(row) for row in shape)
@@ -177,7 +182,9 @@ class LaneCondition:
         unit_scale = spec.total_volume_ml / shape_sum if shape_sum > 0 else 0.0
 
         grid = tuple(tuple(v * unit_scale for v in row) for row in shape)
-        return LaneCondition(spec=spec, oil_grid=grid, peak_oil_ml=unit_scale, temperature_f=temperature_f, version=1)
+        return LaneCondition(
+            spec=spec, oil_grid=grid, peak_oil_ml=unit_scale, temperature_f=temperature_f, version=1
+        )
 
     def _cell_index(self, distance_ft: float, board: float) -> tuple[int, int]:
         board_idx = int(_clamp(round(board) - 1, 0, BOARD_COUNT - 1))
@@ -241,7 +248,9 @@ class LaneCondition:
         if self.peak_oil_ml <= 0:
             base = DRY_FRICTION
         else:
-            oil_ratio = _clamp(self.oil_at_interpolated(distance_ft, board) / self.peak_oil_ml, 0.0, 1.0)
+            oil_ratio = _clamp(
+                self.oil_at_interpolated(distance_ft, board) / self.peak_oil_ml, 0.0, 1.0
+            )
             base = DRY_FRICTION - oil_ratio * (DRY_FRICTION - OILED_FRICTION)
 
         adjusted = base * _temperature_friction_multiplier(self.temperature_f)

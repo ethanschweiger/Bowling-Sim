@@ -81,8 +81,8 @@ mid-mutation.
 
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Dict, FrozenSet, Optional, Tuple
 
 from app.physics.impact import require_reached_pin_deck
 from app.physics.lane import LaneCondition
@@ -119,12 +119,13 @@ class GameStateSnapshot:
     """
 
     lane_condition_version: int
-    standing_pin_ids: FrozenSet[int]
-    frames: Tuple[Frame, ...]  # Frame is itself an immutable frozen dataclass — safe to hold indefinitely
-    total_score: Optional[int]
+    standing_pin_ids: frozenset[int]
+    # Frame is itself an immutable frozen dataclass — safe to hold indefinitely.
+    frames: tuple[Frame, ...]
+    total_score: int | None
     is_game_complete: bool
-    next_frame_number: Optional[int]
-    next_ball_number: Optional[int]
+    next_frame_number: int | None
+    next_ball_number: int | None
 
 
 class GameSession:
@@ -170,7 +171,7 @@ class GameSession:
         self,
         simulate: Callable[[LaneCondition], object],
         resolve_pinfall: Callable[[object, frozenset], object],
-    ) -> Tuple[object, object, GameStateSnapshot]:
+    ) -> tuple[object, object, GameStateSnapshot]:
         """The one throw transaction. `simulate(lane_condition)` must
         return a `SimulationResult` (the same contract `LaneSession.run_throw`
         already uses); `resolve_pinfall(simulation_result, standing_ids)`
@@ -214,7 +215,7 @@ class GameSession:
             snapshot = self._build_snapshot()
             return simulation_result, pinfall_result, snapshot
 
-    def reset(self) -> Tuple[LaneCondition, GameStateSnapshot]:
+    def reset(self) -> tuple[LaneCondition, GameStateSnapshot]:
         """Restore this game's lane to its own original starting condition
         (same grid, same temperature, version back to 1), and start a
         fresh `Scorecard` and a full `Rack` — atomically, under the same
@@ -241,15 +242,17 @@ class GameService:
     """
 
     def __init__(self):
-        self._games: Dict[str, GameSession] = {}
+        self._games: dict[str, GameSession] = {}
         self._lock = threading.Lock()
 
-    def create_game(self, oil_pattern: str = "house", game_id: Optional[str] = None) -> GameSession:
+    def create_game(self, oil_pattern: str = "house", game_id: str | None = None) -> GameSession:
         build_condition = SUPPORTED_OIL_PATTERNS.get(oil_pattern)
         if build_condition is None:
             raise ValueError(f"Unsupported oil_pattern '{oil_pattern}'")
 
-        session = GameSession(game_id=game_id or uuid.uuid4().hex, initial_condition=build_condition())
+        session = GameSession(
+            game_id=game_id or uuid.uuid4().hex, initial_condition=build_condition()
+        )
         with self._lock:
             self._games[session.game_id] = session
         return session

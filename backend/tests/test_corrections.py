@@ -36,7 +36,8 @@ def test_known_nominal_speed_produces_the_correct_time_basis():
 def test_boundary_valued_requests_stay_within_range_across_many_seeds():
     lo_throw = Throw(**{field: bounds[0] for field, bounds in RELEASE_BOUNDS.items()})
     hi_throw = Throw(**{field: bounds[1] for field, bounds in RELEASE_BOUNDS.items()})
-    ball = BALL_CATALOG["particle_beast"]  # highest hook_potential in the catalog — stresses lateral motion hardest
+    # highest hook_potential in the catalog — stresses lateral motion hardest
+    ball = BALL_CATALOG["particle_beast"]
     lane = LaneCondition.house_shot()
 
     for base_throw in (lo_throw, hi_throw):

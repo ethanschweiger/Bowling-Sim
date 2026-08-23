@@ -4,7 +4,6 @@ error that shows up even when a bowler is trying to repeat a shot exactly.
 
 import random
 from dataclasses import dataclass, replace
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -14,7 +13,8 @@ class Throw:
     axis_rotation: float = 45.0    # degrees; 0 = full roll, 90 = full spinner
     axis_tilt: float = 15.0        # degrees; higher tilt = more skid, later hook
     launch_angle: float = -1.5     # right-handed starter line: aimed toward lower/right boards
-    launch_position: float = 28.0  # the ball's laydown board at the foul line, 1-39 — NOT the bowler's stance board
+    # the ball's laydown board at the foul line, 1-39 — NOT the bowler's stance board
+    launch_position: float = 28.0
 
 
 # One standard deviation of release error per field, in the field's own
@@ -55,7 +55,7 @@ RELEASE_BOUNDS = {
 }
 
 
-def sample_release(requested: Throw, seed: Optional[int] = None) -> tuple[Throw, int]:
+def sample_release(requested: Throw, seed: int | None = None) -> tuple[Throw, int]:
     """Sample a small, bounded release error around the requested throw.
 
     The same seed always reproduces the same sampled throw. If no seed is

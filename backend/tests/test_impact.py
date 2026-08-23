@@ -16,7 +16,14 @@ from app.physics.units import BOARD_WIDTH_IN
 
 def test_impact_state_is_finite_and_carries_the_lane_condition_version():
     ball = BALL_CATALOG["reactive_pearl"]
-    throw = Throw(speed_mph=17.0, rev_rate=350.0, axis_rotation=45.0, axis_tilt=15.0, launch_angle=0.5, launch_position=28.0)
+    throw = Throw(
+        speed_mph=17.0,
+        rev_rate=350.0,
+        axis_rotation=45.0,
+        axis_tilt=15.0,
+        launch_angle=0.5,
+        launch_position=28.0,
+    )
     lane = LaneCondition.house_shot()
 
     result = simulate_throw(ball, throw, lane)

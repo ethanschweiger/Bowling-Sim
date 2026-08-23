@@ -110,7 +110,7 @@ def get_game(game_id: str) -> GameStatusResponse:
     try:
         session = default_game_service.get_game(game_id)
     except UnknownGameError:
-        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'")
+        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
     snapshot = session.current_snapshot()
     return GameStatusResponse(
@@ -125,7 +125,7 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
     try:
         session = default_game_service.get_game(game_id)
     except UnknownGameError:
-        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'")
+        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
     ball = BALL_CATALOG.get(request.ball_id)
     if ball is None:
@@ -155,15 +155,19 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
             ),
         )
     except GameCompleteError:
-        raise HTTPException(status_code=409, detail=f"game '{game_id}' is already complete")
+        raise HTTPException(
+            status_code=409, detail=f"game '{game_id}' is already complete"
+        ) from None
     except TruncatedTrajectoryError:
-        raise truncated_trajectory_http_error()
+        raise truncated_trajectory_http_error() from None
 
     return GameThrowResponse(
         game_id=game_id,
         seed=seed,
         actual_release=ReleaseValues(**asdict(actual_throw)),
-        path=[TrajectoryPointResponse(distance_ft=p.distance_ft, board=p.board) for p in result.path],
+        path=[
+            TrajectoryPointResponse(distance_ft=p.distance_ft, board=p.board) for p in result.path
+        ],
         entry_board=result.entry_board,
         entry_angle_deg=result.entry_angle_deg,
         speed_at_pins_mph=result.speed_at_pins_mph,
@@ -183,7 +187,7 @@ def reset_game(game_id: str) -> GameResetResponse:
     try:
         session = default_game_service.get_game(game_id)
     except UnknownGameError:
-        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'")
+        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
     condition, snapshot = session.reset()
     return GameResetResponse(

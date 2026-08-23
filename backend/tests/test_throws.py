@@ -82,7 +82,9 @@ def test_truncated_trajectory_returns_503_and_leaves_the_shared_game_unchanged(m
     assert response.json()["detail"] == TRUNCATED_TRAJECTORY_DETAIL
 
     after = client.get(f"/api/v1/games/{LEGACY_GAME_ID}").json()
-    assert after == before, "a rejected legacy throw must not change lane version, rack, or scorecard"
+    assert after == before, (
+        "a rejected legacy throw must not change lane version, rack, or scorecard"
+    )
 
 
 def test_representative_throw_returns_a_plausible_trajectory():
