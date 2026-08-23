@@ -10,6 +10,13 @@ body {
   margin: 0;
 }
 
+/* The scorecard owns its horizontal scrolling in its table wrapper. Its
+   deliberate minimum width must not expose a second page-wide scrollbar. */
+html,
+body {
+  overflow-x: hidden;
+}
+
 img,
 canvas {
   max-width: 100%;
