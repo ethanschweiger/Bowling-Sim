@@ -37,8 +37,8 @@ from app.physics.throw import Throw, sample_release
 #
 # The seed is fixed so the sampled release — and every value derived from
 # it — is reproducible across runs and machines. It is a real sample, not
-# a hand-picked strike: about a fifth of seeds put this release in the
-# pocket, which is the honest spread of the modelled human variance.
+# a hand-picked strike. The default variance is intentionally narrow so a
+# consistent requested release remains recognizably the same line.
 DIAGNOSTIC_BALL_ID = "reactive_pearl"
 DIAGNOSTIC_SEED = 17
 # Keep this fixture tied to the actual starter release. Its downstream shape

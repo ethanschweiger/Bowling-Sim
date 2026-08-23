@@ -532,7 +532,7 @@ def test_alternate_seeds_vary_but_never_leave_legal_state():
     lane = LaneCondition.house_shot()
     ball = BALL_CATALOG[DIAGNOSTIC_BALL_ID]
     boards = []
-    for seed in range(1, 60):
+    for seed in range(1, 201):
         sampled, _ = sample_release(DIAGNOSTIC_REQUEST, seed)
         result = simulate_throw(ball, sampled, lane)
         boards.append(result.terminal.board)
@@ -540,6 +540,17 @@ def test_alternate_seeds_vary_but_never_leave_legal_state():
         assert 0.0 <= result.terminal.board <= 40.0
         assert result.terminal.speed_mph >= 0.0
     assert len(set(boards)) > 1, "seeded release variance should actually vary the outcome"
+    # This planar model keeps launch heading for the full lane, so a large
+    # angle perturbation becomes an exaggerated downlane miss. The default
+    # release profile is intentionally repeatable: its middle 90 percent
+    # should span only a couple of boards, not a different line on every
+    # throw. Use the deterministic 5th/95th observations rather than the
+    # most extreme seeded draws so the assertion describes the intended
+    # player-facing envelope rather than a rare three-sigma edge case.
+    boards.sort()
+    lower = boards[9]
+    upper = boards[189]
+    assert 0.75 <= upper - lower <= 2.10
 
 
 # --- Numerical quality --------------------------------------------------

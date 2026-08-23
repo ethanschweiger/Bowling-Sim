@@ -28,15 +28,19 @@ class Throw:
 
 
 # One standard deviation of release error per field, in the field's own
-# units. These approximate what a consistent amateur/league bowler varies
-# shot to shot — not a beginner's spread, not a pro's.
+# units. These are deliberately a *narrow*, repeatable house-shot profile,
+# not measured bowler data. In particular, this planar model holds the launch
+# heading for the full 60 ft, so even a modest angle error accumulates into
+# several boards downlane. Keep angle and laydown variance tight enough that
+# a repeated requested release stays recognizably the same line while seeds
+# still produce a visible, bounded difference.
 _RELEASE_NOISE_STD = {
-    "speed_mph": 0.25,
-    "rev_rate": 12.0,
-    "axis_rotation": 2.0,
-    "axis_tilt": 2.0,
-    "launch_angle": 0.3,
-    "launch_position": 0.4,
+    "speed_mph": 0.10,
+    "rev_rate": 5.0,
+    "axis_rotation": 0.75,
+    "axis_tilt": 0.75,
+    "launch_angle": 0.05,
+    "launch_position": 0.15,
 }
 
 # Hard clip on the sampled noise so a rare draw can't wander outside what a

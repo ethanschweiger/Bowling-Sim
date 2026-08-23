@@ -549,6 +549,14 @@ deterministic, so replay stays exact even at the edge of the legal range.
 Pin count is always read off the resulting trajectory — never sampled on
 its own.
 
+The default profile is intentionally narrow and repeatable: standard
+deviations are 0.10 mph, 5 rpm, 0.75° axis rotation, 0.75° axis tilt, 0.05°
+launch angle, and 0.15 board of laydown, each clipped at three standard
+deviations. These are stated product assumptions, not measurements of real
+bowlers. The especially tight angle value is necessary because this simplified
+model carries launch heading for all 60 ft; a wider angular error accumulates
+into an unrealistically different downlane line.
+
 ## Setup
 
 ```bash
@@ -898,7 +906,8 @@ percentages, leave tracking, ball usage stats.
 - `database_url` exists in config for the v3 milestone; nothing reads or
   writes to Postgres yet, and no migrations exist.
 - Release-error bounds (`_RELEASE_NOISE_STD` in `app/physics/throw.py`) are
-  reasoned estimates of human variance, not measured from real bowlers.
+  a deliberately narrow product envelope for this simplified model, not
+  measurements of human variance.
 - The frontend shell (`frontend/`) has no chart suite, accounts, or
   persistence — see "Frontend" above for what it does cover.
 - The trajectory animation's timing is visual only, not calibrated to the

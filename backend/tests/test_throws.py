@@ -1,3 +1,5 @@
+from dataclasses import asdict
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -6,6 +8,7 @@ from app.api.routes.throws import LEGACY_GAME_ID
 from app.games.service import default_game_service
 from app.main import app
 from app.physics.simulate import SimulationResult, TerminalState, TrajectoryPoint
+from app.physics.throw import Throw, sample_release
 
 client = TestClient(app)
 
@@ -123,6 +126,17 @@ def test_omitted_seed_is_generated_and_returned():
     response = client.post("/api/v1/simulations/throws", json=VALID_PAYLOAD)
     assert response.status_code == 200
     assert isinstance(response.json()["seed"], int)
+
+
+def test_returned_actual_release_matches_the_seeded_trajectory_input():
+    """The API must expose the sampled release that actually drove its path."""
+    seed = 91
+    response = client.post("/api/v1/simulations/throws", json={**VALID_PAYLOAD, "seed": seed})
+    assert response.status_code == 200
+
+    requested = Throw(**{key: value for key, value in VALID_PAYLOAD.items() if key != "ball_id"})
+    expected, _ = sample_release(requested, seed)
+    assert response.json()["actual_release"] == asdict(expected)
 
 
 def test_consecutive_throws_advance_the_lane_condition_version():
