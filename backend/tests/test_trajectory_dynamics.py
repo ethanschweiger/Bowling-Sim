@@ -24,7 +24,7 @@ from app.physics.simulate import (
     step_cap_for,
 )
 from app.physics.throw import RELEASE_BOUNDS, Throw, sample_release
-from app.physics.units import ft_to_boards, mph_to_fps, rpm_to_rad_per_s
+from app.physics.units import ft_to_boards, fps_to_mph, mph_to_fps, rpm_to_rad_per_s
 
 from tests.trajectory_fixture import (
     DIAGNOSTIC_BALL_ID,
@@ -389,6 +389,93 @@ def test_more_oil_means_less_hook():
     oiled_entry = simulate_throw(ball, throw, fresh).terminal.board
     dry_entry = simulate_throw(ball, throw, stripped).terminal.board
     assert dry_entry > oiled_entry, "a dry lane should hook the ball further left"
+
+
+# --- Each remaining control makes its own explained difference ----------
+#
+# Codex's review flagged that no test directly proved launch_position or
+# launch_angle affect the route, and that the speed test only checked "the
+# board changes" without checking the reported speed is expressed in real,
+# consistent units. These three close that gap. Rotation is held at 0 deg
+# in the position/angle checks specifically so the (small, differential-
+# scaled) flare residual has negligible time to act before the sample
+# point — isolating what launch_position/launch_angle alone contribute,
+# not a mix of release geometry and hook.
+
+
+def test_launch_position_shifts_the_whole_route_laterally():
+    """The laydown board is a lateral offset applied to the whole path, not
+    a value that only affects the reported endpoint."""
+    lane = LaneCondition.house_shot()
+    ball = BALL_CATALOG["reactive_pearl"]
+    board_gap = 5.0
+
+    near = simulate_throw(ball, Throw(launch_position=25.0, launch_angle=-1.5, axis_rotation=0.0), lane)
+    far = simulate_throw(ball, Throw(launch_position=25.0 + board_gap, launch_angle=-1.5, axis_rotation=0.0), lane)
+
+    # Every recorded sample is offset by very nearly the same amount — this
+    # is a translation of the route, not a change to its shape.
+    for a, b in zip(near.path, far.path):
+        assert a.distance_ft == b.distance_ft
+        assert abs((b.board - a.board) - board_gap) < 0.75, (a, b)
+
+    # The offset survives all the way to the headpin plane, not just the
+    # release point.
+    assert far.terminal.board > near.terminal.board
+    assert abs((far.terminal.board - near.terminal.board) - board_gap) < 1.0
+
+
+def test_launch_angle_changes_initial_direction():
+    """Launch angle sets the release's initial heading — sign and rough
+    magnitude — before any hook has had distance to develop."""
+    lane = LaneCondition.house_shot()
+    ball = BALL_CATALOG["reactive_pearl"]
+
+    def early_slope(angle):
+        result = simulate_throw(ball, Throw(launch_position=20.0, launch_angle=angle, axis_rotation=0.0), lane)
+        sample = min(result.path, key=lambda p: abs(p.distance_ft - 2.0))
+        return (sample.board - result.path[0].board) / sample.distance_ft
+
+    negative, zero, positive = early_slope(-2.0), early_slope(0.0), early_slope(2.0)
+
+    # Sign follows the requested angle: aimed right moves right first,
+    # aimed left moves left first, aimed straight starts straight.
+    assert negative < 0 < positive
+    assert zero == pytest.approx(0.0, abs=1e-9)
+
+    # Magnitude tracks the release's own tangent, in the model's declared
+    # board-width units — not merely "some" initial drift.
+    expected = ft_to_boards(math.tan(math.radians(2.0)))
+    assert positive == pytest.approx(expected, rel=0.05)
+    assert negative == pytest.approx(-expected, rel=0.05)
+
+
+def test_speed_changes_terminal_state_with_units_preserved():
+    """Speed changes the reported entry speed in real, consistent mph — not
+    a value silently expressed in the wrong unit domain."""
+    lane = LaneCondition.house_shot()
+    ball = BALL_CATALOG["reactive_pearl"]
+    requested_speeds = (12.0, 17.0, 22.0)
+
+    terminals = []
+    for speed in requested_speeds:
+        result = simulate_throw(ball, Throw(launch_position=28.0, launch_angle=-1.5, speed_mph=speed), lane)
+        terminal_speed = result.terminal.speed_mph
+
+        # Friction only ever removes forward speed in this model, and never
+        # by an implausible amount over one 60 ft lane.
+        assert 0.0 < terminal_speed < speed
+        assert speed - terminal_speed < 3.0, "one lane's friction should not bleed off more than a few mph"
+
+        # Round-tripping through the same conversion the simulator itself
+        # uses must reproduce the value exactly — proof this is genuinely
+        # mph, not an fps figure the API happens to relabel.
+        assert fps_to_mph(mph_to_fps(terminal_speed)) == pytest.approx(terminal_speed, abs=1e-9)
+        terminals.append(terminal_speed)
+
+    # And the ordering survives: releasing faster arrives faster.
+    assert terminals == sorted(terminals)
+    assert terminals[0] < terminals[-1]
 
 
 def test_friction_stays_within_its_declared_bounds_everywhere():
