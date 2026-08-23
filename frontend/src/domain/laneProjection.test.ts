@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLaneProjection, distanceEase } from './laneProjection';
+import { createLaneProjection, DEFAULT_MAX_DISTANCE_FT, distanceEase } from './laneProjection';
 
 describe('createLaneProjection', () => {
   const projection = createLaneProjection(400, 600, 10);
@@ -99,5 +99,96 @@ describe('lane projection continuity', () => {
     // Each neighbouring slope differs only gradually; no discontinuity.
     expect(Math.abs(across - before)).toBeLessThan(Math.abs(before) * 0.15);
     expect(Math.abs(after - across)).toBeLessThan(Math.abs(across) * 0.15);
+  });
+});
+
+
+describe('replay viewport', () => {
+  // Grounded in a real accepted response rather than invented numbers: the
+  // seed-17 reactive-pearl throw enters the deck at board 16.96
+  // (x_in = -3.191484159185615) and its recorded bodies reach roughly
+  // 69.73 ft downlane, well past the default far edge of ~64.6 ft.
+  const ENTRY_BOARD = 16.96;
+  const ENTRY_DISTANCE_FT = 60;
+  const TERMINAL_DISTANCE_FT = 69.73;
+  const WIDTH = 400;
+  const HEIGHT = 600;
+  const PADDING = 12;
+
+  it('reproduces the legacy geometry exactly when no replay extent is given', () => {
+    const legacy = createLaneProjection(WIDTH, HEIGHT);
+    const explicit = createLaneProjection(WIDTH, HEIGHT, PADDING, DEFAULT_MAX_DISTANCE_FT);
+    for (const d of [0, 15, 30, 45, 60, DEFAULT_MAX_DISTANCE_FT]) {
+      expect(legacy.distanceToY(d)).toBe(explicit.distanceToY(d));
+    }
+    for (const b of [1, 10, 20, 30, 39]) {
+      expect(legacy.boardToX(b)).toBe(explicit.boardToX(b));
+    }
+  });
+
+  it('collapsed everything past the default far edge onto one pixel — the defect this fixes', () => {
+    const legacy = createLaneProjection(WIDTH, HEIGHT);
+    // Documents the old behavior precisely: the terminal position and the
+    // far edge were indistinguishable, so recorded motion was drawn at a
+    // place it never occupied.
+    expect(legacy.distanceToY(TERMINAL_DISTANCE_FT)).toBe(
+      legacy.distanceToY(DEFAULT_MAX_DISTANCE_FT),
+    );
+  });
+
+  it('gives the entry and terminal positions distinct, in-viewport pixels', () => {
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, TERMINAL_DISTANCE_FT);
+    const entryY = projection.distanceToY(ENTRY_DISTANCE_FT);
+    const terminalY = projection.distanceToY(TERMINAL_DISTANCE_FT);
+
+    expect(entryY).not.toBe(terminalY);
+    // Downlane is up-screen, so the terminal position sits above the entry.
+    expect(terminalY).toBeLessThan(entryY);
+    // Both inside the drawable area, not pinned to an edge.
+    for (const y of [entryY, terminalY]) {
+      expect(y).toBeGreaterThanOrEqual(PADDING);
+      expect(y).toBeLessThanOrEqual(HEIGHT - PADDING);
+    }
+  });
+
+  it('keeps the whole sequence on one scale — no jump between path end and deck', () => {
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, TERMINAL_DISTANCE_FT);
+    // Distances across the handoff advance monotonically with no
+    // discontinuity, so the ball does not visibly teleport at 60 ft.
+    let previous = Infinity;
+    for (let d = 55; d <= TERMINAL_DISTANCE_FT; d += 0.5) {
+      const y = projection.distanceToY(d);
+      expect(y).toBeLessThan(previous);
+      previous = y;
+    }
+  });
+
+  it('never clamps a position inside the extent it was sized for', () => {
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, TERMINAL_DISTANCE_FT);
+    // Every sampled distance up to the extent maps to its own pixel.
+    const seen = new Set<number>();
+    for (let d = 60; d <= TERMINAL_DISTANCE_FT; d += 0.5) {
+      seen.add(projection.distanceToY(d));
+    }
+    // ~20 distinct samples; any clamping would collapse the tail.
+    expect(seen.size).toBeGreaterThan(15);
+  });
+
+  it('still puts board 1 right of board 39 (bowler-eye view) under a replay viewport', () => {
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, TERMINAL_DISTANCE_FT);
+    expect(projection.boardToX(1)).toBeGreaterThan(projection.boardToX(39));
+    // And the entry board lands between them, not mirrored to the far side.
+    const entryX = projection.boardToX(ENTRY_BOARD);
+    expect(entryX).toBeGreaterThan(projection.boardToX(39));
+    expect(entryX).toBeLessThan(projection.boardToX(1));
+    // Board 16.96 is right of center (board 20) in this view.
+    expect(entryX).toBeGreaterThan(projection.boardToX(20));
+  });
+
+  it('refuses to shrink below the default lane geometry', () => {
+    // A caller passing something smaller must not move the lane itself.
+    const shrunk = createLaneProjection(WIDTH, HEIGHT, PADDING, 30);
+    const legacy = createLaneProjection(WIDTH, HEIGHT, PADDING);
+    expect(shrunk.distanceToY(60)).toBe(legacy.distanceToY(60));
   });
 });

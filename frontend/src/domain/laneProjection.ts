@@ -37,7 +37,10 @@ import { BOARD_COUNT, PIN_DECK_BACK_ROW_FT } from './pinDeckLayout';
 const MIN_BOARD = 0;
 const MAX_BOARD = BOARD_COUNT + 1;
 const MIN_DISTANCE_FT = 0;
-const MAX_DISTANCE_FT = PIN_DECK_BACK_ROW_FT + 2;
+/** The default far edge: just past the pin deck's back row. Enough for the
+ * lane itself and a settled rack, and the exact geometry every no-replay
+ * drawing has always used. */
+export const DEFAULT_MAX_DISTANCE_FT = PIN_DECK_BACK_ROW_FT + 2;
 
 /** How strongly the far end of the lane is emphasized. 0 would be a plain
  * linear scale; this gives the pin deck roughly five times the pixels per
@@ -66,9 +69,17 @@ export interface LaneProjection {
  * `simulate.py`'s documented "board 1 is the right gutter" convention.
  * Distance 0 (the foul line) maps to the bottom edge and the pin deck to
  * the top — looking away from the bowler, down the lane. */
-export function createLaneProjection(width: number, height: number, padding = 12): LaneProjection {
+export function createLaneProjection(
+  width: number,
+  height: number,
+  padding = 12,
+  maxDistanceFt: number = DEFAULT_MAX_DISTANCE_FT,
+): LaneProjection {
   const innerWidth = Math.max(width - padding * 2, 1);
   const innerHeight = Math.max(height - padding * 2, 1);
+  // Never shrink below the default: a replay only ever needs *more* room
+  // downlane, and letting a caller shrink it would move the lane itself.
+  const farEdgeFt = Math.max(maxDistanceFt, DEFAULT_MAX_DISTANCE_FT);
 
   return {
     boardToX(board: number): number {
@@ -76,8 +87,12 @@ export function createLaneProjection(width: number, height: number, padding = 12
       return padding + (1 - t) * innerWidth;
     },
     distanceToY(distanceFt: number): number {
-      const clamped = Math.max(MIN_DISTANCE_FT, Math.min(MAX_DISTANCE_FT, distanceFt));
-      const linear = (clamped - MIN_DISTANCE_FT) / (MAX_DISTANCE_FT - MIN_DISTANCE_FT);
+      // Still clamped, but to a far edge the caller has already sized to
+      // contain everything it intends to draw — so for an accepted replay
+      // this never fires, and a body is never pinned to the top edge at a
+      // position it doesn't actually hold. See `replayMaxDistanceFt`.
+      const clamped = Math.max(MIN_DISTANCE_FT, Math.min(farEdgeFt, distanceFt));
+      const linear = (clamped - MIN_DISTANCE_FT) / (farEdgeFt - MIN_DISTANCE_FT);
       return padding + (1 - distanceEase(linear)) * innerHeight;
     },
   };

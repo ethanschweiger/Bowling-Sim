@@ -44,11 +44,40 @@ import type { CollisionReplayResponse, ReplayFrameResponse } from '../api/types'
  * `REPLAY_MODEL_VERSION` in `backend/app/physics/replay.py`. */
 export const SUPPORTED_REPLAY_MODEL_VERSION = 'planar-collision-replay-2d-v1';
 
-/** Defensive ceiling on accepted frames. The backend enforces its own
- * bound (`MAX_REPLAY_FRAMES`); this is deliberately a little looser and
- * independent, so a malformed or hostile payload still can't make the
- * canvas iterate an unbounded list. */
-export const MAX_ACCEPTED_REPLAY_FRAMES = 256;
+// --- The recorded contract's own documented bounds -----------------------
+// Mirrors backend/app/physics/{collision,replay}.py. A payload claiming to
+// be this model version but exceeding any of these is not a replay this
+// client understands, however finite its numbers happen to be: JavaScript
+// will happily call 1e308 a number, and a replay "ending" there would keep
+// an animation loop alive effectively forever.
+
+/** `MAX_REPLAY_FRAMES` in the backend recorder. */
+export const MAX_ACCEPTED_REPLAY_FRAMES = 64;
+/** `MAX_COLLISION_STEPS` — the solver's own iteration cap. */
+export const MAX_ACCEPTED_STEPS = 4000;
+/** `MAX_COLLISION_SECONDS` — the solver stops at this cap even if bodies
+ * are still moving, so a terminal frame is not necessarily settled. */
+export const MAX_ACCEPTED_DURATION_S = 2.0;
+/** The ball plus at most a full rack. */
+export const MAX_ACCEPTED_BODIES = 11;
+
+/**
+ * Documented coordinate bound, in inches, for any recorded body position.
+ *
+ * Derived rather than guessed: the fastest legal release is 25 mph
+ * (`RELEASE_BOUNDS` in the backend), or about 440 in/s, and the solver
+ * stops at a 2 s cap — so no body can travel more than roughly 880 in
+ * from where it started, and every body starts within a few feet of the
+ * deck. 1,000 in leaves real runs comfortable room (measured extremes
+ * across the legal release space reach about 271 in laterally and 404 in
+ * downlane) while rejecting values that could only come from a malformed
+ * or deceptive payload.
+ */
+export const MAX_ABS_COORDINATE_IN = 1000;
+
+/** Float slack for comparing recorded timestamps against the cadence they
+ * should have been generated from. */
+const TIME_TOLERANCE_S = 1e-6;
 
 const BOARD_COUNT = 39; // backend/app/physics/lane.py
 const LANE_CENTER_BOARD = (BOARD_COUNT + 1) / 2; // board 20
@@ -70,6 +99,14 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function isInBounds(value: number): boolean {
+  return Math.abs(value) <= MAX_ABS_COORDINATE_IN;
+}
+
 /**
  * Accepts a replay only if it is the known version and structurally sound
  * enough to animate: a bounded non-empty frame list, strictly increasing
@@ -88,7 +125,20 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
   if (replay.model_version !== SUPPORTED_REPLAY_MODEL_VERSION) {
     return null;
   }
+
+  // --- Metadata must describe a run this solver could actually have done.
   if (!isFiniteNumber(replay.dt_s) || replay.dt_s <= 0) {
+    return null;
+  }
+  if (!isPositiveSafeInteger(replay.sample_every_steps)) {
+    return null;
+  }
+  if (!isPositiveSafeInteger(replay.steps_taken) || replay.steps_taken > MAX_ACCEPTED_STEPS) {
+    return null;
+  }
+  // The claimed run length has to fit the solver's own wall of 2 s.
+  const claimedDurationS = replay.dt_s * replay.steps_taken;
+  if (!isFiniteNumber(claimedDurationS) || claimedDurationS > MAX_ACCEPTED_DURATION_S + TIME_TOLERANCE_S) {
     return null;
   }
 
@@ -97,23 +147,56 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
     return null;
   }
 
+  // The recorder samples every `sample_every_steps` steps, so every frame
+  // but the last sits on that fixed cadence, and the last sits exactly at
+  // the run's end. Checking this is what stops a "known version" payload
+  // from claiming an arbitrary terminal time.
+  const cadenceS = replay.dt_s * replay.sample_every_steps;
+  if (!isFiniteNumber(cadenceS) || cadenceS <= 0) {
+    return null;
+  }
+
   let expectedIds: string | null = null;
   let previousT = -Infinity;
 
-  for (const frame of frames) {
+  for (let index = 0; index < frames.length; index += 1) {
+    const frame = frames[index];
     if (!frame || typeof frame !== 'object' || !isFiniteNumber(frame.t_s)) {
+      return null;
+    }
+    // Impact is t=0 by definition; anything else is not this contract.
+    if (index === 0 && frame.t_s !== 0) {
+      return null;
+    }
+    if (frame.t_s < 0) {
       return null;
     }
     // Strictly increasing: equal timestamps would make "which frame is
     // current" ambiguous, and a decreasing one means the data isn't the
     // ordered sequence this player assumes.
-    if (frame.t_s <= previousT) {
+    if (frame.t_s <= previousT && index > 0) {
       return null;
+    }
+    if (frame.t_s > MAX_ACCEPTED_DURATION_S + TIME_TOLERANCE_S) {
+      return null;
+    }
+
+    const isLast = index === frames.length - 1;
+    if (isLast) {
+      if (Math.abs(frame.t_s - claimedDurationS) > TIME_TOLERANCE_S) {
+        return null;
+      }
+    } else {
+      // On-cadence: a whole number of sampling intervals from impact.
+      const intervals = frame.t_s / cadenceS;
+      if (Math.abs(intervals - Math.round(intervals)) > TIME_TOLERANCE_S / cadenceS) {
+        return null;
+      }
     }
     previousT = frame.t_s;
 
     const bodies = frame.bodies;
-    if (!Array.isArray(bodies) || bodies.length === 0) {
+    if (!Array.isArray(bodies) || bodies.length === 0 || bodies.length > MAX_ACCEPTED_BODIES) {
       return null;
     }
 
@@ -123,6 +206,13 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
         return null;
       }
       if (!Number.isInteger(body.body_id) || !isFiniteNumber(body.x_in) || !isFiniteNumber(body.y_in)) {
+        return null;
+      }
+      // Only the ball and real pin IDs exist on a deck.
+      if (body.body_id !== BALL_BODY_ID && (body.body_id < 1 || body.body_id > 10)) {
+        return null;
+      }
+      if (!isInBounds(body.x_in) || !isInBounds(body.y_in)) {
         return null;
       }
       ids.push(body.body_id);
@@ -149,6 +239,28 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
   }
 
   return replay;
+}
+
+/**
+ * How far downlane, in feet, this replay's furthest recorded body reaches.
+ *
+ * The canvas needs it to choose one viewport that contains the whole
+ * accepted sequence — path, initial rack, intermediate frames, and the
+ * terminal frame — so no recorded position has to be clamped into a
+ * different on-screen coordinate than the one it actually describes.
+ * Bodies routinely end up well past the pin deck: the solver runs for two
+ * seconds and pins slide into the pit.
+ */
+export function replayMaxDistanceFt(replay: CollisionReplayResponse): number {
+  let maxY = -Infinity;
+  for (const frame of replay.frames) {
+    for (const body of frame.bodies) {
+      if (body.y_in > maxY) {
+        maxY = body.y_in;
+      }
+    }
+  }
+  return HEADPIN_DISTANCE_FT + maxY / IN_PER_FT;
 }
 
 /** How long the deck phase lasts, in simulation seconds: the last frame's

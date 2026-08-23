@@ -36,7 +36,13 @@ const MS_PER_S = 1000;
  * full static path, server's own rack, no replay bodies drawn. */
 export type PlaybackPhase =
   | { kind: 'path'; progress: number }
-  | { kind: 'deck'; tS: number }
+  /** `isTerminal` marks the run's last recorded frame. It is the solver's
+   * *terminal* snapshot, not necessarily a settled one — the backend stops
+   * at a two-second cap whether or not the bodies have come to rest — so
+   * it is presented as the end of the recording, never described as
+   * "settled". The controller paints it and holds it for a frame before
+   * handing back to the static rack. */
+  | { kind: 'deck'; tS: number; isTerminal: boolean }
   | { kind: 'settled' };
 
 export const SETTLED: PlaybackPhase = { kind: 'settled' };
@@ -72,7 +78,14 @@ export function phaseAt(sequence: PlaybackSequence, elapsedMs: number): Playback
   const deckMs = elapsedMs - TRAJECTORY_ANIMATION_DURATION_MS;
   const durationS = replayDurationS(sequence.replay);
   const tS = deckMs / MS_PER_S;
-  return tS >= durationS ? SETTLED : { kind: 'deck', tS };
+  // Clamped rather than skipped: landing past the end still resolves to the
+  // exact final recorded frame, so the last authoritative positions are
+  // actually shown. Real frame times almost never coincide with the
+  // duration exactly, so without this the terminal frame would be jumped
+  // over on essentially every run.
+  return tS >= durationS
+    ? { kind: 'deck', tS: durationS, isTerminal: true }
+    : { kind: 'deck', tS, isTerminal: false };
 }
 
 export interface FrameScheduler {
@@ -136,6 +149,21 @@ export class PlaybackController {
       this.onPhase(phase);
       if (phase.kind === 'settled') {
         this.handle = null;
+        return;
+      }
+      if (phase.kind === 'deck' && phase.isTerminal) {
+        // The terminal frame has just been reported. Schedule exactly one
+        // more frame — still this loop, still this single handle — whose
+        // only job is to hand back to the static rack. That guarantees the
+        // final authoritative positions get at least one paint instead of
+        // being replaced in the same tick that produced them.
+        this.handle = this.scheduler.requestFrame(() => {
+          if (this.disposed) {
+            return;
+          }
+          this.onPhase(SETTLED);
+          this.handle = null;
+        });
         return;
       }
       this.handle = this.scheduler.requestFrame(tick);

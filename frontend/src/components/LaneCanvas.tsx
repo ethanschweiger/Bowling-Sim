@@ -9,6 +9,7 @@ import { ShotAnalysis } from './ShotAnalysis';
 import {
   acceptReplay,
   BALL_BODY_ID,
+  replayMaxDistanceFt,
   replayPositionsAt,
   type ReplayLanePosition,
 } from '../domain/collisionReplay';
@@ -98,6 +99,18 @@ export function LaneCanvas({
   // doesn't exist for this throw. Never throws — see `acceptReplay`.
   const replay = useMemo(() => acceptReplay(latestThrow?.pinfall?.replay), [latestThrow]);
 
+  // One viewport for this throw's entire sequence, sized to contain the
+  // accepted replay's own furthest recorded body. Held for the whole
+  // sequence — path, initial rack, intermediate frames, terminal frame —
+  // so nothing rescales mid-playback and no recorded position gets pinned
+  // to the top edge at a distance it doesn't actually hold. Undefined
+  // (the default lane geometry) whenever there's no playable replay, so
+  // ordinary static drawing is pixel-identical to before.
+  const viewportMaxDistanceFt = useMemo(
+    () => (replay ? replayMaxDistanceFt(replay) : undefined),
+    [replay],
+  );
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
@@ -169,8 +182,8 @@ export function LaneCanvas({
     // function stays a pure function of already-resolved positions.
     const deckBodies =
       phase.kind === 'deck' && replay ? replayPositionsAt(replay, phase.tS) : null;
-    draw(canvas, size, standingPinIds, latestThrow, phase, deckBodies);
-  }, [size, standingPinIds, latestThrow, phase, replay]);
+    draw(canvas, size, standingPinIds, latestThrow, phase, deckBodies, viewportMaxDistanceFt);
+  }, [size, standingPinIds, latestThrow, phase, replay, viewportMaxDistanceFt]);
 
   const standingSummary = describeStandingPins(standingPinIds);
   const throwSummary = describeLatestThrow(latestThrow);
@@ -209,6 +222,7 @@ function draw(
   latestThrow: GameThrowResponse | null,
   phase: PlaybackPhase,
   deckBodies: readonly ReplayLanePosition[] | null,
+  viewportMaxDistanceFt: number | undefined,
 ): void {
   // The path phase's own progress; the deck phase and the settled state
   // both show the complete static path behind the action.
@@ -235,7 +249,12 @@ function draw(
     trajectory: style.getPropertyValue('--color-trajectory').trim(),
   };
 
-  const projection = createLaneProjection(cssSize.width, cssSize.height);
+  const projection = createLaneProjection(
+    cssSize.width,
+    cssSize.height,
+    undefined,
+    viewportMaxDistanceFt,
+  );
   const pinRadius = Math.max(5, cssSize.width * PIN_RADIUS_FRACTION);
 
   // Lane surface (boards 1..39) and gutters (either side) as two rects.
