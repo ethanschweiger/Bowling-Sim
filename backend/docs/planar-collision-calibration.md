@@ -170,8 +170,9 @@ imply `step_cap`; see "The reason is not a function of `steps_taken`" in
 
 ## Sensitivity: what this corpus can detect
 
-The corpus is a **sharp** tripwire for the fall threshold, because the
-headpin is a marginal result in every full-rack case. Final displacements:
+The corpus brackets the fall threshold closely from both sides, so a change
+to it is caught quickly — but by two specific pins, not by the corpus at
+large. Final displacements:
 
 | Case | pin 1 | other moved pins | untouched (exactly 0.00 in) |
 |---|---|---|---|
@@ -183,32 +184,66 @@ headpin is a marginal result in every full-rack case. Final displacements:
 
 So displacements are not bimodal. Secondary pins are indeed flung across the
 deck, but the pin the ball strikes first ends up within a few inches of its
-spot — and `brooklyn`'s pin 1, at **2.979317 in**, clears the 2.383 in
-threshold by only 25%. `light_hit`'s pin 1 is on the *other* side of it,
-moved but standing.
+spot. Those first-struck headpins are what sit near the threshold — and they
+sit at quite different distances from it:
 
-Measured bands, each backed by a focused deterministic test that varies the
-constant through `monkeypatch` and restores it:
+| Case | pin 1 | relative to the 2.383 in threshold |
+|---|---|---|
+| `light_hit` | 0.547127 in | **below** — moved, but stands |
+| `brooklyn` | 2.979317 in | falls, clearing it by only **25%** |
+| `pocket` | 3.301906 in | falls, clearing it by 39% |
+| `head_on` | 5.289243 in | falls, clearing it by 122% — well above |
 
-- **Raising** `FALL_DISPLACEMENT_THRESHOLD_IN`: ×1.2502 changes nothing;
-  ×1.2503 changes `brooklyn` — pin 1 alone stops falling, `(1,2,4,5,7,8,9)`
-  becomes `(2,4,5,7,8,9)`. The crossing sits at
-  2.979317 / 2.383 = **×1.250238**, i.e. about **+25.02%**, and it is
-  brooklyn's marginal headpin that puts it there.
-- **Lowering** it, *while it stays positive*: no corpus outcome changes
-  anywhere on (0, 2.383]. No pin ends between zero and the current
-  threshold, so shrinking it reclassifies nothing.
-- **At exactly zero**: every standing pin is reported fallen. This is not
-  the limit of the previous line but a different predicate — displacement is
-  non-negative and the fall test is `>=`, so at zero an untouched pin
-  satisfies it. That is why the claim above is bounded below rather than
-  stated for "any magnitude".
+Only `brooklyn` is near the current threshold from above, and only
+`light_hit` from below. `pocket` and `head_on` are not close to it in either
+direction.
 
-A previous version of this note claimed moved pins all travel 112–264 in and
-that no outcome is marginal, concluding this corpus is a poor fall-threshold
-tripwire. That was wrong in both directions: the range was read off the
-`spare_3_6_10` row alone and generalised, and the conclusion it supported is
-the opposite of what the numbers show.
+### The intervals
+
+The fall predicate is `displacement >= threshold`, so a boundary belongs to
+the *falling* side. Those two headpins are the only movements anywhere near
+the threshold, which makes the bands exact. Each is backed by a focused test
+that varies the constant through `monkeypatch` (restored at teardown) and
+checks **every** corpus case, not just one.
+
+| Threshold | Effect |
+|---|---|
+| > 2.979317277 | `brooklyn` loses pin 1: `(1,2,4,5,7,8,9)` → `(2,4,5,7,8,9)` |
+| **(0.547127276, 2.979317277]** | **no corpus outcome changes** — contains the default 2.383 |
+| ≤ 0.547127276, and > 0 | `light_hit` gains pin 1: `(3,5,6,7,9)` → `(1,3,5,6,7,9)` |
+| exactly 0 | every standing pin in every case is reported fallen |
+
+Notes on the edges:
+
+- The upper crossing is at 2.979317277 / 2.383 = **×1.250238** (+25.02%).
+  ×1.2502 changes nothing; ×1.2503 changes `brooklyn` alone.
+- The lower boundary is **inclusive on the changing side**: at exactly
+  0.547127276 the light hit's pin 1 satisfies `>=` and falls. So the
+  unchanged interval is open at the bottom, and rounding it to "(0, 2.383]"
+  would state something false.
+- Zero is a *different predicate* again, not the limit of the row above:
+  displacement is non-negative, so at zero even an untouched pin satisfies
+  `>=` and the whole rack is reported down. Both contact-free settle cases
+  go from no pins to ten.
+
+Each crossing reclassifies exactly one pin in exactly one case. Nothing else
+in the corpus lies in these bands.
+
+### Corrections to earlier versions of this note
+
+Recorded because a baseline is only useful if its history is honest.
+
+- The first version claimed moved pins all travel 112–264 in and that no
+  outcome is marginal, concluding this corpus is a poor fall-threshold
+  tripwire. Wrong in both directions: the range came from the
+  `spare_3_6_10` row alone and was generalised, and the conclusion is the
+  opposite of what the numbers show.
+- The second version fixed that but claimed no outcome changes anywhere on
+  (0, 2.383]. Adding the light hit in that same commit is what made the
+  claim false — its pin 1 sits inside that interval — and the regression
+  behind it checked only `pocket`, which is above every boundary and so
+  could not have caught it. Both are corrected above, and the lowering test
+  is now corpus-wide with the boundary read from the replay itself.
 
 ### Not characterised here
 

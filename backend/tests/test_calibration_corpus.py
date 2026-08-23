@@ -140,8 +140,9 @@ class CorpusCase:
         return ALL_PIN_IDS if self.standing_ids is None else frozenset(self.standing_ids)
 
 
-# The corpus. Six cases: three full-rack contact shots that span the useful
-# range of entry lines, one partial rack, and the two ways a run can settle.
+# The corpus. Seven cases: four full-rack contact shots spanning the useful
+# range of entry lines (pocket, head-on, light, Brooklyn), one partial rack,
+# and the two ways a run can settle.
 #
 # Pin geometry for reading the lines (see pin_deck.STANDARD_DECK): pin 1 sits
 # at lateral 0, pin 3 at -6 in, pin 2 at +6 in. Positive lateral is toward
@@ -472,13 +473,26 @@ def test_the_boundary_case_really_straddles_the_final_step():
 # module attribute at teardown whether the test passes or fails — the
 # production constant is never edited.
 
-# Brooklyn's pin 1 ends 2.979317 in from its spot, just 0.000567 in above
-# 1.25x the 2.383 in threshold. That single marginal pin is what the bands
-# below straddle, so they are stated as multipliers of the real constant
-# rather than as absolute inches.
+# Two boundaries bracket the current 2.383 in threshold, each set by one
+# pin's final displacement:
+#
+#   0.547127 in  light_hit pin 1 -- moved but standing; the LOWER boundary
+#   2.383    in  the production threshold
+#   2.979317 in  brooklyn  pin 1 -- falls, but only just; the UPPER boundary
+#
+# Between them no corpus outcome changes. Crossing either reclassifies
+# exactly one pin in exactly one case. The lower boundary is read from the
+# replay at runtime rather than written down, so it cannot drift from the
+# fixture it describes; the upper one is expressed as multipliers of the real
+# constant for the same reason.
 BROOKLYN_PIN_ONE_DISPLACEMENT_IN = 2.979317
 FALL_THRESHOLD_JUST_BELOW = 1.2502
 FALL_THRESHOLD_JUST_ABOVE = 1.2503
+
+
+def _light_hit_pin_one_displacement() -> float:
+    """The lower boundary, taken from the authoritative recorded replay."""
+    return _pin_displacements(_run(_case("light_hit")))[1]
 
 
 def _fallen_with_threshold(monkeypatch, threshold_in: float, case: CorpusCase) -> tuple:
@@ -488,9 +502,10 @@ def _fallen_with_threshold(monkeypatch, threshold_in: float, case: CorpusCase) -
     ).fallen_pin_ids
 
 
-def test_the_marginal_pin_sits_where_the_note_says_it_does():
-    """The whole sensitivity story rests on this one displacement, so pin it
-    directly rather than only through its downstream effect."""
+def test_brooklyn_is_the_case_nearest_the_current_threshold_from_above():
+    """Only Brooklyn sits close to the threshold on the falling side. The
+    other struck headpins are not near it, in either direction, so the upper
+    boundary is Brooklyn's alone."""
     displacement = _pin_displacements(_run(_case("brooklyn")))[1]
 
     assert displacement == pytest.approx(BROOKLYN_PIN_ONE_DISPLACEMENT_IN, abs=1e-6)
@@ -498,6 +513,17 @@ def test_the_marginal_pin_sits_where_the_note_says_it_does():
     assert displacement > FALL_DISPLACEMENT_THRESHOLD_IN
     assert displacement < FALL_DISPLACEMENT_THRESHOLD_IN * FALL_THRESHOLD_JUST_ABOVE
     assert displacement > FALL_DISPLACEMENT_THRESHOLD_IN * FALL_THRESHOLD_JUST_BELOW
+
+    # It is the closest from above: pocket and head-on clear the threshold by
+    # a wide margin, and the light hit is below it entirely.
+    headpin = {
+        name: _pin_displacements(_run(_case(name)))[1]
+        for name in ("pocket", "head_on", "light_hit", "brooklyn")
+    }
+    above = {n: d for n, d in headpin.items() if d >= FALL_DISPLACEMENT_THRESHOLD_IN}
+    assert min(above, key=lambda n: above[n]) == "brooklyn"
+    assert headpin["light_hit"] < FALL_DISPLACEMENT_THRESHOLD_IN, "below, and stands"
+    assert headpin["head_on"] > 2 * FALL_DISPLACEMENT_THRESHOLD_IN, "well above"
 
 
 def test_raising_the_fall_threshold_past_that_pin_changes_the_outcome(monkeypatch):
@@ -513,26 +539,84 @@ def test_raising_the_fall_threshold_past_that_pin_changes_the_outcome(monkeypatc
     )
 
 
-def test_lowering_the_fall_threshold_changes_nothing_while_it_stays_positive(monkeypatch):
-    """Precisely scoped: this holds on (0, current], not at every magnitude.
+def _all_fallen_with_threshold(monkeypatch, threshold_in: float) -> dict:
+    """Every corpus case's fallen set at one threshold.
 
-    No pin in this corpus ends between zero and the current threshold, so
-    shrinking it toward zero reclassifies nothing.
+    Corpus-wide on purpose. An earlier version of this regression looked only
+    at `pocket`, which is above every interesting boundary, and so missed
+    that the light hit's headpin crosses one.
     """
-    pocket = _case("pocket")
-    base = FALL_DISPLACEMENT_THRESHOLD_IN
+    monkeypatch.setattr(collision, "FALL_DISPLACEMENT_THRESHOLD_IN", threshold_in)
+    return {
+        case.name: _simulate_collision_detail(
+            case.impact(), standing_ids=case.standing_ids
+        ).fallen_pin_ids
+        for case in CALIBRATION_CORPUS
+    }
 
-    for threshold in (base, base / 2, 0.1, 1e-9):
-        assert _fallen_with_threshold(monkeypatch, threshold, pocket) == pocket.fallen_pin_ids
+
+def _baseline_fallen() -> dict:
+    return {case.name: case.fallen_pin_ids for case in CALIBRATION_CORPUS}
 
 
-def test_a_zero_threshold_is_a_different_predicate_and_does_change_the_outcome(monkeypatch):
-    """Zero is not "very small": displacement is non-negative and the fall
-    test is `>=`, so at zero an untouched pin satisfies it and the whole rack
-    is reported fallen. This is why the claim above is bounded below."""
-    pocket = _case("pocket")
+def test_the_lowest_nonzero_displacement_is_the_light_hit_headpin():
+    """The lower boundary is derived from the authoritative replay, not
+    hard-coded: it is simply the smallest distance any pin actually moved."""
+    moved = sorted(
+        displacement
+        for case in CALIBRATION_CORPUS
+        for displacement in _pin_displacements(_run(case)).values()
+        if displacement > 0.0
+    )
 
-    assert _fallen_with_threshold(monkeypatch, 0.0, pocket) == tuple(sorted(ALL_PIN_IDS))
+    assert moved[0] == pytest.approx(_light_hit_pin_one_displacement(), abs=1e-12)
+    # And it is the only movement anywhere below the current threshold, which
+    # is why exactly one case changes when the threshold crosses it.
+    assert len([d for d in moved if d < FALL_DISPLACEMENT_THRESHOLD_IN]) == 1
+
+
+def test_lowering_the_threshold_changes_nothing_until_it_reaches_that_pin(monkeypatch):
+    """The unchanged interval is (light-hit displacement, default] — open at
+    the bottom, because the predicate is `>=` and so the boundary itself
+    already changes the outcome."""
+    boundary = _light_hit_pin_one_displacement()
+    baseline = _baseline_fallen()
+
+    for threshold in (FALL_DISPLACEMENT_THRESHOLD_IN, 1.0, 0.6, boundary + 1e-12):
+        assert _all_fallen_with_threshold(monkeypatch, threshold) == baseline, threshold
+
+
+def test_at_and_below_that_pin_exactly_the_light_hit_headpin_starts_falling(monkeypatch):
+    boundary = _light_hit_pin_one_displacement()
+    baseline = _baseline_fallen()
+    light = _case("light_hit")
+    expected_light = tuple(sorted(light.fallen_pin_ids + (1,)))
+
+    # Inclusive at the boundary: `displacement >= threshold` is satisfied when
+    # the two are equal, so the boundary belongs to the changed side.
+    for threshold in (boundary, boundary - 1e-12, 0.1, 1e-9):
+        result = _all_fallen_with_threshold(monkeypatch, threshold)
+
+        assert result["light_hit"] == expected_light, threshold
+        assert result["light_hit"] == (1, 3, 5, 6, 7, 9), threshold
+        # Exactly one case moves: nothing else in the corpus has a pin in
+        # this band, and untouched pins sit at exactly zero.
+        others = {k: v for k, v in result.items() if k != "light_hit"}
+        assert others == {k: v for k, v in baseline.items() if k != "light_hit"}, threshold
+
+
+def test_a_zero_threshold_is_a_different_predicate_again(monkeypatch):
+    """Zero is not just "very small". Displacement is non-negative and the
+    fall test is `>=`, so at zero even a pin that was never touched satisfies
+    it and every standing pin is reported fallen. That is why the interval
+    above is bounded below by a positive number rather than by zero."""
+    result = _all_fallen_with_threshold(monkeypatch, 0.0)
+
+    for case in CALIBRATION_CORPUS:
+        assert result[case.name] == tuple(sorted(case.requested_rack)), case.name
+
+    # Including the contact-free runs, where nothing moved at all.
+    assert result["low_energy_settle"] == tuple(sorted(ALL_PIN_IDS))
 
 
 def test_the_production_threshold_is_restored_after_those_experiments():
