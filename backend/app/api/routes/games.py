@@ -35,11 +35,37 @@ from app.models.schemas import (
 )
 from app.physics.ball import BALL_CATALOG
 from app.physics.collision import DEFAULT_PINFALL_MODEL
-from app.physics.impact import impact_state_from_result
+from app.physics.impact import TruncatedTrajectoryError, impact_state_from_result
 from app.physics.simulate import simulate_throw
 from app.physics.throw import Throw, sample_release
 
 router = APIRouter(prefix="/games", tags=["games"])
+
+# Stable, internals-free text for a throw whose simulated trajectory never
+# reached the pin deck (see `app.physics.impact.TruncatedTrajectoryError`).
+# `GameSession.throw` guarantees this is raised before lane wear, rack
+# change, or scorecard update — see its own docstring — so the response
+# can honestly promise nothing was recorded. Never include the exception's
+# own message here: that carries a raw distance/stride value, which is a
+# solver internal, not API surface.
+TRUNCATED_TRAJECTORY_DETAIL = (
+    "the simulated trajectory did not reach the pin deck; this throw was "
+    "not recorded and game state is unchanged. Retrying is expected to work."
+)
+
+
+def truncated_trajectory_http_error() -> HTTPException:
+    """The one response both throw routes give for `TruncatedTrajectoryError`.
+
+    503, not 4xx: the release itself was valid input (it already passed
+    the same `ThrowRequest`/`RELEASE_BOUNDS` validation as any other
+    throw) — this is the server's simplified solver failing to complete a
+    physical computation, not a malformed request. A 4xx would incorrectly
+    tell the caller their input was the problem and retrying with the same
+    release won't help; a 503 correctly says the *server* couldn't
+    complete this attempt and a retry is reasonable.
+    """
+    return HTTPException(status_code=503, detail=TRUNCATED_TRAJECTORY_DETAIL)
 
 
 def snapshot_to_game_state(snapshot: GameStateSnapshot) -> GameStateResponse:
@@ -130,6 +156,8 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
         )
     except GameCompleteError:
         raise HTTPException(status_code=409, detail=f"game '{game_id}' is already complete")
+    except TruncatedTrajectoryError:
+        raise truncated_trajectory_http_error()
 
     return GameThrowResponse(
         game_id=game_id,

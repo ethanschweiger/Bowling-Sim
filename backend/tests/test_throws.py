@@ -1,9 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.routes.games import TRUNCATED_TRAJECTORY_DETAIL
 from app.api.routes.throws import LEGACY_GAME_ID
 from app.games.service import default_game_service
 from app.main import app
+from app.physics.simulate import SimulationResult, TerminalState, TrajectoryPoint
 
 client = TestClient(app)
 
@@ -45,6 +47,42 @@ def test_missing_required_field_returns_422():
     payload = {k: v for k, v in VALID_PAYLOAD.items() if k != "ball_id"}
     response = client.post("/api/v1/simulations/throws", json=payload)
     assert response.status_code == 422
+
+
+def _truncated_simulate_throw(ball, throw, lane_condition, step_ft=None):
+    """A `simulate_throw`-shaped stand-in whose result never reaches the
+    pin deck — see the identical helper in test_games_api.py for why."""
+    return SimulationResult(
+        path=[TrajectoryPoint(distance_ft=0.0, board=throw.launch_position)],
+        entry_board=throw.launch_position,
+        entry_angle_deg=0.0,
+        speed_at_pins_mph=10.0,
+        lane_condition_version=lane_condition.version,
+        terminal=TerminalState(
+            distance_ft=10.0,
+            board=throw.launch_position,
+            heading_deg=0.0,
+            speed_mph=10.0,
+            reached_pin_deck=False,
+        ),
+    )
+
+
+def test_truncated_trajectory_returns_503_and_leaves_the_shared_game_unchanged(monkeypatch):
+    before = client.get(f"/api/v1/games/{LEGACY_GAME_ID}").json()
+
+    # Patch the name this route resolves it through, not `throws.py` — the
+    # legacy route shares `create_game_throw`'s underlying mechanism only
+    # via `GameSession.throw`, but calls its own module-level `simulate_throw`.
+    monkeypatch.setattr("app.api.routes.throws.simulate_throw", _truncated_simulate_throw)
+
+    response = client.post("/api/v1/simulations/throws", json=VALID_PAYLOAD)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == TRUNCATED_TRAJECTORY_DETAIL
+
+    after = client.get(f"/api/v1/games/{LEGACY_GAME_ID}").json()
+    assert after == before, "a rejected legacy throw must not change lane version, rack, or scorecard"
 
 
 def test_representative_throw_returns_a_plausible_trajectory():

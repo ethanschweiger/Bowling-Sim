@@ -17,12 +17,12 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.routes.games import snapshot_to_game_state
+from app.api.routes.games import snapshot_to_game_state, truncated_trajectory_http_error
 from app.games.service import GameCompleteError, default_game_service
 from app.models.schemas import PinfallInfo, ReleaseValues, ThrowRequest, ThrowResponse, TrajectoryPointResponse
 from app.physics.ball import BALL_CATALOG
 from app.physics.collision import DEFAULT_PINFALL_MODEL
-from app.physics.impact import impact_state_from_result
+from app.physics.impact import TruncatedTrajectoryError, impact_state_from_result
 from app.physics.simulate import simulate_throw
 from app.physics.throw import Throw, sample_release
 
@@ -61,6 +61,8 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
         # POST /api/v1/games/legacy-default/reset (it's a real game_id
         # like any other) to keep using this deprecated route.
         raise HTTPException(status_code=409, detail="the shared legacy game is already complete")
+    except TruncatedTrajectoryError:
+        raise truncated_trajectory_http_error()
 
     return ThrowResponse(
         seed=seed,
