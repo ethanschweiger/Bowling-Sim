@@ -21,8 +21,12 @@ def test_known_nominal_speed_produces_the_correct_time_basis():
     fps = mph_to_fps(15.0)
     assert fps == pytest.approx(22.0)
 
+    # The timestep is feet / (feet per second) = seconds, whatever the
+    # stride happens to be. Written against STEP_FT rather than a baked-in
+    # 0.5 so refining the integration stride doesn't fail a test that is
+    # really about the mph<->fps basis.
     dt = STEP_FT / fps
-    assert dt == pytest.approx(0.5 / 22.0)
+    assert dt == pytest.approx(STEP_FT / 22.0)
     assert fps_to_mph(fps) == pytest.approx(15.0)
 
     # 60 rpm is exactly one revolution per second.

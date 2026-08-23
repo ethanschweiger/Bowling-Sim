@@ -47,12 +47,59 @@ Throw         — speed, rev rate, axis rotation, axis tilt, launch angle, launc
 LaneCondition — oil grid (board x foot), derived from a standard house shot
 ```
 
-Simulation steps down the lane in half-foot increments. At each step, the
-lane condition's friction at that point slows the ball down and converts
-stored spin into lateral drift. Friction is derived from how much oil
-remains in that grid cell: heavy oil skids the ball straight, a dry board
-grips it and starts the hook. That's the whole model — no perfect physics,
-just enough to make ball and lane choices matter.
+### Skid, hook, roll — from one mechanism
+
+USBC's [Bowling Ball Motion Study](https://images.bowl.com/bowl/media/legacy/internap/bowl/equipandspecs/pdfs/articles/skid_hook_roll_v3_final.pdf)
+describes measured ball motion in three phases — **skid, hook, roll** —
+where the first segment is essentially straight, the middle one curves, and
+the last is straight again in the new direction. This simulator reproduces
+that ordering without scripting three stages, because a scripted stage
+boundary is exactly what produces an unphysical snap at the oil line.
+
+The mechanism is **lateral slip**. A ball delivered with axis rotation has
+its contact patch moving sideways relative to the lane. Friction acts on
+that relative motion and does two things at once: it pushes the ball
+sideways, and it consumes the slip that was driving the push.
+
+- **Skid** — in the oiled heads there is very little traction, so almost no
+  slip converts. The ball holds close to its release heading.
+- **Hook** — as the pattern thins, traction rises, slip converts quickly,
+  and the ball turns. A curve rather than a corner, because both friction
+  and the remaining slip vary smoothly.
+- **Roll** — once the slip is spent there is nothing left to convert,
+  lateral acceleration falls to zero, and the ball continues straight along
+  whatever heading the hook left it with.
+
+Nothing switches phase by name or by distance. A ball that never finds
+friction never leaves skid; one that exhausts its slip early rolls the rest
+of the way. Critically, the slip is spent by exactly the impulse it
+produces, so the *total* lateral velocity a throw can gain is bounded by
+the slip it was released with — the hook is self-limiting rather than
+accelerating for the whole lane, which is what the previous model did.
+
+Axis rotation sets **how much** slip exists (a full roll at 0° has no
+sideways component and genuinely cannot hook; a spinner at 90° carries the
+most). Axis tilt sets **how fast** it converts, so a tilted release skids
+longer and turns more gradually — it is a timing modifier, never a cap.
+Even at maximum tilt the ball still develops real hook, just later.
+
+Traction falls off faster than the nominal friction coefficient, because an
+oil film carries load rather than merely lubricating: the ball is closer to
+hydroplaning than to sliding. Squaring the friction ratio turns the
+pattern's ~5.3× oiled/dry coefficient spread into roughly a 28× traction
+spread, which is what separates a genuine skid phase from a gentle
+continuous arc.
+
+**Sourced versus chosen.** Pin and lane dimensions, pin weight, and
+coefficient of restitution come from the USBC equipment manual and are
+cited at their use sites. The *phase ordering* is sourced from the motion
+study above, and the directional facts about house-shot oil distribution
+from USBC coaching guidance. Everything numeric in the trajectory
+model — `SLIP_EFFICIENCY`, `LATERAL_TRACTION`, `TRACTION_FRICTION_EXPONENT`,
+`TILT_DELAY`, `FORWARD_DRAG`, the oil pattern's own shape — is a **chosen
+modeling coefficient**, tuned so a reactive ball on the bundled house shot
+skids, turns over in the midlane, and rolls out before the deck. They are
+not measurements, and this is not a calibrated ball-motion study.
 
 ### One unit system, declared once
 
@@ -65,9 +112,39 @@ Lateral position gets the same treatment: it accumulates as a length
 only at the trajectory boundary, via a declared board width (1.05 in —
 close to a regulation lane's 41.5 in across 39 boards). It's never added to
 a board index directly. Results convert back to mph and boards only when
-they leave the simulator. `FORWARD_DRAG`, `SPIN_DECAY`, and `HOOK_GAIN` in
-`simulate.py` are openly empirical — tuned so skid, hook, and roll stay
-credible and bounded, not derived from rigid-body mechanics.
+they leave the simulator. The slip-model coefficients in `simulate.py` are
+openly empirical — tuned so skid, hook, and roll stay credible and bounded,
+not derived from rigid-body mechanics.
+
+The lane is integrated at a 0.05 ft stride, but the returned path is
+sampled every 0.5 ft. Those are deliberately separate numbers: integration
+precision and response size are different concerns, and tying them together
+forces a choice between a smooth model and a small payload. The oil field
+is also sampled continuously — `oil_at_interpolated` bilinearly
+interpolates between grid cells — so friction varies smoothly along a path
+instead of stepping at every cell boundary and putting small artificial
+direction changes into the trajectory.
+
+### Which way is which
+
+Board 1 is the bowler's **right** gutter and board 39 the bowler's **left**,
+so board 20 is the centre and *higher board numbers run left*. Positive
+lateral movement, positive `launch_angle`, and positive `entry_angle_deg`
+all mean "toward higher boards", i.e. toward the bowler's left.
+
+That makes the conventional right-handed line a **negative** launch angle:
+the ball is laid down left of centre (around board 28), sent out toward
+lower boards through the heads, and the hook brings it back toward higher
+boards into the 1-3 pocket near board 17-18. `launch_position` is the
+ball's laydown board at the foul line, not where the bowler stands.
+
+The current request defaults aim the other way, which sends a ball toward
+the left edge rather than down a playable line. Correcting the default and
+adding on-screen orientation cues belongs to the queued UI milestone; the
+backend convention is documented here so that work has something
+unambiguous to build against. A future left-handed mode would be an
+explicit, separately tested feature — the coordinate system is not
+silently mirrored.
 
 Because a board is a narrow unit (~0.0875 ft), `launch_angle`'s legal range
 is deliberately tight (±2°, see `RELEASE_BOUNDS` in `throw.py`): this model
@@ -775,18 +852,20 @@ percentages, leave tracking, ball usage stats.
 - `FORWARD_DRAG`, `SPIN_DECAY`, and `HOOK_GAIN` (`app/physics/simulate.py`)
   are hand-tuned for bounded, credible motion, not fit to real ball-motion
   data.
-- The trajectory does not yet reproduce the skid → hook → roll phase order
-  that USBC's ball-motion work describes. Lateral force is applied
-  continuously for the whole trip, so a shot curves in one direction the
-  entire way down rather than running straight through the oiled heads,
-  turning as it finds friction, and then holding a stable line into the
-  pins. With the current defaults a right-handed release started around
-  board 28 drifts steadily toward *higher* boards (the bowler's left) —
-  the opposite of a conventional right-handed line — and an aggressive
-  launch angle can run it to the left lane edge. The path drawn is a
-  faithful rendering of what the simulation computed; the simulation
-  itself is what needs the correction. Recalibrating it is the next
-  planned milestone.
+- The trajectory model reproduces the skid → hook → roll *ordering* and
+  responds sensibly to ball, release, and oil, but its coefficients are
+  chosen rather than fitted (see "Skid, hook, roll" above). Entry boards,
+  breakpoint distances, and hook magnitudes should be read as
+  directionally credible, not as predictions of what a given real ball and
+  release would do.
+- The request defaults still aim a positive launch angle, which on this
+  coordinate system points toward the bowler's left — the same direction
+  the hook goes — so the starter configuration runs toward the left edge
+  rather than down a playable line. The backend convention is documented
+  under "Which way is which"; correcting the default and adding on-screen
+  orientation cues is queued as UI work.
+- Only right-handed deliveries are modelled. There is no left-handed mode,
+  and the coordinate system is not mirrored to fake one.
 - `launch_angle` is held constant for a throw's whole trip down the lane —
   nothing decays it back toward straight — which is why its legal range is
   a tight ±2° rather than a more generously "realistic" figure. A model

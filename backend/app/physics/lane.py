@@ -14,6 +14,7 @@ definition of a pattern's shape; `LaneCondition` is what that shape looks
 like right now, after however many throws have crossed it.
 """
 
+import math
 from dataclasses import dataclass
 
 BOARD_COUNT = 39
@@ -184,8 +185,47 @@ class LaneCondition:
         return board_idx, dist_idx
 
     def oil_at(self, distance_ft: float, board: float) -> float:
+        """Oil in the single grid cell containing this point.
+
+        Cell-resolution, deliberately: this is the quantity `apply_wear`
+        adds to and subtracts from, and wear is bookkeeping over discrete
+        cells. For reading a *force* along a trajectory, use
+        `oil_at_interpolated`, which doesn't step at cell boundaries.
+        """
         board_idx, dist_idx = self._cell_index(distance_ft, board)
         return self.oil_grid[board_idx][dist_idx]
+
+    def oil_at_interpolated(self, distance_ft: float, board: float) -> float:
+        """Oil at a point, bilinearly interpolated between the four
+        surrounding grid cells.
+
+        The grid stores one value per (board, foot). Reading it by nearest
+        cell makes oil — and therefore friction, and therefore the lateral
+        force — a staircase: constant for a foot, then a step. Integrating
+        a trajectory through that produces small direction changes at cell
+        boundaries that are artifacts of the lookup, not of the physics,
+        and they show up as kinks in the drawn path. Interpolating makes
+        the field continuous, so a smooth path stays smooth.
+
+        The stored grid is unchanged; this only changes how it is sampled.
+        Cell centres sit at integer boards and whole feet, so interpolating
+        at a cell centre returns exactly that cell's value.
+        """
+        # Continuous cell coordinates: board N sits at index N-1, distance
+        # D ft at index D / GRID_RESOLUTION_FT.
+        board_pos = _clamp(board - 1.0, 0.0, BOARD_COUNT - 1)
+        dist_pos = _clamp(distance_ft / GRID_RESOLUTION_FT, 0.0, GRID_LENGTH_CELLS - 1)
+
+        b0 = int(math.floor(board_pos))
+        d0 = int(math.floor(dist_pos))
+        b1 = min(b0 + 1, BOARD_COUNT - 1)
+        d1 = min(d0 + 1, GRID_LENGTH_CELLS - 1)
+        bf = board_pos - b0
+        df = dist_pos - d0
+
+        top = self.oil_grid[b0][d0] * (1.0 - df) + self.oil_grid[b0][d1] * df
+        bottom = self.oil_grid[b1][d0] * (1.0 - df) + self.oil_grid[b1][d1] * df
+        return top * (1.0 - bf) + bottom * bf
 
     def friction_at(self, distance_ft: float, board: float) -> float:
         """Friction coefficient at a point on the lane, derived from the oil
@@ -193,11 +233,15 @@ class LaneCondition:
         by temperature. Always within [OILED_FRICTION, DRY_FRICTION],
         regardless of how far out of bounds distance/board/temperature are
         pushed.
+
+        Samples the oil field continuously (`oil_at_interpolated`), so
+        friction varies smoothly along a path instead of stepping at every
+        grid boundary.
         """
         if self.peak_oil_ml <= 0:
             base = DRY_FRICTION
         else:
-            oil_ratio = _clamp(self.oil_at(distance_ft, board) / self.peak_oil_ml, 0.0, 1.0)
+            oil_ratio = _clamp(self.oil_at_interpolated(distance_ft, board) / self.peak_oil_ml, 0.0, 1.0)
             base = DRY_FRICTION - oil_ratio * (DRY_FRICTION - OILED_FRICTION)
 
         adjusted = base * _temperature_friction_multiplier(self.temperature_f)

@@ -1,12 +1,41 @@
 """The simplified throw simulator.
 
-velocity -> friction -> angular velocity -> hook potential -> trajectory -> pin impact
+release -> side slip -> friction engagement -> skid / hook / roll -> pin impact
 
-We step down the lane in half-foot increments. At each step, friction (read
-from the lane condition's oil grid) does two things: it bleeds off forward
-speed, and it converts stored spin into lateral motion — the hook. On oil,
-friction is low and the ball mostly skids straight. Past the oil, friction
-rises and the ball "reads the lane" and turns.
+## The phase model
+
+USBC's Bowling Ball Motion Study describes real ball motion in three
+phases — **skid, hook, roll** — where the first segment is essentially
+straight, the middle one curves, and the last is straight again in the new
+direction. This simulator reproduces that ordering from one mechanism
+rather than scripting three stages, because a scripted stage boundary is
+exactly what produces an unphysical "snap" at the oil line.
+
+The mechanism is **lateral slip**. A ball delivered with axis rotation has
+its contact patch moving sideways relative to the lane. Friction acts on
+that relative motion, and does two things at once: it pushes the ball
+sideways (turning it), and it consumes the slip that was driving the push.
+So:
+
+- **Skid** — in the oiled heads friction is low, so very little slip is
+  converted per foot. The ball holds close to its release heading.
+- **Hook** — as the pattern thins, friction rises, slip converts quickly,
+  and the ball turns. This is a curve, not a corner, because friction and
+  the remaining slip both vary smoothly.
+- **Roll** — once the slip is spent there is nothing left for friction to
+  convert, lateral acceleration falls to zero, and the ball continues
+  straight along whatever heading the hook left it with.
+
+Nothing switches phases by name or by distance. A ball that never finds
+friction never leaves skid; a ball that exhausts its slip early rolls the
+rest of the way. The phases are what the integration does, not what it is
+told to do.
+
+This is deliberately *empirical* — accurate-enough numerical mechanics to
+produce credible, explainable motion, not a rigid-body model of a bowling
+ball. Coefficients below are stated modeling choices, not measurements;
+see "Calibration" in the README for which numbers are sourced and which
+are chosen.
 
 Everything inside the loop runs in one unit system — feet and seconds (see
 `app.physics.units`). Speed and spin are converted to ft/s and rad/s once,
@@ -58,14 +87,63 @@ from dataclasses import dataclass
 from typing import Optional
 
 from app.physics.ball import Ball
-from app.physics.lane import LaneCondition
+from app.physics.lane import DRY_FRICTION, LaneCondition
 from app.physics.throw import Throw
 from app.physics.units import boards_to_ft, fps_to_mph, ft_to_boards, mph_to_fps, rpm_to_rad_per_s
 
-STEP_FT = 0.5
+# Integration stride. Fine enough that the trajectory is a numerical
+# result rather than a chain of coarse visual segments; the returned path
+# is sampled separately (PATH_SAMPLE_FT) so this can be refined without
+# inflating the response.
+STEP_FT = 0.05
+
+# How far apart the *returned* path samples are. Independent of the
+# integration stride on purpose: precision and payload are different
+# concerns, and tying them together forces a choice between a smooth model
+# and a small response.
+PATH_SAMPLE_FT = 0.5
+
 FORWARD_DRAG = 0.35           # empirical: how hard friction slows the ball down, per second
-SPIN_DECAY = 0.55             # empirical: how hard friction bleeds off spin, per second
-HOOK_GAIN = 0.18               # empirical: ft/s^2 of lateral accel per (friction * rad/s * hook_potential)
+
+# --- Lateral slip model -------------------------------------------------
+# See the module docstring. All four are chosen modeling coefficients, not
+# measurements; they are tuned so a reactive ball on the bundled house shot
+# skids through the heads, turns over in the midlane, and rolls out before
+# the deck.
+
+# Fraction of the contact patch's rotational speed that acts as usable
+# sideways slip. A real ball's axis geometry, track flare, and coverstock
+# absorb most of it; this stands in for all of that at once. Because the
+# slip reservoir is spent by the impulse it produces (below), this
+# effectively sets *how many boards of hook* a release is worth.
+SLIP_EFFICIENCY = 0.17
+
+# Peak lateral acceleration on a fully dry lane, as a fraction of g. This
+# sets how *fast* slip converts — the hook's sharpness and where it
+# finishes — not how much total turn is available.
+LATERAL_TRACTION = 0.045
+
+# Traction falls off faster than the nominal friction coefficient does,
+# because an oil film carries part of the load rather than merely
+# lubricating it: the ball is closer to hydroplaning than to sliding.
+# Squaring the friction ratio turns the pattern's 5.3x oiled/dry
+# coefficient spread into roughly a 28x traction spread, which is what
+# separates a genuine skid phase from a gentle continuous curve.
+TRACTION_FRICTION_EXPONENT = 2.0
+
+# Axis tilt scales conversion *rate*, never the reservoir: at maximum tilt
+# slip converts at (1 - TILT_DELAY) of its rate, so the ball skids longer
+# and the backend is more gradual — but it still has every bit of its slip
+# to spend, so it still hooks.
+TILT_DELAY = 0.55
+
+# Below this remaining slip the ball is rolling: friction has nothing
+# sideways left to work on, so lateral acceleration is zero and the path
+# continues straight. Expressed in ft/s.
+ROLL_SLIP_FPS = 0.02
+
+# Standard gravity in ft/s^2, for the Coulomb lateral-acceleration term.
+GRAVITY_FT_PER_S2 = 32.174
 
 # Below this forward speed the ball is treated as carried by momentum to the
 # pins rather than integrated further — avoids a division blowup as speed
@@ -193,13 +271,36 @@ def simulate_throw(
     lateral_offset_ft = 0.0  # a length, not a board number — see module docstring
 
     forward_velocity_fps = mph_to_fps(throw.speed_mph)
+    # Launch angle is the release's persistent initial heading, nothing
+    # more. It sets where the ball is pointed leaving the hand; it does not
+    # curve anything. All curvature below comes from slip.
     lateral_velocity_fps = math.tan(math.radians(throw.launch_angle)) * forward_velocity_fps
-    angular_velocity_rad_s = rpm_to_rad_per_s(throw.rev_rate)
 
-    # Axis rotation sets which way the ball wants to turn once it grips;
-    # axis tilt delays that turn by keeping more of the roll "stored up."
-    hook_direction = math.sin(math.radians(throw.axis_rotation))
-    tilt_delay = math.cos(math.radians(throw.axis_tilt))
+    # The slip reservoir the hook will spend. Axis rotation decides how much
+    # of the ball's rotation is oriented sideways rather than along the
+    # direction of travel: a full roll (0 deg) has no sideways component and
+    # so cannot hook, which is the correct physical result rather than a
+    # tuning choice. A full spinner (90 deg) carries the most.
+    #
+    # This is a *reservoir*, not a force multiplier — that distinction is
+    # the whole point. More rotation means more slip to spend, which means
+    # the turn continues further down the lane, not that every foot of lane
+    # gets a proportionally harder shove.
+    angular_velocity_rad_s = rpm_to_rad_per_s(throw.rev_rate)
+    ball_radius_ft = ball.radius_in / 12.0
+    lateral_slip_fps = (
+        angular_velocity_rad_s
+        * ball_radius_ft
+        * math.sin(math.radians(throw.axis_rotation))
+        * SLIP_EFFICIENCY
+        * ball.hook_potential
+    )
+
+    # Axis tilt scales how fast that slip converts, never how much exists.
+    # High tilt therefore delays and softens the hook instead of capping it:
+    # the ball still has every bit of its slip to spend, it just takes
+    # longer to spend it, so the backend is later and more continuous.
+    tilt_conversion = 1.0 - TILT_DELAY * math.sin(math.radians(throw.axis_tilt))
 
     board_lo, board_hi = 0.0, lane_condition.board_count + 1
 
@@ -212,6 +313,10 @@ def simulate_throw(
     steps = 0
     length_ft = lane_condition.length_ft
     max_steps = step_cap_for(length_ft, active_step_ft)
+    # Never sample finer than the integration itself: a sampling interval
+    # below the stride would just repeat steps.
+    sample_every_ft = max(PATH_SAMPLE_FT, active_step_ft)
+    next_sample_ft = sample_every_ft
 
     while (
         distance < length_ft - DISTANCE_EPSILON_FT
@@ -236,10 +341,35 @@ def simulate_throw(
         dt = this_step_ft / forward_velocity_fps  # ft / (ft/s) = s — consistent units throughout
 
         forward_velocity_fps = max(0.0, forward_velocity_fps - friction * FORWARD_DRAG * forward_velocity_fps * dt)
-        angular_velocity_rad_s = max(0.0, angular_velocity_rad_s - friction * SPIN_DECAY * angular_velocity_rad_s * dt)
 
-        hook_force_fps2 = friction * HOOK_GAIN * angular_velocity_rad_s * ball.hook_potential * tilt_delay
-        lateral_velocity_fps += hook_force_fps2 * hook_direction * dt
+        # --- skid / hook / roll, from one mechanism ---------------------
+        # Lateral acceleration is Coulomb friction acting on the remaining
+        # slip. It is bounded by traction, and it scales with how much slip
+        # is left, so it fades to nothing as the ball rolls out. No branch
+        # decides which phase this is; the numbers do.
+        if lateral_slip_fps > ROLL_SLIP_FPS:
+            # Traction rises steeply as the pattern thins (see
+            # TRACTION_FRICTION_EXPONENT), and `tanh` tapers it smoothly to
+            # zero as the last of the slip goes — a hard `min(...)` would
+            # put a corner in the acceleration exactly where the ball stops
+            # hooking, which is the one place a corner would be visible.
+            grip = (friction / DRY_FRICTION) ** TRACTION_FRICTION_EXPONENT
+            taper = math.tanh(lateral_slip_fps / max(ROLL_SLIP_FPS, 1e-9))
+            lateral_accel_fps2 = (
+                LATERAL_TRACTION * GRAVITY_FT_PER_S2 * grip * taper * tilt_conversion
+            )
+            delta_v = lateral_accel_fps2 * dt
+            lateral_velocity_fps += delta_v
+
+            # The slip is spent by exactly the impulse it produced. That
+            # single line is what makes the hook self-limiting and bounds
+            # the whole turn: total lateral velocity gained over a throw can
+            # never exceed the slip the release started with, so a ball
+            # cannot accelerate sideways forever the way the old always-on
+            # force did.
+            lateral_slip_fps = max(0.0, lateral_slip_fps - delta_v)
+        # else: rolling — no sideways slip left, so no lateral force, and
+        # the ball holds whatever heading the hook left it with.
 
         lateral_offset_ft += lateral_velocity_fps * dt  # length + length — never a raw feet-onto-board add
         raw_board = board_from_offset(lateral_offset_ft)
@@ -254,12 +384,20 @@ def simulate_throw(
         # at the lane length instead of a few float ULPs either side of it.
         distance = length_ft if is_final_step else distance + this_step_ft
         steps += 1
-        path.append(
-            TrajectoryPoint(
-                distance_ft=round(distance, DISTANCE_DECIMALS),
-                board=round(board, BOARD_DECIMALS),
+
+        # Sample the returned path on its own interval, not every
+        # integration step. The model can be integrated as finely as it
+        # needs without the response growing to match. The last step always
+        # records, so the final sample is the canonical endpoint itself.
+        if is_final_step or distance >= next_sample_ft - DISTANCE_EPSILON_FT:
+            path.append(
+                TrajectoryPoint(
+                    distance_ft=round(distance, DISTANCE_DECIMALS),
+                    board=round(board, BOARD_DECIMALS),
+                )
             )
-        )
+            while next_sample_ft <= distance + DISTANCE_EPSILON_FT:
+                next_sample_ft += sample_every_ft
 
     entry_angle = math.degrees(math.atan2(lateral_velocity_fps, max(forward_velocity_fps, 1e-6)))
 

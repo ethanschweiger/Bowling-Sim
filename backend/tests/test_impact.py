@@ -37,11 +37,12 @@ def test_impact_state_lateral_position_is_correctly_oriented_from_the_terminal_s
     # board 39 the bowler's left, so center is board 20 and higher numbers
     # run left. (This comment previously said "right of center", which
     # inverted the documented convention.)
-    # launch_angle is held below the default 2.0 deliberately: at the
-    # default this release runs all the way to the left lane edge and
-    # clamps at board 40, which is both an unrepresentative endpoint and
-    # an exact integer (see the final assertion).
-    throw = Throw(launch_position=28.0, launch_angle=0.5)
+    # Aimed toward lower boards, the conventional right-handed direction.
+    # A positive launch angle here aims the same way the hook already
+    # goes and runs this release to the left lane edge, where the board
+    # clamps to an exact 40 and every rounding route trivially agrees
+    # (see the final assertion).
+    throw = Throw(launch_position=28.0, launch_angle=-1.0)
     lane = LaneCondition.house_shot()
 
     result = simulate_throw(ball, throw, lane)

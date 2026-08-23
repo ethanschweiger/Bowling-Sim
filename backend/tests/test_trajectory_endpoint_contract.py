@@ -20,6 +20,7 @@ from app.physics.lane import LaneCondition
 from app.physics.pin_deck import LANE_CENTER_BOARD
 from app.physics.simulate import (
     BOARD_DECIMALS,
+    PATH_SAMPLE_FT,
     STEP_CAP_GUARD,
     STEP_FT,
     SimulationResult,
@@ -255,19 +256,22 @@ def test_step_cap_rejects_a_nonpositive_stride():
             step_cap_for(60.0, bad)
 
 
-def test_returned_path_length_is_bounded_by_the_step_cap():
-    # Visual fidelity must not quietly become an unbounded API cost: the
-    # response carries at most one point per integration step, plus the
-    # release point. Anything that raises path density has to raise this
-    # documented bound deliberately.
+def test_returned_path_length_is_bounded_by_the_sampling_interval():
+    # Visual fidelity must not quietly become an unbounded API cost. The
+    # response is sampled on PATH_SAMPLE_FT, deliberately independent of
+    # the integration stride, so refining the model does not inflate the
+    # payload — the bound is lane length / sampling interval either way.
     lane = LaneCondition.house_shot()
-    bound = step_cap_for(lane.length_ft, STEP_FT) + 1
+    bound = int(lane.length_ft / PATH_SAMPLE_FT) + 2
     for ball in BALL_CATALOG.values():
         for angle in (-2.0, 0.0, 2.0):
             result = simulate_throw(ball, Throw(launch_angle=angle), lane)
             assert len(result.path) <= bound, (ball.id, angle, len(result.path))
     # And the bound is tight enough to be meaningful, not vacuously large.
     assert bound <= 200
+    # Integration is far finer than sampling: precision and payload are
+    # genuinely decoupled, not nominally so.
+    assert step_cap_for(lane.length_ft, STEP_FT) > bound * 4
 
 
 # --- Determinism --------------------------------------------------------
