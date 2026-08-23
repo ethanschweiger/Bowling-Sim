@@ -5,12 +5,14 @@ import styles from './App.module.css';
 import { BallSelect } from './components/BallSelect';
 import { LaneCanvas } from './components/LaneCanvas';
 import { ReleaseControls } from './components/ReleaseControls';
+import { ReleaseSeedControl } from './components/ReleaseSeedControl';
 import { ScoreboardPanel } from './components/ScoreboardPanel';
 import { StaleGameNotice } from './components/StaleGameNotice';
 import { ThrowControls, type ThrowStatus } from './components/ThrowControls';
 import { DEFAULT_BALL_ID } from './domain/ballCatalog';
 import { bootstrapGame, classifyThrowFailure, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
 import { defaultReleaseValues, type ReleaseFieldId } from './domain/releaseFields';
+import { parseReleaseSeed } from './domain/releaseSeed';
 import { canReplay } from './domain/trajectoryAnimation';
 
 interface GameSnapshot {
@@ -38,6 +40,7 @@ function App() {
   const [staleGameMessage, setStaleGameMessage] = useState<string | null>(null);
   const [ballId, setBallId] = useState(DEFAULT_BALL_ID);
   const [releaseValues, setReleaseValues] = useState(defaultReleaseValues());
+  const [releaseSeed, setReleaseSeed] = useState('');
   const [latestThrow, setLatestThrow] = useState<GameThrowResponse | null>(null);
   const [latestRequestedRelease, setLatestRequestedRelease] = useState<ThrowRequest | null>(null);
   const [status, setStatus] = useState<ThrowStatus>({ kind: 'idle' });
@@ -96,8 +99,16 @@ function App() {
     if (!game) {
       return;
     }
-    setStatus({ kind: 'loading', label: 'Throwing' });
     const requestedRelease: ThrowRequest = { ball_id: ballId, ...releaseValues };
+    const parsedSeed = parseReleaseSeed(releaseSeed);
+    if (parsedSeed.kind === 'invalid') {
+      setStatus({ kind: 'error', message: parsedSeed.message });
+      return;
+    }
+    if (parsedSeed.kind === 'valid') {
+      requestedRelease.seed = parsedSeed.seed;
+    }
+    setStatus({ kind: 'loading', label: 'Throwing' });
     try {
       const response = await throwBall(game.gameId, requestedRelease);
       if (!mountedRef.current) {
@@ -216,6 +227,13 @@ function App() {
             <div className={styles.controlsStack}>
               <BallSelect value={ballId} onChange={setBallId} disabled={isBusy || isStale} />
               <ReleaseControls values={releaseValues} onChange={handleReleaseChange} disabled={isBusy || isStale} />
+              <ReleaseSeedControl
+                value={releaseSeed}
+                onChange={setReleaseSeed}
+                lastSeed={latestThrow?.seed ?? null}
+                onUseLastSeed={() => setReleaseSeed(String(latestThrow?.seed ?? ''))}
+                disabled={isBusy || isStale}
+              />
               {staleGameMessage && (
                 <StaleGameNotice message={staleGameMessage} onStartNewGame={() => void handleStartNewGame()} disabled={isBusy} />
               )}
