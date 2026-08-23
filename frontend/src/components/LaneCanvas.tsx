@@ -69,7 +69,7 @@ function prefersReducedMotion(): boolean {
  * server's own `standing_pin_ids` takes over. So the only thing that
  * changes at the path-to-deck boundary is the ball, and the rack never
  * resets, flashes, or swaps identity mid-throw. A throw with no playable
- * replay (gutter, heuristic model, unknown or v1 version) simply has no
+ * replay (gutter, heuristic model, or a superseded/unknown version) simply has no
  * deck phase, keeps the static rack throughout, and settles straight
  * after the path, inventing no movement. "Replay last shot"
  * restarts the whole sequence from the same stored response; it makes no
@@ -416,7 +416,7 @@ function draw(
 
   // Pins recorded by the server, at their recorded positions — the rack this
   // throw is actually hitting, held from the approach through the terminal
-  // frame. No standing/fallen glyph here: v2 frames carry no fall-event
+  // frame. No standing/fallen glyph here: v3 frames carry no fall-event
   // time, and inventing one from displacement would be client-side physics.
   // See `laneScene.FALL_TIMING_LIMITATION`.
   if (scene.pins.source === 'replay') {

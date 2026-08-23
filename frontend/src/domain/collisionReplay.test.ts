@@ -208,7 +208,15 @@ describe('acceptReplay', () => {
       frames: dense.frames.filter((_frame, index) => index % 5 === 0),
     };
 
+    // Asserted, not assumed: the metadata is v3 and declares the 20-step
+    // stride, so the rejection can only be about the missing samples --
+    // this is not the legacy-stride case, which is covered separately.
+    expect(sparse.model_version).toBe(SUPPORTED_REPLAY_MODEL_VERSION);
+    expect(sparse.sample_every_steps).toBe(V3_SAMPLE_EVERY_STEPS);
+    expect(sparse.dt_s).toBe(V3_DT_S);
+    expect(dense.frames.length).toBe(201);
     expect(sparse.frames.length).toBe(41);
+    expect(acceptReplay(dense)).toBe(dense);
     expect(acceptReplay(sparse)).toBeNull();
   });
 
@@ -429,18 +437,29 @@ describe('acceptReplay', () => {
   });
 
   it('refuses a non-cadence terminal step whose extra frame is missing', () => {
+    // Everything about this payload is correct v3 *except* the one required
+    // terminal frame: v3 metadata, the full 20-step tick sequence 0..240,
+    // and only step 250 absent. So it can fail for exactly one reason.
+    const complete = buildReplay(250, 'settled', [BALL_BODY_ID], (_id, tS) => ({
+      x_in: -3 + tS * 20,
+      y_in: tS * 40,
+    }));
     const missingTerminal: CollisionReplayResponse = {
-      model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-      termination_reason: 'settled',
-      dt_s: 0.0005,
-      sample_every_steps: 100,
-      steps_taken: 250,
-      // Stops at the last cadence tick, omitting the real final step.
-      frames: [0, 100, 200].map((step) => ({
-        t_s: step * 0.0005,
-        bodies: [body(BALL_BODY_ID, 0, 0)],
-      })),
+      ...complete,
+      frames: complete.frames.slice(0, -1),
     };
+
+    // The control: with the terminal frame present this same payload plays.
+    expect(acceptReplay(complete)).toBe(complete);
+
+    // The defect under test, stated precisely.
+    expect(missingTerminal.sample_every_steps).toBe(V3_SAMPLE_EVERY_STEPS);
+    expect(missingTerminal.model_version).toBe(SUPPORTED_REPLAY_MODEL_VERSION);
+    const times = missingTerminal.frames.map((f) => f.t_s);
+    expect(times).toEqual(
+      Array.from({ length: 13 }, (_unused, tick) => tick * V3_SAMPLE_EVERY_STEPS * V3_DT_S),
+    );
+    expect(times[times.length - 1]).toBeCloseTo(240 * V3_DT_S, 12);
     expect(acceptReplay(missingTerminal)).toBeNull();
   });
 

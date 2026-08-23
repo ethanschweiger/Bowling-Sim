@@ -17,7 +17,9 @@ Corpus and assertions: [`backend/tests/test_calibration_corpus.py`](../tests/tes
 cd backend && .venv/bin/python -m pytest tests/test_calibration_corpus.py -q
 ```
 
-The run is fully deterministic — no clock, no RNG, no sampling — so a
+The run is fully deterministic — no clock and no RNG, and its replay
+sampling is a *fixed* count of solver steps rather than anything
+wall-clock or machine dependent — so a
 difference is always a model change, never noise. If a value below changes,
 update this note and the expectation table in the same commit and say which
 assumption moved. A silent update throws away the baseline.
@@ -42,7 +44,7 @@ positive line crosses to the 1-2 side.
 
 ## What is being characterized
 
-Model: `planar-collision-2d-v1`, replay schema `planar-collision-replay-2d-v2`.
+Model: `planar-collision-2d-v1`, replay schema `planar-collision-replay-2d-v3`.
 
 | Constant | Value | Source |
 |---|---|---|
@@ -54,8 +56,8 @@ Model: `planar-collision-2d-v1`, replay schema `planar-collision-replay-2d-v2`.
 | `COLLISION_RESTITUTION` | 0.67 | USBC pin-to-pin coefficient |
 | `FALL_DISPLACEMENT_THRESHOLD_IN` | 2.383 in | chosen — equal to the pin radius |
 | `PIN_MASS_BLOB` | 0.009065290814529331 | from USBC target weight 3 lb 8 oz |
-| `REPLAY_SAMPLE_EVERY_STEPS` | 100 (one frame per 50 ms) | chosen |
-| `MAX_REPLAY_FRAMES` | 64 | chosen bound |
+| `REPLAY_SAMPLE_EVERY_STEPS` | 20 (one frame per 10 ms, 100 Hz) | chosen |
+| `MAX_REPLAY_FRAMES` | 256 | chosen bound |
 
 **Three** inputs are traceable to USBC equipment specifications: maximum pin
 diameter, target pin weight, and the published pin coefficient of
@@ -83,13 +85,27 @@ condition version 1.
 
 | Case | lateral in | heading ° | mph | Standing rack | Fallen | Steps | Reason | Final `t_s` | Frames |
 |---|---|---|---|---|---|---|---|---|---|
-| `pocket` | −2.6 | +1.4 | 17 | full 1–10 | 1, 3, 5, 6, 8, 9, 10 | 4000 | `step_cap` | 2.0000 | 41 |
-| `head_on` | 0.0 | 0.0 | 17 | full 1–10 | 1, 2, 3, 5, 8, 9, 10 | 4000 | `step_cap` | 2.0000 | 41 |
-| `light_hit` | −6.0 | +1.4 | 17 | full 1–10 | 3, 5, 6, 7, 9 | 4000 | `step_cap` | 2.0000 | 41 |
-| `brooklyn` | +3.0 | −2.0 | 17 | full 1–10 | 1, 2, 4, 5, 7, 8, 9 | 4000 | `step_cap` | 2.0000 | 41 |
-| `spare_3_6_10` | −8.0 | −2.0 | 16 | 3, 6, 10 | 3, 6, 10 | 4000 | `step_cap` | 2.0000 | 41 |
-| `low_energy_settle` | −8.0 | 0.0 | 0.05 | full 1–10 | none | 942 | `settled` | 0.4710 | 11 |
-| `terminal_settle` | −30.0 | 0.0 | 0.3132900502327218 | full 1–10 | none | 4000 | `settled` | 2.0000 | 41 |
+| `pocket` | −2.6 | +1.4 | 17 | full 1–10 | 1, 3, 5, 6, 8, 9, 10 | 4000 | `step_cap` | 2.0000 | 201 |
+| `head_on` | 0.0 | 0.0 | 17 | full 1–10 | 1, 2, 3, 5, 8, 9, 10 | 4000 | `step_cap` | 2.0000 | 201 |
+| `light_hit` | −6.0 | +1.4 | 17 | full 1–10 | 3, 5, 6, 7, 9 | 4000 | `step_cap` | 2.0000 | 201 |
+| `brooklyn` | +3.0 | −2.0 | 17 | full 1–10 | 1, 2, 4, 5, 7, 8, 9 | 4000 | `step_cap` | 2.0000 | 201 |
+| `spare_3_6_10` | −8.0 | −2.0 | 16 | 3, 6, 10 | 3, 6, 10 | 4000 | `step_cap` | 2.0000 | 201 |
+| `low_energy_settle` | −8.0 | 0.0 | 0.05 | full 1–10 | none | 942 | `settled` | 0.4710 | 49 |
+| `terminal_settle` | −30.0 | 0.0 | 0.3132900502327218 | full 1–10 | none | 4000 | `settled` | 2.0000 | 201 |
+
+### Where the frame counts come from
+
+The recorder emits step 0, every cadence tick, and one terminal frame when
+the final step is not itself a tick:
+
+- A full 4,000-step run: 4000 / 20 + 1 = **201** frames. Step 4000 *is* a
+  tick, so no extra terminal frame is appended.
+- `low_energy_settle` stops at step 942, which is not a tick: ticks 0…940 is
+  48 frames, plus one terminal frame at 942 = **49**.
+
+Both sit inside the 256-frame cap. These counts are the v3 cadence's, and
+were 41 and 11 under v2's 100-step / 50 ms sampling — the only corpus values
+that moved with that change; see "What v3 changed" below.
 
 ### What makes `light_hit` light
 
@@ -254,6 +270,24 @@ Zero remains a *different predicate*, not the limit of the rows above:
 displacement is non-negative, so at zero even an untouched pin satisfies `>=`
 and the whole rack is reported down. Both contact-free settle cases go from
 no pins to ten.
+
+### What v3 changed
+
+The replay schema moved from `planar-collision-replay-2d-v2` to
+`...-v3`, raising the sampling cadence from every 100 solver steps (50 ms,
+20 Hz) to every 20 (10 ms, 100 Hz) and the frame cap from 64 to 256.
+
+The reason is visible latency, not physics: at 50 ms a 25 mph ball covers
+roughly 22 in between adjacent samples, so an impulse the solver had already
+resolved could go unseen for up to a whole interval. 10 ms cuts that to about
+4.4 in.
+
+Across this entire corpus, **`Frames` is the only column that moved** —
+fallen ids, step counts, termination reasons and final simulation times are
+all identical. That is what a recording-density change should look like, and
+it is the evidence that the solver itself was untouched: recording remains
+passive, and the version bump exists because the complete frame schedule is a
+validated wire contract, not because any run changed.
 
 ### Corrections to earlier versions of this note
 
