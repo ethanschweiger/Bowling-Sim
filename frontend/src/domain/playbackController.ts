@@ -34,6 +34,28 @@ import { TRAJECTORY_ANIMATION_DURATION_MS } from './trajectoryAnimation';
 const MS_PER_S = 1000;
 
 /**
+ * How long the terminal replay scene is held before handing back to the
+ * server's static rack, in milliseconds.
+ *
+ * A **presentation** interval, not a physical one. The solver's last frame
+ * often arrives with bodies still moving (`termination_reason: 'step_cap'`),
+ * and v2 frames carry no fall-event time, so the moment a pin "goes down"
+ * is never something playback can show. What the hold does is keep the last
+ * authoritative positions on screen long enough to read before the static
+ * standing/fallen rack replaces them — without it, the recorded result and
+ * the scored result swap in the same instant and pins appear to vanish
+ * rather than to have moved.
+ *
+ * 400 ms is a deliberate choice on that axis alone: long enough to register
+ * as a held frame at any refresh rate, short enough not to feel like the
+ * animation has stalled. It asserts nothing about the simulation, and it is
+ * cancelled like any other part of the sequence by a new throw, a reset, a
+ * replay press, or unmount. Reduced motion never reaches it, since that path
+ * schedules no frames at all.
+ */
+export const TERMINAL_HOLD_MS = 400;
+
+/**
  * Where a sequence is at one instant.
  *
  * `settled` here names *this player's* resting state — full static path,
@@ -63,9 +85,11 @@ export interface PlaybackSequence {
 }
 
 /** Total sequence length in ms — path phase plus, if there is one, the
- * replay's own duration at 1x. */
+ * replay's own duration at 1x and the terminal hold that follows it. */
 export function sequenceDurationMs(sequence: PlaybackSequence): number {
-  const deckMs = sequence.replay ? replayDurationS(sequence.replay) * MS_PER_S : 0;
+  const deckMs = sequence.replay
+    ? replayDurationS(sequence.replay) * MS_PER_S + TERMINAL_HOLD_MS
+    : 0;
   return TRAJECTORY_ANIMATION_DURATION_MS + deckMs;
 }
 
@@ -88,14 +112,20 @@ export function phaseAt(sequence: PlaybackSequence, elapsedMs: number): Playback
   const deckMs = elapsedMs - TRAJECTORY_ANIMATION_DURATION_MS;
   const durationS = replayDurationS(sequence.replay);
   const tS = deckMs / MS_PER_S;
-  // Clamped rather than skipped: landing past the end still resolves to the
-  // exact final recorded frame, so the last authoritative positions are
-  // actually shown. Real frame times almost never coincide with the
-  // duration exactly, so without this the terminal frame would be jumped
-  // over on essentially every run.
-  return tS >= durationS
+  if (tS < durationS) {
+    return { kind: 'deck', tS, isTerminal: false };
+  }
+  // Past the last recorded timestamp. The terminal frame is *held* for
+  // TERMINAL_HOLD_MS rather than handed straight back to the static rack,
+  // so the final authoritative positions stay readable instead of being
+  // replaced in the instant they appear. Clamping (rather than skipping)
+  // also means the exact final frame is what gets shown: real frame times
+  // almost never coincide with the duration, so without this the terminal
+  // frame would be jumped over on essentially every run.
+  const heldMs = deckMs - durationS * MS_PER_S;
+  return heldMs < TERMINAL_HOLD_MS
     ? { kind: 'deck', tS: durationS, isTerminal: true }
-    : { kind: 'deck', tS, isTerminal: false };
+    : SETTLED;
 }
 
 export interface FrameScheduler {
@@ -150,23 +180,34 @@ export class PlaybackController {
     }
 
     const startedAt = this.scheduler.now();
+
+    // Emitted synchronously, before any frame is requested. Without this the
+    // caller would paint once at whatever phase it was already in — for a
+    // freshly arrived response, the post-score static rack — and only switch
+    // to the approach on the first animation frame. That single stale paint
+    // is the post-score flash; staging phase zero up front removes it.
+    this.onPhase(phaseAt(sequence, 0));
+
+    let terminalPainted = false;
     const tick = (now: number): void => {
       if (this.disposed) {
         return;
       }
       const elapsed = now - startedAt;
       const phase = phaseAt(sequence, elapsed);
-      this.onPhase(phase);
-      if (phase.kind === 'settled') {
-        this.handle = null;
-        return;
-      }
+
       if (phase.kind === 'deck' && phase.isTerminal) {
-        // The terminal frame has just been reported. Schedule exactly one
-        // more frame — still this loop, still this single handle — whose
-        // only job is to hand back to the static rack. That guarantees the
-        // final authoritative positions get at least one paint instead of
-        // being replaced in the same tick that produced them.
+        terminalPainted = true;
+      }
+
+      if (phase.kind === 'settled' && !terminalPainted && sequence.replay) {
+        // Only reachable when one frame gap swallowed the entire terminal
+        // hold — a backgrounded tab, a stalled main thread. The last
+        // recorded positions still get a paint before the static rack, then
+        // exactly one more frame hands over. The hold is a presentation
+        // interval, so losing its *duration* here is acceptable; losing the
+        // frame itself is not.
+        this.onPhase({ kind: 'deck', tS: replayDurationS(sequence.replay), isTerminal: true });
         this.handle = this.scheduler.requestFrame(() => {
           if (this.disposed) {
             return;
@@ -174,6 +215,12 @@ export class PlaybackController {
           this.onPhase(SETTLED);
           this.handle = null;
         });
+        return;
+      }
+
+      this.onPhase(phase);
+      if (phase.kind === 'settled') {
+        this.handle = null;
         return;
       }
       this.handle = this.scheduler.requestFrame(tick);

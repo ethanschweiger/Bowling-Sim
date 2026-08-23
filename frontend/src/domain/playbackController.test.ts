@@ -5,6 +5,7 @@ import {
   PlaybackController,
   phaseAt,
   sequenceDurationMs,
+  TERMINAL_HOLD_MS,
   type FrameScheduler,
   type PlaybackPhase,
 } from './playbackController';
@@ -104,9 +105,9 @@ describe('sequenceDurationMs', () => {
     expect(sequenceDurationMs({ replay: null })).toBe(TRAJECTORY_ANIMATION_DURATION_MS);
   });
 
-  it('adds the replay duration at one-times simulation time', () => {
+  it('adds the replay duration at one-times simulation time, plus the terminal hold', () => {
     expect(sequenceDurationMs({ replay: replay() })).toBe(
-      TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000,
+      TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000 + TERMINAL_HOLD_MS,
     );
   });
 });
@@ -147,6 +148,20 @@ describe('phaseAt', () => {
     expect(pastEnd).toEqual({ kind: 'deck', tS: DECK_DURATION_S, isTerminal: true });
   });
 
+  it('holds the terminal frame for the whole documented interval, then settles', () => {
+    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const terminal = { kind: 'deck', tS: DECK_DURATION_S, isTerminal: true };
+
+    // Throughout the hold the terminal scene is still what should be drawn.
+    expect(phaseAt(withDeck, end)).toEqual(terminal);
+    expect(phaseAt(withDeck, end + TERMINAL_HOLD_MS / 2)).toEqual(terminal);
+    expect(phaseAt(withDeck, end + TERMINAL_HOLD_MS - 1)).toEqual(terminal);
+
+    // And only once it has elapsed does the static rack take over.
+    expect(phaseAt(withDeck, end + TERMINAL_HOLD_MS)).toEqual({ kind: 'settled' });
+    expect(phaseAt(withDeck, end + TERMINAL_HOLD_MS + 5000)).toEqual({ kind: 'settled' });
+  });
+
   it('settles straight after the path when there is no replay', () => {
     expect(phaseAt(withoutDeck, TRAJECTORY_ANIMATION_DURATION_MS)).toEqual({ kind: 'settled' });
   });
@@ -160,6 +175,10 @@ describe('PlaybackController lifecycle', () => {
     const END_MS = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
 
     controller.start({ replay: replay() }, false);
+    // Phase zero is emitted synchronously, before any frame is requested,
+    // so the approach is staged in the same pass the caller renders in --
+    // this is what removes the one-paint post-score flash.
+    expect(phases).toEqual([{ kind: 'path', progress: 0 }]);
     expect(fake.pendingCount).toBe(1);
 
     fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
@@ -169,19 +188,31 @@ describe('PlaybackController lifecycle', () => {
     expect(fake.pendingCount).toBe(1);
 
     // Reaching the end emits the terminal frame and keeps exactly one
-    // queued frame -- the handoff -- rather than settling in the same tick.
+    // queued frame rather than settling in the same tick.
     fake.advanceTo(END_MS);
     expect(fake.pendingCount).toBe(1);
     expect(controller.isRunning).toBe(true);
     const terminal = phases[phases.length - 1];
     expect(terminal).toEqual({ kind: 'deck', tS: DECK_DURATION_S, isTerminal: true });
 
-    // Only the following frame hands back to the static rack.
-    fake.advanceTo(END_MS + 16);
+    // Still held part-way through the interval.
+    fake.advanceTo(END_MS + TERMINAL_HOLD_MS / 2);
+    expect(phases[phases.length - 1]).toEqual(terminal);
+    expect(controller.isRunning).toBe(true);
+
+    // Only once the hold elapses does the static rack take over.
+    fake.advanceTo(END_MS + TERMINAL_HOLD_MS);
     expect(fake.pendingCount).toBe(0);
     expect(controller.isRunning).toBe(false);
 
-    expect(phases.map((p) => p.kind)).toEqual(['path', 'deck', 'deck', 'settled']);
+    expect(phases.map((p) => p.kind)).toEqual([
+      'path',
+      'path',
+      'deck',
+      'deck',
+      'deck',
+      'settled',
+    ]);
   });
 
   it('holds the exact final authoritative frame for a paint before the static rack', () => {
@@ -343,7 +374,9 @@ describe('PlaybackController lifecycle', () => {
     fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
     fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS);
 
-    expect(phases.map((p) => p.kind)).toEqual(['path', 'settled']);
+    // Two 'path' entries: the synchronous phase-zero staging, then the
+    // frame that advances it. Both precede the settle.
+    expect(phases.map((p) => p.kind)).toEqual(['path', 'path', 'settled']);
     expect(fake.pendingCount).toBe(0);
   });
 
@@ -368,7 +401,7 @@ describe('PlaybackController lifecycle', () => {
     // Well past where a deck phase would have run, had one been started.
     fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000 + 100);
 
-    expect(phases.map((p) => p.kind)).toEqual(['path', 'settled']);
+    expect(phases.map((p) => p.kind)).toEqual(['path', 'path', 'settled']);
     expect(phases.some((p) => p.kind === 'deck')).toBe(false);
     expect(fake.pendingCount).toBe(0);
   });
@@ -379,13 +412,14 @@ describe('PlaybackController lifecycle', () => {
     const controller = new PlaybackController(fake.scheduler, onPhase);
     const sequence = { replay: replay() };
 
+    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
     const playOnce = (base: number) => {
       fake.setNow(base);
       controller.start(sequence, false);
       fake.advanceTo(base + 10);
       fake.advanceTo(base + TRAJECTORY_ANIMATION_DURATION_MS + 10);
-      fake.advanceTo(base + TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000);
-      fake.advanceTo(base + TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000 + 16);
+      fake.advanceTo(base + end);
+      fake.advanceTo(base + end + TERMINAL_HOLD_MS);
     };
 
     playOnce(0);
@@ -393,9 +427,11 @@ describe('PlaybackController lifecycle', () => {
     phases.length = 0;
     playOnce(10_000);
 
-    // Path, an intermediate deck frame, the terminal deck frame, then the
-    // static rack -- identically both times, with no new data fetched.
-    expect(afterFirst).toEqual(['path', 'deck', 'deck', 'settled']);
-    expect(phases.map((p) => p.kind)).toEqual(['path', 'deck', 'deck', 'settled']);
+    // Staged path, an advancing path frame, an intermediate deck frame, the
+    // terminal deck frame, then the static rack once the hold elapses --
+    // identically both times, with no new data fetched.
+    const expected = ['path', 'path', 'deck', 'deck', 'settled'];
+    expect(afterFirst).toEqual(expected);
+    expect(phases.map((p) => p.kind)).toEqual(expected);
   });
 });
