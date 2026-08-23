@@ -24,7 +24,7 @@ from app.physics.simulate import (
     step_cap_for,
 )
 from app.physics.throw import RELEASE_BOUNDS, Throw, sample_release
-from app.physics.units import mph_to_fps, rpm_to_rad_per_s
+from app.physics.units import ft_to_boards, mph_to_fps, rpm_to_rad_per_s
 
 from tests.trajectory_fixture import (
     DIAGNOSTIC_BALL_ID,
@@ -126,6 +126,25 @@ def test_a_reactive_ball_turns_far_more_than_plastic_on_the_same_release():
     reactive = backend_turn("reactive_pearl")
     plastic = backend_turn("house_ball")
     assert reactive > plastic * 5, f"reactive {reactive:.4f} vs plastic {plastic:.4f}"
+
+
+def test_house_ball_stays_near_its_requested_launch_angle_line():
+    """A plastic spare ball may follow its aim, but must not mimic backend hook.
+
+    Comparing endpoints alone would confuse intended launch direction with
+    hook. This calculates the endpoint from the sampled initial heading and
+    holds the residual lateral read to less than one-third of a board.
+    """
+    lane = LaneCondition.house_shot()
+    requested = Throw()
+
+    for seed in (1, 17, 99):
+        sampled, _ = sample_release(requested, seed)
+        result = simulate_throw(BALL_CATALOG["house_ball"], sampled, lane)
+        expected_board = sampled.launch_position + ft_to_boards(
+            lane.length_ft * math.tan(math.radians(sampled.launch_angle))
+        )
+        assert abs(result.terminal.board - expected_board) < 1 / 3
 
 
 def test_the_hook_is_self_limiting_rather_than_accelerating_forever():
