@@ -99,6 +99,12 @@ below `SETTLE_SPEED_IN_S` — whichever comes first. It always terminates in
 one of those two ways, and a recorded replay reports which one as its
 `termination_reason` (`step_cap` or `settled`). Neither is a statement
 about real pins coming to rest; see `replay.py`'s "How a run ends".
+
+For a fixed set of reference impacts and what this model currently produces
+for them — plus which of the constants below are USBC specifications and
+which are stated 2D assumptions — see
+`backend/docs/planar-collision-calibration.md`. It is a measured baseline
+for comparing future changes against, not a claim of real pin carry.
 Each step: bodies move by velocity * dt, velocities
 decay by the (< 1) damping factor, and any pair of circles found
 overlapping is resolved by a standard elastic/inelastic impulse along
