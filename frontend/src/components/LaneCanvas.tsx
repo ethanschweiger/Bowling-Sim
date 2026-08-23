@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { GameThrowResponse } from '../api/types';
+import type { GameThrowResponse, ThrowRequest } from '../api/types';
 import { createLaneProjection } from '../domain/laneProjection';
+import { LANE_ORIENTATION_DESCRIPTION, LANE_ORIENTATION_LABELS } from '../domain/laneOrientation';
 import { BOARD_COUNT, LANE_LENGTH_FT, PIN_DECK_LAYOUT } from '../domain/pinDeckLayout';
 import { describeStandingPins } from '../domain/scoreDisplay';
 import { describeLatestThrow } from '../domain/throwSummary';
+import { ShotAnalysis } from './ShotAnalysis';
 import {
   decidePlaybackAction,
   easeOutCubic,
@@ -18,6 +20,7 @@ import styles from './LaneCanvas.module.css';
 interface LaneCanvasProps {
   standingPinIds: readonly number[];
   latestThrow: GameThrowResponse | null;
+  latestRequestedRelease: ThrowRequest | null;
   /** Whether "Replay last shot" should be enabled — see
    * `domain/trajectoryAnimation.ts`'s `canReplay`. Computed by the parent
    * (it depends on request-in-flight and stale-game state this component
@@ -57,7 +60,13 @@ function prefersReducedMotion(): boolean {
  * settled static state — no autoplay. The canvas itself is
  * `aria-hidden`; the paragraphs beneath it are the real text
  * alternative, and are never re-announced per animation frame. */
-export function LaneCanvas({ standingPinIds, latestThrow, replayEnabled, requestPending }: LaneCanvasProps) {
+export function LaneCanvas({
+  standingPinIds,
+  latestThrow,
+  latestRequestedRelease,
+  replayEnabled,
+  requestPending,
+}: LaneCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -167,8 +176,15 @@ export function LaneCanvas({ standingPinIds, latestThrow, replayEnabled, request
         {/* Decorative: the paragraphs below are this canvas's real text alternative. */}
         <canvas className={styles.canvas} ref={canvasRef} aria-hidden="true" />
       </div>
-      <p className={styles.resultText}>{throwSummary}</p>
+      <div className={styles.orientation} role="note" aria-label={LANE_ORIENTATION_DESCRIPTION}>
+        <span>Foul line</span>
+        {LANE_ORIENTATION_LABELS.map(({ board, label }) => (
+          <span key={board}>{board}: {label}</span>
+        ))}
+      </div>
+      <p className={styles.resultText} aria-live="polite">{throwSummary}</p>
       <p className={styles.standingText}>{standingSummary}</p>
+      <ShotAnalysis latestThrow={latestThrow} requestedRelease={latestRequestedRelease} />
       <button
         type="button"
         className={styles.replayButton}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, resetGame, throwBall } from './api/client';
-import type { GameStateResponse, GameThrowResponse } from './api/types';
+import type { GameStateResponse, GameThrowResponse, ThrowRequest } from './api/types';
 import styles from './App.module.css';
 import { BallSelect } from './components/BallSelect';
 import { LaneCanvas } from './components/LaneCanvas';
@@ -39,6 +39,7 @@ function App() {
   const [ballId, setBallId] = useState(DEFAULT_BALL_ID);
   const [releaseValues, setReleaseValues] = useState(defaultReleaseValues());
   const [latestThrow, setLatestThrow] = useState<GameThrowResponse | null>(null);
+  const [latestRequestedRelease, setLatestRequestedRelease] = useState<ThrowRequest | null>(null);
   const [status, setStatus] = useState<ThrowStatus>({ kind: 'idle' });
 
   // Guards every async setState below against firing after a real unmount.
@@ -96,12 +97,14 @@ function App() {
       return;
     }
     setStatus({ kind: 'loading', label: 'Throwing' });
+    const requestedRelease: ThrowRequest = { ball_id: ballId, ...releaseValues };
     try {
-      const response = await throwBall(game.gameId, { ball_id: ballId, ...releaseValues });
+      const response = await throwBall(game.gameId, requestedRelease);
       if (!mountedRef.current) {
         return;
       }
       setLatestThrow(response);
+      setLatestRequestedRelease(requestedRelease);
       setGame({ gameId: response.game_id, gameState: response.game_state });
       setLastThrowRanAgainstVersion(response.lane_condition_version);
       const pinWord = response.pins_knocked === 1 ? 'pin' : 'pins';
@@ -141,6 +144,7 @@ function App() {
       setCurrentLaneVersion(response.lane_condition_version);
       setLastThrowRanAgainstVersion(null);
       setLatestThrow(null);
+      setLatestRequestedRelease(null);
       setStatus({ kind: 'success', message: 'Game reset — fresh rack, blank scorecard.' });
     } catch (error) {
       if (!mountedRef.current) {
@@ -166,6 +170,7 @@ function App() {
       setCurrentLaneVersion(result.laneConditionVersion);
       setLastThrowRanAgainstVersion(null);
       setLatestThrow(null);
+      setLatestRequestedRelease(null);
       setStaleGameMessage(null);
       setStatus({ kind: 'success', message: 'Started a new game.' });
     } catch (error) {
@@ -231,6 +236,7 @@ function App() {
             <LaneCanvas
               standingPinIds={game.gameState.standing_pin_ids}
               latestThrow={latestThrow}
+              latestRequestedRelease={latestRequestedRelease}
               replayEnabled={canReplay(latestThrow, isBusy, isStale)}
               requestPending={isBusy}
             />
