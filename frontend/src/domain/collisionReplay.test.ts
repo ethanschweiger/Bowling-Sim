@@ -8,6 +8,7 @@ import {
   MAX_ACCEPTED_REPLAY_FRAMES,
   MAX_ACCEPTED_STEPS,
   replayBodyToLanePosition,
+  replayDistanceExtentFt,
   replayDurationS,
   replayMaxDistanceFt,
   replayPositionsAt,
@@ -153,6 +154,94 @@ describe('acceptReplay', () => {
     expect(acceptReplay(replay)).toBe(replay);
     expect(replay.frames.length).toBe(MAX_ACCEPTED_REPLAY_FRAMES - 23);
     expect(replay.steps_taken).toBe(MAX_ACCEPTED_STEPS);
+  });
+
+  // --- Complete-schedule firewall ---------------------------------------
+  // Being *on* the cadence is not the same as being the *whole* recording.
+  // A sparse payload that skips frames would be silently reconstructed by
+  // interpolation, so the client must require every sample the recorder
+  // would have produced.
+
+  it('refuses a sparse run that is cadence-aligned but missing its middle frames', () => {
+    // The reported case: a 4,000-step v1 run carrying only t=0 and t=2.
+    // Both timestamps sit exactly on the cadence, so a per-frame check
+    // passes them -- and the browser would then invent two seconds of
+    // collision motion between them.
+    const sparse: CollisionReplayResponse = {
+      model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+      dt_s: 0.0005,
+      sample_every_steps: 100,
+      steps_taken: 4000,
+      frames: [
+        { t_s: 0, bodies: [body(BALL_BODY_ID, -3, 0)] },
+        { t_s: 2.0, bodies: [body(BALL_BODY_ID, -1, 24)] },
+      ],
+    };
+    expect(acceptReplay(sparse)).toBeNull();
+  });
+
+  it('refuses a run missing one middle cadence tick', () => {
+    const gap = fullLengthReplay();
+    gap.frames.splice(20, 1); // drop t = 1.0 s
+    expect(acceptReplay(gap)).toBeNull();
+  });
+
+  it('refuses an extra frame the recorder would not have emitted', () => {
+    const extra = fullLengthReplay();
+    extra.frames.splice(20, 0, { t_s: 0.975, bodies: extra.frames[20].bodies });
+    expect(acceptReplay(extra)).toBeNull();
+  });
+
+  it('refuses frames delivered out of order', () => {
+    const shuffled = fullLengthReplay();
+    const swap = shuffled.frames[5];
+    shuffled.frames[5] = shuffled.frames[6];
+    shuffled.frames[6] = swap;
+    expect(acceptReplay(shuffled)).toBeNull();
+  });
+
+  it('refuses an altered fixed v1 timestep or sample stride', () => {
+    // dt_s and sample_every_steps are constants of this model version, not
+    // payload-chosen values. Letting a payload pick them would let it
+    // define a cadence that makes any sparse frame list look valid.
+    const otherDt = fullLengthReplay();
+    otherDt.dt_s = 0.001;
+    expect(acceptReplay(otherDt)).toBeNull();
+
+    const otherStride = fullLengthReplay();
+    otherStride.sample_every_steps = 200;
+    expect(acceptReplay(otherStride)).toBeNull();
+  });
+
+  it('accepts a run whose final step is not itself a cadence tick', () => {
+    // 250 steps -> ticks at 0, 100, 200, plus a terminal frame at 250.
+    const frames = [0, 100, 200, 250].map((step) => ({
+      t_s: step * 0.0005,
+      bodies: [body(BALL_BODY_ID, -3 + step / 100, step / 50)],
+    }));
+    const nonCadenceTerminal: CollisionReplayResponse = {
+      model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+      dt_s: 0.0005,
+      sample_every_steps: 100,
+      steps_taken: 250,
+      frames,
+    };
+    expect(acceptReplay(nonCadenceTerminal)).toBe(nonCadenceTerminal);
+  });
+
+  it('refuses a non-cadence terminal step whose extra frame is missing', () => {
+    const missingTerminal: CollisionReplayResponse = {
+      model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+      dt_s: 0.0005,
+      sample_every_steps: 100,
+      steps_taken: 250,
+      // Stops at the last cadence tick, omitting the real final step.
+      frames: [0, 100, 200].map((step) => ({
+        t_s: step * 0.0005,
+        bodies: [body(BALL_BODY_ID, 0, 0)],
+      })),
+    };
+    expect(acceptReplay(missingTerminal)).toBeNull();
   });
 
   // --- Metadata firewall ------------------------------------------------
@@ -392,10 +481,57 @@ describe('replayPositionsAt', () => {
     expect(at[0].board).toBeCloseTo(20 + -3.0 / 1.05, 10);
   });
 
+  it('only ever interpolates between two adjacent required samples', () => {
+    // With the complete schedule enforced, every pair of neighbouring
+    // frames is 0.05 s apart, so an interpolated point can never span more
+    // than one recorder interval -- there is no omitted frame to bridge.
+    const replay = fullLengthReplay();
+    expect(acceptReplay(replay)).toBe(replay);
+    for (let i = 1; i < replay.frames.length; i += 1) {
+      expect(replay.frames[i].t_s - replay.frames[i - 1].t_s).toBeCloseTo(0.05, 9);
+    }
+    // A sample midway between two adjacent frames stays inside that pair.
+    const mid = replayPositionsAt(replay, 0.075);
+    const lower = replay.frames[1].bodies[0];
+    const upper = replay.frames[2].bodies[0];
+    const ball = mid.find((b) => b.bodyId === BALL_BODY_ID)!;
+    const lowerBoard = 20 + lower.x_in / 1.05;
+    const upperBoard = 20 + upper.x_in / 1.05;
+    expect(ball.board).toBeGreaterThanOrEqual(Math.min(lowerBoard, upperBoard) - 1e-9);
+    expect(ball.board).toBeLessThanOrEqual(Math.max(lowerBoard, upperBoard) + 1e-9);
+  });
+
   it('does not mutate the replay', () => {
     const replay = pocketReplay();
     const before = JSON.stringify(replay);
     replayPositionsAt(replay, 0.03);
+    expect(JSON.stringify(replay)).toBe(before);
+  });
+});
+
+describe('replayDistanceExtentFt', () => {
+  it('reports both ends of the recorded downlane span', () => {
+    const extent = replayDistanceExtentFt(pocketReplay());
+    // Smallest y_in is 0 (impact plane), largest is 10.8.
+    expect(extent.minFt).toBeCloseTo(60, 10);
+    expect(extent.maxFt).toBeCloseTo(60 + 10.8 / 12, 10);
+  });
+
+  it('reports a negative-y body behind the headpin plane', () => {
+    // A collision can drive a body back toward the bowler. A viewport that
+    // only grew at the far edge would clamp such a body onto the foul
+    // line -- the same error as the far-edge clamp, at the other end.
+    const backwards = pocketReplay();
+    backwards.frames[1].bodies[1].y_in = -240; // 20 ft back from the deck
+    const extent = replayDistanceExtentFt(backwards);
+    expect(extent.minFt).toBeCloseTo(40, 10);
+    expect(extent.maxFt).toBeGreaterThan(extent.minFt);
+  });
+
+  it('does not mutate the replay it measures', () => {
+    const replay = pocketReplay();
+    const before = JSON.stringify(replay);
+    replayDistanceExtentFt(replay);
     expect(JSON.stringify(replay)).toBe(before);
   });
 });

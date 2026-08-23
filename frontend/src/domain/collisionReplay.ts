@@ -51,6 +51,14 @@ export const SUPPORTED_REPLAY_MODEL_VERSION = 'planar-collision-replay-2d-v1';
 // will happily call 1e308 a number, and a replay "ending" there would keep
 // an animation loop alive effectively forever.
 
+/** `COLLISION_DT_S` in backend/app/physics/collision.py — fixed for this
+ * model version, not a free parameter a payload may choose. */
+export const V1_DT_S = 0.0005;
+/** `REPLAY_SAMPLE_EVERY_STEPS` in backend/app/physics/replay.py — likewise
+ * fixed for v1. Together with `V1_DT_S` these pin down the exact set of
+ * frames a genuine v1 recording contains. */
+export const V1_SAMPLE_EVERY_STEPS = 100;
+
 /** `MAX_REPLAY_FRAMES` in the backend recorder. */
 export const MAX_ACCEPTED_REPLAY_FRAMES = 64;
 /** `MAX_COLLISION_STEPS` — the solver's own iteration cap. */
@@ -130,7 +138,11 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
   if (!isFiniteNumber(replay.dt_s) || replay.dt_s <= 0) {
     return null;
   }
-  if (!isPositiveSafeInteger(replay.sample_every_steps)) {
+  // v1's cadence and timestep are fixed constants, not payload-chosen
+  // values. Pinning them is what makes the *complete* frame schedule below
+  // derivable — without it, a payload could pick a stride that makes any
+  // sparse frame list look "on cadence".
+  if (replay.dt_s !== V1_DT_S || replay.sample_every_steps !== V1_SAMPLE_EVERY_STEPS) {
     return null;
   }
   if (!isPositiveSafeInteger(replay.steps_taken) || replay.steps_taken > MAX_ACCEPTED_STEPS) {
@@ -147,12 +159,23 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
     return null;
   }
 
-  // The recorder samples every `sample_every_steps` steps, so every frame
-  // but the last sits on that fixed cadence, and the last sits exactly at
-  // the run's end. Checking this is what stops a "known version" payload
-  // from claiming an arbitrary terminal time.
-  const cadenceS = replay.dt_s * replay.sample_every_steps;
-  if (!isFiniteNumber(cadenceS) || cadenceS <= 0) {
+  // The *complete* schedule a v1 recorder produces, derived with integer
+  // step arithmetic: the initial frame at step 0, every cadence tick
+  // through the run, and one terminal frame at the final step when that
+  // step isn't itself a tick. Requiring the whole list — not merely that
+  // whatever arrived happens to sit on the cadence — is what stops a
+  // sparse payload (say a 4,000-step run carrying only t=0 and t=2) from
+  // being accepted and then having two seconds of collision motion
+  // invented by interpolating across the frames it omitted.
+  const expectedSteps: number[] = [];
+  for (let step = 0; step <= replay.steps_taken; step += V1_SAMPLE_EVERY_STEPS) {
+    expectedSteps.push(step);
+  }
+  if (expectedSteps[expectedSteps.length - 1] !== replay.steps_taken) {
+    expectedSteps.push(replay.steps_taken);
+  }
+  // Exact length match rejects missing, duplicated, and extra frames alike.
+  if (frames.length !== expectedSteps.length) {
     return null;
   }
 
@@ -164,34 +187,25 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
     if (!frame || typeof frame !== 'object' || !isFiniteNumber(frame.t_s)) {
       return null;
     }
+    // Each frame must sit at its own scheduled step — computed from the
+    // integer step index, so float drift never accumulates across frames.
+    const expectedT = expectedSteps[index] * V1_DT_S;
+    if (Math.abs(frame.t_s - expectedT) > TIME_TOLERANCE_S) {
+      return null;
+    }
     // Impact is t=0 by definition; anything else is not this contract.
     if (index === 0 && frame.t_s !== 0) {
       return null;
     }
-    if (frame.t_s < 0) {
-      return null;
-    }
     // Strictly increasing: equal timestamps would make "which frame is
     // current" ambiguous, and a decreasing one means the data isn't the
-    // ordered sequence this player assumes.
-    if (frame.t_s <= previousT && index > 0) {
+    // ordered sequence this player assumes. (The schedule check above
+    // already implies this; kept as an explicit, independent guarantee.)
+    if (index > 0 && frame.t_s <= previousT) {
       return null;
     }
     if (frame.t_s > MAX_ACCEPTED_DURATION_S + TIME_TOLERANCE_S) {
       return null;
-    }
-
-    const isLast = index === frames.length - 1;
-    if (isLast) {
-      if (Math.abs(frame.t_s - claimedDurationS) > TIME_TOLERANCE_S) {
-        return null;
-      }
-    } else {
-      // On-cadence: a whole number of sampling intervals from impact.
-      const intervals = frame.t_s / cadenceS;
-      if (Math.abs(intervals - Math.round(intervals)) > TIME_TOLERANCE_S / cadenceS) {
-        return null;
-      }
     }
     previousT = frame.t_s;
 
@@ -252,15 +266,42 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
  * seconds and pins slide into the pit.
  */
 export function replayMaxDistanceFt(replay: CollisionReplayResponse): number {
+  return replayDistanceExtentFt(replay).maxFt;
+}
+
+/** The downlane span, in feet, of every body this replay records. */
+export interface ReplayDistanceExtent {
+  minFt: number;
+  maxFt: number;
+}
+
+/**
+ * Both ends of this replay's downlane extent.
+ *
+ * Two-sided on purpose. Bodies can be driven *back* toward the bowler by a
+ * collision — recorded `y_in` goes negative — and a viewport that only
+ * grew at its far edge would clamp such a body onto the foul-line edge,
+ * painting it at a coordinate it never held. That is the same class of
+ * error as the far-edge clamp, just at the other end, so the canvas sizes
+ * its viewport from both values.
+ */
+export function replayDistanceExtentFt(replay: CollisionReplayResponse): ReplayDistanceExtent {
+  let minY = Infinity;
   let maxY = -Infinity;
   for (const frame of replay.frames) {
     for (const body of frame.bodies) {
+      if (body.y_in < minY) {
+        minY = body.y_in;
+      }
       if (body.y_in > maxY) {
         maxY = body.y_in;
       }
     }
   }
-  return HEADPIN_DISTANCE_FT + maxY / IN_PER_FT;
+  return {
+    minFt: HEADPIN_DISTANCE_FT + minY / IN_PER_FT,
+    maxFt: HEADPIN_DISTANCE_FT + maxY / IN_PER_FT,
+  };
 }
 
 /** How long the deck phase lasts, in simulation seconds: the last frame's

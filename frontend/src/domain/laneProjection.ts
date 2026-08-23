@@ -36,11 +36,31 @@ import { BOARD_COUNT, PIN_DECK_BACK_ROW_FT } from './pinDeckLayout';
 // pin deck's back row, so nothing touches the canvas edge.
 const MIN_BOARD = 0;
 const MAX_BOARD = BOARD_COUNT + 1;
-const MIN_DISTANCE_FT = 0;
+/** The default near edge: the foul line. */
+export const DEFAULT_MIN_DISTANCE_FT = 0;
 /** The default far edge: just past the pin deck's back row. Enough for the
  * lane itself and a settled rack, and the exact geometry every no-replay
  * drawing has always used. */
 export const DEFAULT_MAX_DISTANCE_FT = PIN_DECK_BACK_ROW_FT + 2;
+
+/**
+ * The downlane span a projection covers, in feet.
+ *
+ * Explicit and two-sided rather than a bare "max" argument: a replay can
+ * push bodies past the deck *and* back behind the foul line, and clamping
+ * at either edge would paint a body somewhere it never was. Callers pass
+ * the span they actually intend to draw; the projection then never has to
+ * clamp an accepted position.
+ */
+export interface LaneDistanceBounds {
+  minDistanceFt: number;
+  maxDistanceFt: number;
+}
+
+export const DEFAULT_DISTANCE_BOUNDS: LaneDistanceBounds = {
+  minDistanceFt: DEFAULT_MIN_DISTANCE_FT,
+  maxDistanceFt: DEFAULT_MAX_DISTANCE_FT,
+};
 
 /** How strongly the far end of the lane is emphasized. 0 would be a plain
  * linear scale; this gives the pin deck roughly five times the pixels per
@@ -73,13 +93,16 @@ export function createLaneProjection(
   width: number,
   height: number,
   padding = 12,
-  maxDistanceFt: number = DEFAULT_MAX_DISTANCE_FT,
+  bounds: LaneDistanceBounds = DEFAULT_DISTANCE_BOUNDS,
 ): LaneProjection {
   const innerWidth = Math.max(width - padding * 2, 1);
   const innerHeight = Math.max(height - padding * 2, 1);
-  // Never shrink below the default: a replay only ever needs *more* room
-  // downlane, and letting a caller shrink it would move the lane itself.
-  const farEdgeFt = Math.max(maxDistanceFt, DEFAULT_MAX_DISTANCE_FT);
+  // Only ever widened, never narrowed: the lane and its settled rack must
+  // stay exactly where they have always been drawn, so a caller can add
+  // room at either end but cannot pull an edge inward.
+  const nearEdgeFt = Math.min(bounds.minDistanceFt, DEFAULT_MIN_DISTANCE_FT);
+  const farEdgeFt = Math.max(bounds.maxDistanceFt, DEFAULT_MAX_DISTANCE_FT);
+  const span = farEdgeFt - nearEdgeFt;
 
   return {
     boardToX(board: number): number {
@@ -87,12 +110,13 @@ export function createLaneProjection(
       return padding + (1 - t) * innerWidth;
     },
     distanceToY(distanceFt: number): number {
-      // Still clamped, but to a far edge the caller has already sized to
+      // Still clamped, but to a span the caller has already sized to
       // contain everything it intends to draw — so for an accepted replay
-      // this never fires, and a body is never pinned to the top edge at a
-      // position it doesn't actually hold. See `replayMaxDistanceFt`.
-      const clamped = Math.max(MIN_DISTANCE_FT, Math.min(farEdgeFt, distanceFt));
-      const linear = (clamped - MIN_DISTANCE_FT) / (farEdgeFt - MIN_DISTANCE_FT);
+      // this never fires at either end, and no body is pinned to an edge
+      // at a position it doesn't actually hold. See
+      // `replayDistanceExtentFt`.
+      const clamped = Math.max(nearEdgeFt, Math.min(farEdgeFt, distanceFt));
+      const linear = (clamped - nearEdgeFt) / span;
       return padding + (1 - distanceEase(linear)) * innerHeight;
     },
   };

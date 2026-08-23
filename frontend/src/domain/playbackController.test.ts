@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CollisionReplayResponse } from '../api/types';
-import { SUPPORTED_REPLAY_MODEL_VERSION } from './collisionReplay';
+import { acceptReplay, SUPPORTED_REPLAY_MODEL_VERSION } from './collisionReplay';
 import {
   PlaybackController,
   phaseAt,
@@ -59,18 +59,21 @@ function fakeScheduler() {
 const DECK_DURATION_S = 2.0;
 
 function replay(): CollisionReplayResponse {
-  // Contract-consistent: 4,000 steps x 0.0005 s = the 2 s cap, with frames
-  // on the recorder's own 0.05 s cadence.
+  // A genuinely complete v1 recording: 4,000 steps x 0.0005 s = the 2 s
+  // cap, with all 41 frames on the recorder's own 0.05 s cadence. Built in
+  // full rather than sampled down to three frames, so this fixture is one
+  // `acceptReplay` would actually accept -- a sparse stand-in would quietly
+  // describe data the client is now required to reject.
+  const frames = [];
+  for (let i = 0; i <= 40; i += 1) {
+    frames.push({ t_s: i * 0.05, bodies: [{ body_id: 0, x_in: -3 + i * 0.05, y_in: i * 0.6 }] });
+  }
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
     dt_s: 0.0005,
     sample_every_steps: 100,
     steps_taken: 4000,
-    frames: [
-      { t_s: 0, bodies: [{ body_id: 0, x_in: -3, y_in: 0 }] },
-      { t_s: 1.0, bodies: [{ body_id: 0, x_in: -2, y_in: 12 }] },
-      { t_s: DECK_DURATION_S, bodies: [{ body_id: 0, x_in: -1, y_in: 24 }] },
-    ],
+    frames,
   };
 }
 
@@ -78,6 +81,16 @@ function collect() {
   const phases: PlaybackPhase[] = [];
   return { phases, onPhase: (phase: PlaybackPhase) => phases.push(phase) };
 }
+
+describe('the shared fixture', () => {
+  it('is a replay the validator actually accepts', () => {
+    // Keeps these lifecycle tests honest: they exercise data that could
+    // really reach the controller, not a shape acceptReplay would reject.
+    const r = replay();
+    expect(acceptReplay(r)).toBe(r);
+    expect(r.frames.length).toBe(41);
+  });
+});
 
 describe('sequenceDurationMs', () => {
   it('is the path phase alone when there is no replay', () => {

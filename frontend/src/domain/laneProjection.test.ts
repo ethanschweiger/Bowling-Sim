@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createLaneProjection, DEFAULT_MAX_DISTANCE_FT, distanceEase } from './laneProjection';
+import {
+  createLaneProjection,
+  DEFAULT_MAX_DISTANCE_FT,
+  DEFAULT_MIN_DISTANCE_FT,
+  distanceEase,
+} from './laneProjection';
 
 describe('createLaneProjection', () => {
   const projection = createLaneProjection(400, 600, 10);
@@ -114,10 +119,14 @@ describe('replay viewport', () => {
   const WIDTH = 400;
   const HEIGHT = 600;
   const PADDING = 12;
+  const BOUNDS = { minDistanceFt: DEFAULT_MIN_DISTANCE_FT, maxDistanceFt: TERMINAL_DISTANCE_FT };
 
   it('reproduces the legacy geometry exactly when no replay extent is given', () => {
     const legacy = createLaneProjection(WIDTH, HEIGHT);
-    const explicit = createLaneProjection(WIDTH, HEIGHT, PADDING, DEFAULT_MAX_DISTANCE_FT);
+    const explicit = createLaneProjection(WIDTH, HEIGHT, PADDING, {
+      minDistanceFt: DEFAULT_MIN_DISTANCE_FT,
+      maxDistanceFt: DEFAULT_MAX_DISTANCE_FT,
+    });
     for (const d of [0, 15, 30, 45, 60, DEFAULT_MAX_DISTANCE_FT]) {
       expect(legacy.distanceToY(d)).toBe(explicit.distanceToY(d));
     }
@@ -137,7 +146,7 @@ describe('replay viewport', () => {
   });
 
   it('gives the entry and terminal positions distinct, in-viewport pixels', () => {
-    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, TERMINAL_DISTANCE_FT);
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, BOUNDS);
     const entryY = projection.distanceToY(ENTRY_DISTANCE_FT);
     const terminalY = projection.distanceToY(TERMINAL_DISTANCE_FT);
 
@@ -152,7 +161,7 @@ describe('replay viewport', () => {
   });
 
   it('keeps the whole sequence on one scale — no jump between path end and deck', () => {
-    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, TERMINAL_DISTANCE_FT);
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, BOUNDS);
     // Distances across the handoff advance monotonically with no
     // discontinuity, so the ball does not visibly teleport at 60 ft.
     let previous = Infinity;
@@ -164,7 +173,7 @@ describe('replay viewport', () => {
   });
 
   it('never clamps a position inside the extent it was sized for', () => {
-    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, TERMINAL_DISTANCE_FT);
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, BOUNDS);
     // Every sampled distance up to the extent maps to its own pixel.
     const seen = new Set<number>();
     for (let d = 60; d <= TERMINAL_DISTANCE_FT; d += 0.5) {
@@ -175,7 +184,7 @@ describe('replay viewport', () => {
   });
 
   it('still puts board 1 right of board 39 (bowler-eye view) under a replay viewport', () => {
-    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, TERMINAL_DISTANCE_FT);
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, BOUNDS);
     expect(projection.boardToX(1)).toBeGreaterThan(projection.boardToX(39));
     // And the entry board lands between them, not mirrored to the far side.
     const entryX = projection.boardToX(ENTRY_BOARD);
@@ -187,8 +196,84 @@ describe('replay viewport', () => {
 
   it('refuses to shrink below the default lane geometry', () => {
     // A caller passing something smaller must not move the lane itself.
-    const shrunk = createLaneProjection(WIDTH, HEIGHT, PADDING, 30);
+    const shrunk = createLaneProjection(WIDTH, HEIGHT, PADDING, { minDistanceFt: 10, maxDistanceFt: 30 });
     const legacy = createLaneProjection(WIDTH, HEIGHT, PADDING);
     expect(shrunk.distanceToY(60)).toBe(legacy.distanceToY(60));
+  });
+});
+
+
+describe('two-sided replay viewport', () => {
+  const WIDTH = 400;
+  const HEIGHT = 600;
+  const PADDING = 12;
+  // A valid bounded replay can push a body *back* past the foul line as
+  // well as far beyond the deck. Both ends must be drawable.
+  const NEAR_FT = 40;   // 20 ft behind the headpin plane
+  const FAR_FT = 69.73; // the real seed-17 terminal extent
+  const BOUNDS = { minDistanceFt: NEAR_FT, maxDistanceFt: FAR_FT };
+
+  it('collapsed a negative-y body onto the foul-line edge before this fix', () => {
+    // Documents the defect precisely: with only far-edge expansion, a
+    // body behind the foul line landed on the same pixel as 0 ft.
+    const farEdgeOnly = createLaneProjection(WIDTH, HEIGHT, PADDING, {
+      minDistanceFt: DEFAULT_MIN_DISTANCE_FT,
+      maxDistanceFt: FAR_FT,
+    });
+    expect(farEdgeOnly.distanceToY(-23.33)).toBe(farEdgeOnly.distanceToY(0));
+  });
+
+  it('gives both extrema distinct, in-viewport pixels under one set of bounds', () => {
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, BOUNDS);
+    const nearY = projection.distanceToY(NEAR_FT);
+    const farY = projection.distanceToY(FAR_FT);
+
+    expect(nearY).not.toBe(farY);
+    expect(farY).toBeLessThan(nearY); // downlane is up-screen
+    for (const y of [nearY, farY]) {
+      expect(y).toBeGreaterThanOrEqual(PADDING);
+      expect(y).toBeLessThanOrEqual(HEIGHT - PADDING);
+    }
+  });
+
+  it('does not sit either extreme on a clamp edge', () => {
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, BOUNDS);
+    // Just inside each end must still be distinct from the end itself --
+    // if either were clamped, these would collapse onto one pixel.
+    expect(projection.distanceToY(NEAR_FT + 0.5)).not.toBe(projection.distanceToY(NEAR_FT));
+    expect(projection.distanceToY(FAR_FT - 0.5)).not.toBe(projection.distanceToY(FAR_FT));
+  });
+
+  it('keeps the whole span monotonic across the foul line and the deck', () => {
+    const projection = createLaneProjection(WIDTH, HEIGHT, PADDING, BOUNDS);
+    let previous = Infinity;
+    for (let d = NEAR_FT; d <= FAR_FT; d += 0.5) {
+      const y = projection.distanceToY(d);
+      expect(y).toBeLessThan(previous);
+      previous = y;
+    }
+  });
+
+  it('still never narrows the default lane geometry', () => {
+    // Bounds inside the default must not pull an edge in and move the lane.
+    const narrow = createLaneProjection(WIDTH, HEIGHT, PADDING, {
+      minDistanceFt: 10,
+      maxDistanceFt: 30,
+    });
+    const legacy = createLaneProjection(WIDTH, HEIGHT, PADDING);
+    for (const d of [0, 30, 60, DEFAULT_MAX_DISTANCE_FT]) {
+      expect(narrow.distanceToY(d)).toBe(legacy.distanceToY(d));
+    }
+  });
+
+  it('leaves no-replay geometry identical to the legacy call', () => {
+    const legacy = createLaneProjection(WIDTH, HEIGHT);
+    const explicitDefault = createLaneProjection(WIDTH, HEIGHT, PADDING, {
+      minDistanceFt: DEFAULT_MIN_DISTANCE_FT,
+      maxDistanceFt: DEFAULT_MAX_DISTANCE_FT,
+    });
+    for (let d = 0; d <= DEFAULT_MAX_DISTANCE_FT; d += 1) {
+      expect(explicitDefault.distanceToY(d)).toBe(legacy.distanceToY(d));
+    }
   });
 });
