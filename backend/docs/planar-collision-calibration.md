@@ -57,14 +57,24 @@ Model: `planar-collision-2d-v1`, replay schema `planar-collision-replay-2d-v2`.
 | `REPLAY_SAMPLE_EVERY_STEPS` | 100 (one frame per 50 ms) | chosen |
 | `MAX_REPLAY_FRAMES` | 64 | chosen bound |
 
-Two of these come from USBC equipment specifications (pin diameter,
-restitution, weight). **Everything else is an effective 2D assumption**, not
-a calibrated value: the damping rate, the settle threshold, the step cap, and
-above all the fall criterion. A pin here "falls" by sliding past a
-displacement threshold — it is a flat circle with no height, no tilt, no
-rotation, and no toppling angle, so nothing in this model observes a pin
-standing up or lying down. Equating that threshold to the pin radius is a
-stated choice, not a measurement.
+**Three** inputs are traceable to USBC equipment specifications: maximum pin
+diameter, target pin weight, and the published pin coefficient of
+restitution. Even those are not used as a calibration of this model:
+
+- The diameter sets a circle radius for a body that has no height, so it is a
+  footprint, not a pin.
+- `COLLISION_RESTITUTION` reuses the **pin-to-pin** coefficient as the
+  restitution for *every* contact in this model, ball-to-pin included. That
+  is a deliberate simplification — one number standing in for contacts the
+  model does not distinguish — not a measured ball-pin coefficient and not a
+  literal pin-to-pin calibration of a real collision.
+
+**Everything else is an effective 2D assumption**: the damping rate, the
+settle threshold, the step cap, and above all the fall criterion. A pin here
+"falls" by sliding past a displacement threshold — it is a flat circle with
+no height, tilt, rotation, or toppling angle, so nothing in this model
+observes a pin standing up or lying down. Equating that threshold to the pin
+radius is a stated choice, not a measurement.
 
 Ball inputs are held fixed across the corpus: 15.0 lb, radius 4.29 in, lane
 condition version 1.
@@ -74,11 +84,38 @@ condition version 1.
 | Case | lateral in | heading ° | mph | Standing rack | Fallen | Steps | Reason | Final `t_s` | Frames |
 |---|---|---|---|---|---|---|---|---|---|
 | `pocket` | −2.6 | +1.4 | 17 | full 1–10 | 1, 3, 5, 6, 8, 9, 10 | 4000 | `step_cap` | 2.0000 | 41 |
-| `light_hit` | 0.0 | 0.0 | 17 | full 1–10 | 1, 2, 3, 5, 8, 9, 10 | 4000 | `step_cap` | 2.0000 | 41 |
+| `head_on` | 0.0 | 0.0 | 17 | full 1–10 | 1, 2, 3, 5, 8, 9, 10 | 4000 | `step_cap` | 2.0000 | 41 |
+| `light_hit` | −6.0 | +1.4 | 17 | full 1–10 | 3, 5, 6, 7, 9 | 4000 | `step_cap` | 2.0000 | 41 |
 | `brooklyn` | +3.0 | −2.0 | 17 | full 1–10 | 1, 2, 4, 5, 7, 8, 9 | 4000 | `step_cap` | 2.0000 | 41 |
 | `spare_3_6_10` | −8.0 | −2.0 | 16 | 3, 6, 10 | 3, 6, 10 | 4000 | `step_cap` | 2.0000 | 41 |
 | `low_energy_settle` | −8.0 | 0.0 | 0.05 | full 1–10 | none | 942 | `settled` | 0.4710 | 11 |
 | `terminal_settle` | −30.0 | 0.0 | 0.3132900502327218 | full 1–10 | none | 4000 | `settled` | 2.0000 | 41 |
+
+### What makes `light_hit` light
+
+Geometrically, not by name. Two circles touch when their centres are closer
+than the sum of their radii — here ball 4.29 in + pin 2.383 in = **6.673 in**.
+The ball starts on the headpin plane and pin 1 stands at lateral 0, so for
+the headpin the initial centre separation is simply `|lateral|`, and the
+overlap is `6.673 − |lateral|`.
+
+| Line | lateral | overlap | as a fraction of contact |
+|---|---|---|---|
+| `head_on` | 0.0 | 6.673 in | 100% |
+| `pocket` | −2.6 | 4.073 in | 61% |
+| `light_hit` | −6.0 | 0.673 in | **10%** |
+| (no contact at all) | ≥ ±6.673 | — | 0% |
+
+At 10% overlap the ball genuinely contacts the headpin but only grazes it:
+pin 1 is displaced **0.547 in**, far short of the 2.383 in fall threshold, so
+it is left standing while the ball carries on into the 3-5-6-7-9. Leaving
+the headpin up is what a light hit means at the deck, and here it falls out
+of the geometry rather than being asserted.
+
+The corpus tests use a quarter of the contact distance as the "light" bound —
+chosen for margin, since the three lines above sit at 10%, 61%, and 100% —
+and check that the bound actually rejects the solid lines rather than merely
+admitting the thin one.
 
 `terminal_settle`'s speed is **derived, not chosen**: it is the midpoint of
 the interval of release speeds whose damping curve crosses
@@ -131,26 +168,54 @@ imply `step_cap`; see "The reason is not a function of `steps_taken`" in
   step cap with bodies still moving. That is an honest bounded-solver result
   and nothing more; the model has never been shown to reach rest.
 
-### Known blind spot: the model has no marginal outcomes
+## Sensitivity: what this corpus can detect
 
-Worth stating plainly, because it limits what this baseline can detect. In
-every full-rack case, each pin either is never touched at all — final
-displacement **exactly 0.00 in** — or is driven 112 to 264 in from its spot.
-Nothing lands anywhere near the 2.383 in fall threshold.
+The corpus is a **sharp** tripwire for the fall threshold, because the
+headpin is a marginal result in every full-rack case. Final displacements:
 
-Measured consequences:
+| Case | pin 1 | other moved pins | untouched (exactly 0.00 in) |
+|---|---|---|---|
+| `pocket` | **3.302 in** | 46.6 – 171.3 | 2, 4, 7 |
+| `head_on` | **5.289 in** | 25.5 – 251.8 | 4, 6, 7 |
+| `brooklyn` | **2.979 in** | 98.5 – 145.2 | 3, 6, 10 |
+| `light_hit` | **0.547 in** (stays up) | 38.4 – 238.6 | 2, 4, 8, 10 |
+| `spare_3_6_10` | — | 112.3 – 264.4 | none |
 
-- Raising `FALL_DISPLACEMENT_THRESHOLD_IN` by up to **+25%** changes no
-  corpus outcome; +26% is the first change.
-- *Lowering* it changes nothing at any magnitude, because an untouched pin
-  sits at exactly zero displacement.
-- `COLLISION_RESTITUTION` is the sensitive one: **+8%** already changes an
-  outcome.
+So displacements are not bimodal. Secondary pins are indeed flung across the
+deck, but the pin the ball strikes first ends up within a few inches of its
+spot — and `brooklyn`'s pin 1, at **2.979317 in**, clears the 2.383 in
+threshold by only 25%. `light_hit`'s pin 1 is on the *other* side of it,
+moved but standing.
 
-So this corpus is a good tripwire for changes to the impulse response and a
-poor one for the fall criterion. Real bowling is full of marginal taps and
-slow wobbles; this model produces none, which is itself a limitation of flat
-circles and a strong hint about where a future 3D solver would differ most.
+Measured bands, each backed by a focused deterministic test that varies the
+constant through `monkeypatch` and restores it:
+
+- **Raising** `FALL_DISPLACEMENT_THRESHOLD_IN`: ×1.2502 changes nothing;
+  ×1.2503 changes `brooklyn` — pin 1 alone stops falling, `(1,2,4,5,7,8,9)`
+  becomes `(2,4,5,7,8,9)`. The crossing sits at
+  2.979317 / 2.383 = **×1.250238**, i.e. about **+25.02%**, and it is
+  brooklyn's marginal headpin that puts it there.
+- **Lowering** it, *while it stays positive*: no corpus outcome changes
+  anywhere on (0, 2.383]. No pin ends between zero and the current
+  threshold, so shrinking it reclassifies nothing.
+- **At exactly zero**: every standing pin is reported fallen. This is not
+  the limit of the previous line but a different predicate — displacement is
+  non-negative and the fall test is `>=`, so at zero an untouched pin
+  satisfies it. That is why the claim above is bounded below rather than
+  stated for "any magnitude".
+
+A previous version of this note claimed moved pins all travel 112–264 in and
+that no outcome is marginal, concluding this corpus is a poor fall-threshold
+tripwire. That was wrong in both directions: the range was read off the
+`spare_3_6_10` row alone and generalised, and the conclusion it supported is
+the opposite of what the numbers show.
+
+### Not characterised here
+
+`COLLISION_RESTITUTION` sensitivity was noted in the earlier version without
+a test behind it, so it has been removed rather than left as an unverified
+number. Characterising it is a separate measurement, not a claim this corpus
+currently supports.
 
 ## Relationship to scoring
 

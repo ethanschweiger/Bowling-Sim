@@ -22,15 +22,19 @@ moved and why. A silent update would waste the baseline.
 # app/models/schemas.py.)
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import pytest
 
+from app.physics import collision
 from app.physics.collision import (
     COLLISION_DT_S,
+    FALL_DISPLACEMENT_THRESHOLD_IN,
     LINEAR_DAMPING_PER_S,
     MAX_COLLISION_SECONDS,
     MAX_COLLISION_STEPS,
+    PIN_EFFECTIVE_RADIUS_IN,
     SETTLE_SPEED_IN_S,
     _simulate_collision_detail,
     simulate_collision,
@@ -52,6 +56,24 @@ from app.physics.units import mph_to_in_per_s
 CORPUS_BALL_MASS_LBS = 15.0
 CORPUS_BALL_RADIUS_IN = 4.29
 CORPUS_LANE_CONDITION_VERSION = 1
+
+# Two circles touch when their centres are closer than the sum of their radii.
+# The ball starts on the headpin plane (y = 0) and pin 1 stands at lateral 0,
+# so for the headpin specifically the initial centre separation is just
+# `abs(lateral_position_in)`, and this sum is the whole contact criterion.
+CONTACT_DISTANCE_IN = CORPUS_BALL_RADIUS_IN + PIN_EFFECTIVE_RADIUS_IN  # 6.673 in
+
+# How thin an overlap still counts as a *light* hit rather than a solid one,
+# as a fraction of the contact distance so it tracks the geometry rather than
+# being a second magic number.
+#
+# A quarter, chosen for margin rather than tightness. The two real lines in
+# this corpus sit far apart on this scale — the light line overlaps by about
+# 10% of the contact distance, the pocket line by about 61%, and a dead-on
+# line by 100% — so a quarter separates them with room on both sides instead
+# of grazing either. A test below checks it actually discriminates, since a
+# bound only the intended case can clear is a bound worth doubting.
+LIGHT_HIT_MAX_OVERLAP_FRACTION = 0.25
 
 
 def _terminal_step_settle_speed_mph() -> float:
@@ -140,12 +162,30 @@ CALIBRATION_CORPUS: tuple = (
         frame_count=41,
     ),
     CorpusCase(
-        name="light_hit",
+        name="head_on",
         summary="Dead-on the headpin, no lateral offset and no heading.",
         lateral_position_in=0.0,
         heading_deg=0.0,
         speed_mph=17.0,
         fallen_pin_ids=(1, 2, 3, 5, 8, 9, 10),
+        steps_taken=4000,
+        termination_reason="step_cap",
+        final_t_s=2.0,
+        frame_count=41,
+    ),
+    CorpusCase(
+        name="light_hit",
+        summary=(
+            "A genuinely light (thin) hit: the ball's circle overlaps the "
+            "headpin's by only 0.673 in of the 6.673 in that count as "
+            "contact at all, so pin 1 is nudged 0.547 in — well under the "
+            "2.383 in fall threshold — and is left standing while the ball "
+            "carries on into the 3-5-6-7-9."
+        ),
+        lateral_position_in=-6.0,
+        heading_deg=1.4,
+        speed_mph=17.0,
+        fallen_pin_ids=(3, 5, 6, 7, 9),
         steps_taken=4000,
         termination_reason="step_cap",
         final_t_s=2.0,
@@ -216,6 +256,25 @@ def _run(case: CorpusCase):
     return _simulate_collision_detail(
         case.impact(), standing_ids=case.standing_ids, record_replay=True
     )
+
+
+def _case(name: str) -> CorpusCase:
+    return next(c for c in CALIBRATION_CORPUS if c.name == name)
+
+
+def _pin_displacements(run) -> dict:
+    """How far each pin ended from where it started, in inches.
+
+    Read off the recorded replay's first and last frames rather than from
+    solver internals — the recorder publishes positions, and nothing here
+    needs velocities.
+    """
+    first = {b.body_id: (b.x_in, b.y_in) for b in run.replay.frames[0].bodies if b.body_id}
+    last = {b.body_id: (b.x_in, b.y_in) for b in run.replay.frames[-1].bodies if b.body_id}
+    return {
+        pin_id: math.hypot(last[pin_id][0] - x0, last[pin_id][1] - y0)
+        for pin_id, (x0, y0) in first.items()
+    }
 
 
 # --- The table itself ----------------------------------------------------
@@ -346,6 +405,53 @@ def test_the_corpus_covers_all_three_termination_categories():
     assert ("step_cap", False) not in observed
 
 
+def test_the_light_hit_is_a_real_near_edge_contact_not_just_a_name():
+    """`light_hit` has to be light *geometrically*, not by label.
+
+    Three things make it so: the line is off-centre, the ball's circle still
+    overlaps the headpin's (so contact genuinely occurs), and the overlap is
+    a thin sliver of the contact distance. The outcome follows — pin 1 is
+    moved but not past the fall threshold, so the headpin is left standing,
+    which is what a light hit means at the pin deck.
+    """
+    case = _case("light_hit")
+    separation_in = abs(case.lateral_position_in)
+    overlap_in = CONTACT_DISTANCE_IN - separation_in
+
+    assert separation_in > 0.0, "a head-on line is not a light hit"
+    assert overlap_in > 0.0, "must actually touch the headpin"
+    assert overlap_in < CONTACT_DISTANCE_IN * LIGHT_HIT_MAX_OVERLAP_FRACTION, (
+        "a thick overlap is a solid hit, not a light one"
+    )
+
+    run = _run(case)
+    pin_one_displacement = _pin_displacements(run)[1]
+
+    assert pin_one_displacement > 0.0, "contact must actually move the headpin"
+    assert pin_one_displacement < FALL_DISPLACEMENT_THRESHOLD_IN
+    assert 1 not in run.fallen_pin_ids, "a light hit leaves the headpin standing"
+
+
+def test_the_light_hit_criterion_actually_discriminates():
+    """The overlap bound has to reject the corpus's solid lines, not merely
+    admit the light one. Otherwise it would be a bound in name only."""
+    overlap_fraction = {
+        case.name: (CONTACT_DISTANCE_IN - abs(case.lateral_position_in)) / CONTACT_DISTANCE_IN
+        for case in CALIBRATION_CORPUS
+    }
+
+    assert overlap_fraction["light_hit"] < LIGHT_HIT_MAX_OVERLAP_FRACTION
+    # The pocket line and a dead-on line are both solid by this measure.
+    assert overlap_fraction["pocket"] > LIGHT_HIT_MAX_OVERLAP_FRACTION
+    assert overlap_fraction["head_on"] == pytest.approx(1.0), "no offset at all"
+
+    # And the outcomes agree with the geometry: the solid lines carry the
+    # headpin, the light one does not.
+    assert 1 in _run(_case("pocket")).fallen_pin_ids
+    assert 1 in _run(_case("head_on")).fallen_pin_ids
+    assert 1 not in _run(_case("light_hit")).fallen_pin_ids
+
+
 def test_the_boundary_case_really_straddles_the_final_step():
     """Without this, a constants change could slide the crossing earlier or
     later and `terminal_settle` would quietly become an ordinary early
@@ -357,6 +463,83 @@ def test_the_boundary_case_really_straddles_the_final_step():
 
     assert v0_in_s * damping_factor ** (MAX_COLLISION_STEPS - 1) >= SETTLE_SPEED_IN_S
     assert v0_in_s * damping_factor**MAX_COLLISION_STEPS < SETTLE_SPEED_IN_S
+
+
+# --- What this corpus can actually detect -------------------------------
+#
+# Backs the sensitivity claims in docs/planar-collision-calibration.md. The
+# threshold is varied through pytest's `monkeypatch`, which restores the
+# module attribute at teardown whether the test passes or fails — the
+# production constant is never edited.
+
+# Brooklyn's pin 1 ends 2.979317 in from its spot, just 0.000567 in above
+# 1.25x the 2.383 in threshold. That single marginal pin is what the bands
+# below straddle, so they are stated as multipliers of the real constant
+# rather than as absolute inches.
+BROOKLYN_PIN_ONE_DISPLACEMENT_IN = 2.979317
+FALL_THRESHOLD_JUST_BELOW = 1.2502
+FALL_THRESHOLD_JUST_ABOVE = 1.2503
+
+
+def _fallen_with_threshold(monkeypatch, threshold_in: float, case: CorpusCase) -> tuple:
+    monkeypatch.setattr(collision, "FALL_DISPLACEMENT_THRESHOLD_IN", threshold_in)
+    return _simulate_collision_detail(
+        case.impact(), standing_ids=case.standing_ids
+    ).fallen_pin_ids
+
+
+def test_the_marginal_pin_sits_where_the_note_says_it_does():
+    """The whole sensitivity story rests on this one displacement, so pin it
+    directly rather than only through its downstream effect."""
+    displacement = _pin_displacements(_run(_case("brooklyn")))[1]
+
+    assert displacement == pytest.approx(BROOKLYN_PIN_ONE_DISPLACEMENT_IN, abs=1e-6)
+    # Above the threshold, so it falls -- but only barely.
+    assert displacement > FALL_DISPLACEMENT_THRESHOLD_IN
+    assert displacement < FALL_DISPLACEMENT_THRESHOLD_IN * FALL_THRESHOLD_JUST_ABOVE
+    assert displacement > FALL_DISPLACEMENT_THRESHOLD_IN * FALL_THRESHOLD_JUST_BELOW
+
+
+def test_raising_the_fall_threshold_past_that_pin_changes_the_outcome(monkeypatch):
+    brooklyn = _case("brooklyn")
+    base = FALL_DISPLACEMENT_THRESHOLD_IN
+
+    below = _fallen_with_threshold(monkeypatch, base * FALL_THRESHOLD_JUST_BELOW, brooklyn)
+    above = _fallen_with_threshold(monkeypatch, base * FALL_THRESHOLD_JUST_ABOVE, brooklyn)
+
+    assert below == brooklyn.fallen_pin_ids, "just under the marginal pin: unchanged"
+    assert above == tuple(p for p in brooklyn.fallen_pin_ids if p != 1), (
+        "just over it: the headpin alone stops falling"
+    )
+
+
+def test_lowering_the_fall_threshold_changes_nothing_while_it_stays_positive(monkeypatch):
+    """Precisely scoped: this holds on (0, current], not at every magnitude.
+
+    No pin in this corpus ends between zero and the current threshold, so
+    shrinking it toward zero reclassifies nothing.
+    """
+    pocket = _case("pocket")
+    base = FALL_DISPLACEMENT_THRESHOLD_IN
+
+    for threshold in (base, base / 2, 0.1, 1e-9):
+        assert _fallen_with_threshold(monkeypatch, threshold, pocket) == pocket.fallen_pin_ids
+
+
+def test_a_zero_threshold_is_a_different_predicate_and_does_change_the_outcome(monkeypatch):
+    """Zero is not "very small": displacement is non-negative and the fall
+    test is `>=`, so at zero an untouched pin satisfies it and the whole rack
+    is reported fallen. This is why the claim above is bounded below."""
+    pocket = _case("pocket")
+
+    assert _fallen_with_threshold(monkeypatch, 0.0, pocket) == tuple(sorted(ALL_PIN_IDS))
+
+
+def test_the_production_threshold_is_restored_after_those_experiments():
+    # monkeypatch undoes each change at teardown; this asserts it rather than
+    # trusting it, since a leaked value would silently corrupt every later test.
+    assert collision.FALL_DISPLACEMENT_THRESHOLD_IN == FALL_DISPLACEMENT_THRESHOLD_IN
+    assert _run(_case("brooklyn")).fallen_pin_ids == _case("brooklyn").fallen_pin_ids
 
 
 def test_the_contact_free_cases_really_are_contact_free():
