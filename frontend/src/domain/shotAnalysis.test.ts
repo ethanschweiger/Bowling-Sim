@@ -28,7 +28,12 @@ const response: GameThrowResponse = {
   entry_angle_deg: 1.4,
   speed_at_pins_mph: 15.9,
   pins_knocked: 7,
-  pinfall: { model_id: 'planar-collision-2d-v1', limitations: '', fallen_pin_ids: [1, 3, 5, 6, 8, 9, 10] },
+  pinfall: {
+    model_id: 'planar-collision-2d-v1',
+    limitations: '',
+    fallen_pin_ids: [1, 3, 5, 6, 8, 9, 10],
+    replay: null,
+  },
   lane_condition_version: 4,
   game_state: {
     standing_pin_ids: [2, 4, 7],

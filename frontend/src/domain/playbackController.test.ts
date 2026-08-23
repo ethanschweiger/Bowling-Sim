@@ -1,0 +1,297 @@
+import { describe, expect, it } from 'vitest';
+import type { CollisionReplayResponse } from '../api/types';
+import { SUPPORTED_REPLAY_MODEL_VERSION } from './collisionReplay';
+import {
+  PlaybackController,
+  phaseAt,
+  sequenceDurationMs,
+  type FrameScheduler,
+  type PlaybackPhase,
+} from './playbackController';
+import { TRAJECTORY_ANIMATION_DURATION_MS } from './trajectoryAnimation';
+
+/**
+ * A deterministic stand-in for requestAnimationFrame. Nothing here sleeps
+ * or reads a real clock: the test advances time itself and decides when a
+ * frame fires, so scheduling behavior is observed exactly rather than
+ * raced against.
+ */
+function fakeScheduler() {
+  let handle = 0;
+  let currentTime = 0;
+  const pending = new Map<number, (now: number) => void>();
+  const cancelled: number[] = [];
+
+  const scheduler: FrameScheduler = {
+    requestFrame(callback) {
+      handle += 1;
+      pending.set(handle, callback);
+      return handle;
+    },
+    cancelFrame(h) {
+      cancelled.push(h);
+      pending.delete(h);
+    },
+    now: () => currentTime,
+  };
+
+  return {
+    scheduler,
+    cancelled,
+    get pendingCount() {
+      return pending.size;
+    },
+    /** Fire every currently-queued frame at `time`. */
+    advanceTo(time: number) {
+      currentTime = time;
+      const due = [...pending.entries()];
+      pending.clear();
+      for (const [, callback] of due) {
+        callback(time);
+      }
+    },
+    setNow(time: number) {
+      currentTime = time;
+    },
+  };
+}
+
+const DECK_DURATION_S = 2.0;
+
+function replay(): CollisionReplayResponse {
+  return {
+    model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+    dt_s: 0.0005,
+    sample_every_steps: 100,
+    steps_taken: 4000,
+    frames: [
+      { t_s: 0, bodies: [{ body_id: 0, x_in: -3, y_in: 0 }] },
+      { t_s: 1.0, bodies: [{ body_id: 0, x_in: -2, y_in: 12 }] },
+      { t_s: DECK_DURATION_S, bodies: [{ body_id: 0, x_in: -1, y_in: 24 }] },
+    ],
+  };
+}
+
+function collect() {
+  const phases: PlaybackPhase[] = [];
+  return { phases, onPhase: (phase: PlaybackPhase) => phases.push(phase) };
+}
+
+describe('sequenceDurationMs', () => {
+  it('is the path phase alone when there is no replay', () => {
+    expect(sequenceDurationMs({ replay: null })).toBe(TRAJECTORY_ANIMATION_DURATION_MS);
+  });
+
+  it('adds the replay duration at one-times simulation time', () => {
+    expect(sequenceDurationMs({ replay: replay() })).toBe(
+      TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000,
+    );
+  });
+});
+
+describe('phaseAt', () => {
+  const withDeck = { replay: replay() };
+  const withoutDeck = { replay: null };
+
+  it('runs the path phase for its full documented duration', () => {
+    expect(phaseAt(withDeck, 0)).toEqual({ kind: 'path', progress: 0 });
+    expect(phaseAt(withDeck, TRAJECTORY_ANIMATION_DURATION_MS / 2)).toEqual({
+      kind: 'path',
+      progress: 0.5,
+    });
+  });
+
+  it('hands off to the deck phase exactly at the headpin plane, with no gap', () => {
+    // The last path instant and the deck's own t_s = 0 describe the same
+    // moment; the handoff must not skip or repeat time.
+    const boundary = phaseAt(withDeck, TRAJECTORY_ANIMATION_DURATION_MS);
+    expect(boundary).toEqual({ kind: 'deck', tS: 0 });
+  });
+
+  it('advances deck time at one-times simulation scale', () => {
+    const half = phaseAt(withDeck, TRAJECTORY_ANIMATION_DURATION_MS + 1000);
+    expect(half).toEqual({ kind: 'deck', tS: 1 });
+  });
+
+  it('settles once the replay has played out', () => {
+    expect(phaseAt(withDeck, TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000)).toEqual({
+      kind: 'settled',
+    });
+  });
+
+  it('settles straight after the path when there is no replay', () => {
+    expect(phaseAt(withoutDeck, TRAJECTORY_ANIMATION_DURATION_MS)).toEqual({ kind: 'settled' });
+  });
+});
+
+describe('PlaybackController lifecycle', () => {
+  it('runs exactly one loop that carries both phases through to settled', () => {
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    controller.start({ replay: replay() }, false);
+    expect(fake.pendingCount).toBe(1);
+
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
+    expect(fake.pendingCount).toBe(1); // still exactly one, never two
+
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 500);
+    expect(fake.pendingCount).toBe(1);
+
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000);
+    expect(fake.pendingCount).toBe(0); // stops itself when settled
+    expect(controller.isRunning).toBe(false);
+
+    expect(phases.map((p) => p.kind)).toEqual(['path', 'deck', 'settled']);
+  });
+
+  it('schedules no frames at all under reduced motion', () => {
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    controller.start({ replay: replay() }, true);
+
+    expect(fake.pendingCount).toBe(0);
+    expect(controller.isRunning).toBe(false);
+    expect(phases).toEqual([{ kind: 'settled' }]);
+  });
+
+  it('cancels the previous loop when a rapid second replay starts', () => {
+    const fake = fakeScheduler();
+    const { onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    controller.start({ replay: replay() }, false);
+    fake.advanceTo(100);
+    expect(fake.pendingCount).toBe(1);
+
+    controller.start({ replay: replay() }, false);
+    // Still exactly one queued frame -- the old one was cancelled, not
+    // left running alongside the new one.
+    expect(fake.pendingCount).toBe(1);
+    expect(fake.cancelled.length).toBe(1);
+  });
+
+  it('cancels and settles on a new throw, reset, or new game', () => {
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    controller.start({ replay: replay() }, false);
+    fake.advanceTo(200);
+    controller.settle();
+
+    expect(fake.pendingCount).toBe(0);
+    expect(controller.isRunning).toBe(false);
+    expect(phases[phases.length - 1]).toEqual({ kind: 'settled' });
+  });
+
+  it('settles immediately when interrupted mid-deck, leaving no pin frames over a newer rack', () => {
+    // The dangerous moment: a new throw or reset lands while pins are
+    // still moving. Those bodies belong to the *previous* rack, so they
+    // must stop being drawn at once rather than finishing their arc over
+    // whatever the server racked next.
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    controller.start({ replay: replay() }, false);
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 500);
+    expect(phases[phases.length - 1].kind).toBe('deck');
+
+    controller.settle();
+
+    expect(fake.pendingCount).toBe(0);
+    expect(controller.isRunning).toBe(false);
+    expect(phases[phases.length - 1]).toEqual({ kind: 'settled' });
+  });
+
+  it('cannot resume a stale sequence after being settled by a failed throw', () => {
+    // A 503 settles the display (isBusy false->true settles; the failure
+    // itself is then `none`). Nothing re-enters the loop on its own, so
+    // the previous throw's collision data is never re-animated without a
+    // deliberate new start.
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    controller.start({ replay: replay() }, false);
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 500);
+    controller.settle();
+    phases.length = 0;
+
+    // Time keeps passing; no frames are queued, so nothing draws.
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 1500);
+    expect(fake.pendingCount).toBe(0);
+    expect(phases).toEqual([]);
+  });
+
+  it('stops on dispose and reports nothing further, even if a frame was already queued', () => {
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    controller.start({ replay: replay() }, false);
+    fake.advanceTo(100);
+    const beforeDispose = phases.length;
+
+    controller.dispose();
+    expect(fake.pendingCount).toBe(0);
+
+    // A start after dispose must also stay inert -- the unmounted
+    // component can never be driven again.
+    controller.start({ replay: replay() }, false);
+    expect(fake.pendingCount).toBe(0);
+    expect(phases.length).toBe(beforeDispose);
+  });
+
+  it('settle after dispose reports nothing (no state set on a gone component)', () => {
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    controller.dispose();
+    controller.settle();
+    expect(phases).toEqual([]);
+  });
+
+  it('plays a throw with no replay as a path phase that settles at the boundary', () => {
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    // The gutter / heuristic / unknown-version case: no deck phase exists,
+    // so nothing invents ball or pin movement past the path.
+    controller.start({ replay: null }, false);
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS);
+
+    expect(phases.map((p) => p.kind)).toEqual(['path', 'settled']);
+    expect(fake.pendingCount).toBe(0);
+  });
+
+  it('replays the complete sequence again without any new data', () => {
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+    const sequence = { replay: replay() };
+
+    const playOnce = (base: number) => {
+      fake.setNow(base);
+      controller.start(sequence, false);
+      fake.advanceTo(base + 10);
+      fake.advanceTo(base + TRAJECTORY_ANIMATION_DURATION_MS + 10);
+      fake.advanceTo(base + TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000);
+    };
+
+    playOnce(0);
+    const afterFirst = phases.map((p) => p.kind);
+    phases.length = 0;
+    playOnce(10_000);
+
+    expect(afterFirst).toEqual(['path', 'deck', 'settled']);
+    expect(phases.map((p) => p.kind)).toEqual(['path', 'deck', 'settled']);
+  });
+});

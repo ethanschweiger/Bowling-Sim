@@ -34,10 +34,47 @@ export interface TrajectoryPointResponse {
   board: number;
 }
 
+/** One body's position at one instant of a collision replay.
+ *
+ * Coordinates are inches in the backend's own pin-deck frame (see
+ * `backend/app/physics/replay.py`): `x_in` lateral from lane center,
+ * positive toward higher board numbers; `y_in` downlane from the headpin
+ * plane, which is y=0. `domain/collisionReplay.ts` is the one place these
+ * convert to the canvas's board/distance coordinates. */
+export interface ReplayBodyResponse {
+  /** 0 is the ball; 1-10 are the pins that were actually standing. */
+  body_id: number;
+  x_in: number;
+  y_in: number;
+}
+
+export interface ReplayFrameResponse {
+  /** Simulation seconds since impact — not wall-clock, not paint time. */
+  t_s: number;
+  bodies: ReplayBodyResponse[];
+}
+
+/** A bounded, deterministic, server-authoritative replay of one planar
+ * collision run. `model_version` names the replay's own shape/semantics
+ * (distinct from `PinfallInfo.model_id`, which names the model that
+ * resolved the pins), so a client can refuse data it doesn't understand
+ * rather than misinterpreting it. */
+export interface CollisionReplayResponse {
+  model_version: string;
+  dt_s: number;
+  sample_every_steps: number;
+  steps_taken: number;
+  frames: ReplayFrameResponse[];
+}
+
 export interface PinfallInfo {
   model_id: string;
   limitations: string;
   fallen_pin_ids: number[];
+  /** Null whenever no collision run was simulated: the heuristic model, a
+   * gutter miss, a non-positive impact speed, or an empty rack. Never a
+   * fabricated scene for a collision that didn't happen. */
+  replay: CollisionReplayResponse | null;
 }
 
 export interface FrameStateResponse {
