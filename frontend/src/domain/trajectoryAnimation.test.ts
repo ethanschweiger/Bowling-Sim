@@ -155,6 +155,21 @@ describe('decidePlaybackAction', () => {
     expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'none' });
   });
 
+  it('is indifferent to why a throw was rejected — a 503 settles exactly like any other failure', () => {
+    // This function never sees an HTTP status: App.tsx's catch block for a
+    // rejected throw (404, 409, 503, network failure, ...) never calls
+    // setLatestThrow on failure, so `latestThrowPath` here is unchanged no
+    // matter which of those it was. The case above already proves the
+    // general rule; this one exists so the new 503 contract has its own
+    // named regression tying it to the settled-display guarantee, not just
+    // an inference from an unrelated failure mode.
+    const previous = state({ latestThrowPath: PATH, isBusy: true });
+    const next = state({ latestThrowPath: PATH, isBusy: false });
+    expect(decidePlaybackAction(previous, next)).toEqual({ kind: 'none' });
+    // And a replay stays exactly as disabled/enabled as it already was —
+    // this function issues no new animation, so nothing here re-arms replay.
+  });
+
   it('settles (draws nothing) when a reset/new-game clears the previous throw', () => {
     const previous = state({ latestThrowPath: PATH, isBusy: true });
     const next = state({ latestThrowPath: null, isBusy: false });

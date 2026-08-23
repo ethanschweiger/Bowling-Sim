@@ -94,6 +94,24 @@ describe('throwBall', () => {
     await expect(throwBall('g1', {} as never)).rejects.toMatchObject({ status: 409 });
   });
 
+  it('surfaces a 503 for a rejected (truncated-trajectory) solver throw', async () => {
+    // The exact detail text lives on the backend
+    // (app/api/routes/games.py's TRUNCATED_TRAJECTORY_DETAIL); this is a
+    // representative copy for the test, not an import of it — the client
+    // must stay decoupled from that constant and just relay whatever
+    // `detail` string the server sends.
+    const detail =
+      'the simulated trajectory did not reach the pin deck; this throw was ' +
+      'not recorded and game state is unchanged. Retrying is expected to work.';
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ detail }, { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await throwBall('g1', {} as never).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(503);
+    expect((error as ApiError).message).toBe(detail);
+  });
+
   it('wraps a network failure in a distinct, recognizable ApiError', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     vi.stubGlobal('fetch', fetchMock);

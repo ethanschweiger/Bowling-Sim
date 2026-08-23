@@ -209,6 +209,29 @@ describe('classifyThrowFailure', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('treats a rejected (503) solver throw as an ordinary failure, never stale-game recovery', async () => {
+    // Codex's truncated-trajectory milestone (backend/app/api/routes/games.py)
+    // added this status. It is exactly as unambiguous as a 409: the game_id
+    // was never in question, so — unlike a throw's 404, which is genuinely
+    // ambiguous between "missing game" and "unknown ball_id" — this must
+    // never trigger a confirmation GET or the stale-game recovery path.
+    const originalError = new ApiError(
+      503,
+      'the simulated trajectory did not reach the pin deck; this throw was not recorded and game state is unchanged. Retrying is expected to work.',
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await classifyThrowFailure('g1', originalError);
+
+    // The original error — status and readable message intact — is what
+    // must reach the status area, not a synthesized "missing game" story.
+    expect(result).toEqual({ kind: 'other', error: originalError });
+    expect((result as { kind: 'other'; error: unknown }).error).toBe(originalError);
+    // No confirmation GET: the network was never touched.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('passes a non-ApiError straight through without confirming anything', async () => {
     const originalError = new TypeError('Failed to fetch');
     const fetchMock = vi.fn();
