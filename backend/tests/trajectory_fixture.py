@@ -42,14 +42,10 @@ from app.physics.throw import Throw, sample_release
 # pocket, which is the honest spread of the modelled human variance.
 DIAGNOSTIC_BALL_ID = "reactive_pearl"
 DIAGNOSTIC_SEED = 17
-DIAGNOSTIC_REQUEST = Throw(
-    speed_mph=17.0,
-    rev_rate=350.0,
-    axis_rotation=45.0,
-    axis_tilt=15.0,
-    launch_angle=-1.5,
-    launch_position=28.0,
-)
+# Keep this fixture tied to the actual starter release. Its downstream shape
+# assertions therefore catch a default-value regression, not merely a change
+# to a duplicate test literal.
+DIAGNOSTIC_REQUEST = Throw()
 
 # The 1-3 pocket, in boards at the headpin plane. Pin 1 sits on board 20
 # (lane centre) and pin 3 is 12 in to its right, so the gap between them
