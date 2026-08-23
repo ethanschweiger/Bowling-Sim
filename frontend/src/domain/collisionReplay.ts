@@ -254,7 +254,7 @@ export function acceptReplay(
     return null;
   }
 
-  // The *complete* schedule a v1 recorder produces, derived with integer
+  // The *complete* schedule a v3 recorder produces, derived with integer
   // step arithmetic: the initial frame at step 0, every cadence tick
   // through the run, and one terminal frame at the final step when that
   // step isn't itself a tick. Requiring the whole list — not merely that

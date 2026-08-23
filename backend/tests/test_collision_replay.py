@@ -353,8 +353,8 @@ def test_a_threshold_crossing_on_the_final_step_is_still_settled():
     assert run.fallen_pin_ids == ()
 
     # The recorder is unaffected by which exit fired. 4,000 is a whole
-    # number of 100-step intervals, so the terminal frame is a cadence
-    # frame rather than an appended one, and the run is a full 2 s.
+    # number of 20-step intervals, so the terminal frame is a cadence frame
+    # rather than an appended one, and the run is a full 2 s.
     replay = run.replay
     assert len(replay.frames) == MAX_COLLISION_STEPS // REPLAY_SAMPLE_EVERY_STEPS + 1
     assert replay.frames[-1].t_s == pytest.approx(MAX_COLLISION_STEPS * COLLISION_DT_S)

@@ -97,7 +97,9 @@ function pocketReplay(): CollisionReplayResponse {
 }
 
 /** A second-ball spare attempt: only the pins that were still standing.
- * 100 steps = 0.05 s, so the final step is itself a cadence tick. */
+ * 100 steps = 0.05 s, which is five v3 cadence intervals (5 x 20 steps), so
+ * the final step is itself a cadence tick and no terminal frame is appended.
+ * (100 here is the run length, not the stride -- the v3 stride is 20.) */
 function partialRackReplay(): CollisionReplayResponse {
   return buildReplay(100, 'settled', [BALL_BODY_ID, 7, 10], (id, tS) => {
     if (id === BALL_BODY_ID) return { x_in: 5 + tS * 4, y_in: tS * 60 };
@@ -363,20 +365,38 @@ describe('acceptReplay', () => {
   // would have produced.
 
   it('refuses a sparse run that is cadence-aligned but missing its middle frames', () => {
-    // The reported case: a 4,000-step v1 run carrying only t=0 and t=2.
-    // Both timestamps sit exactly on the cadence, so a per-frame check
-    // passes them -- and the browser would then invent two seconds of
-    // collision motion between them.
+    // The reported case, as a payload that is valid v3 in every other
+    // respect: correct version, a real termination reason, the 0.0005 s
+    // timestep, the 20-step stride, and authoritative first and last
+    // bodies. Only the interior required frames are gone.
+    //
+    // Both surviving timestamps sit exactly on the cadence, so a per-frame
+    // check passes them -- and the browser would then invent two seconds of
+    // collision motion between them. Only requiring the *whole* schedule
+    // catches it.
+    const complete = fullLengthReplay();
     const sparse: CollisionReplayResponse = {
-      model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-      dt_s: 0.0005,
-      sample_every_steps: 100,
-      steps_taken: 4000,
-      frames: [
-        { t_s: 0, bodies: [body(BALL_BODY_ID, -3, 0)] },
-        { t_s: 2.0, bodies: [body(BALL_BODY_ID, -1, 24)] },
-      ],
+      ...complete,
+      frames: [complete.frames[0], complete.frames[complete.frames.length - 1]],
     };
+
+    // The control first: this exact payload plays when its schedule is whole.
+    expect(acceptReplay(complete)).toBe(complete);
+    expect(complete.frames.length).toBe(201);
+
+    // Nothing else differs -- same metadata, same endpoint bodies.
+    expect(sparse.model_version).toBe(SUPPORTED_REPLAY_MODEL_VERSION);
+    expect(sparse.termination_reason).toBe(complete.termination_reason);
+    expect(sparse.dt_s).toBe(V3_DT_S);
+    expect(sparse.sample_every_steps).toBe(V3_SAMPLE_EVERY_STEPS);
+    expect(sparse.steps_taken).toBe(complete.steps_taken);
+    expect(sparse.frames[0]).toBe(complete.frames[0]);
+    expect(sparse.frames[1]).toBe(complete.frames[complete.frames.length - 1]);
+    expect(sparse.frames[0].t_s).toBe(0);
+    expect(sparse.frames[1].t_s).toBeCloseTo(2.0, 12);
+
+    // So the rejection can only be the 199 absent interior frames.
+    expect(sparse.frames.length).toBe(2);
     expect(acceptReplay(sparse)).toBeNull();
   });
 
