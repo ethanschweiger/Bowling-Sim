@@ -75,7 +75,7 @@ export const RELEASE_FIELDS: readonly ReleaseFieldConfig[] = [
     min: -2,
     max: 2,
     step: 0.1,
-    defaultValue: 0.5,
+    defaultValue: -1.5,
     help: 'Negative aims toward lower/right boards. Positive aims toward higher/left boards.',
   },
   {

@@ -8,6 +8,7 @@ describe('release field guidance', () => {
 
     expect(launchAngle?.help).toContain('lower/right');
     expect(launchAngle?.help).toContain('higher/left');
+    expect(launchAngle?.defaultValue).toBe(-1.5);
     expect(laydown?.label).toBe('Ball laydown board');
     expect(laydown?.help).toContain('not the bowler');
   });

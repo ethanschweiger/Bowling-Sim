@@ -40,4 +40,7 @@ export const BALL_CATALOG: readonly BallOption[] = [
   },
 ];
 
-export const DEFAULT_BALL_ID: string = BALL_CATALOG[0].id;
+// The starter release is a conventional right-handed house-shot line. A
+// reactive ball makes the displayed skid-to-hook shape legible; the House
+// Ball remains available for straight spare attempts.
+export const DEFAULT_BALL_ID = 'reactive_pearl';
