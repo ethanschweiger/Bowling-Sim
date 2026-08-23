@@ -117,6 +117,27 @@ class CollisionReplayResponse(BaseModel):
     sample_every_steps: int
     steps_taken: int
     frames: list[ReplayFrameResponse] = Field(default_factory=list)
+    # Which of the solver's two loop exits produced the final frame, so a
+    # client never has to guess whether playback ended because motion
+    # stopped or because the run was cut off.
+    #
+    # Spelled as the same two-value Literal as the domain's
+    # `physics.replay.TerminationReason` (a test pins the two sets equal),
+    # so Pydantic rejects any other string at the boundary rather than
+    # letting an unknown reason reach a consumer. Required, not defaulted:
+    # a replay whose termination is unknown is precisely what the v1 -> v2
+    # version bump exists to make un-representable.
+    termination_reason: Literal["settled", "step_cap"] = Field(
+        description=(
+            "How the planar collision loop ended. 'settled': every body's "
+            "speed fell below the model's velocity threshold — a numerical "
+            "criterion on sliding circles, NOT an observation that real "
+            "pins came to rest. 'step_cap': the solver hit its fixed "
+            "2-second step limit with bodies still moving — a safety stop "
+            "with no physical meaning. Neither value describes pin state; "
+            "use `fallen_pin_ids` for that."
+        ),
+    )
 
 
 # Same Pydantic/Python-3.9 constraint as `NullableInt` above, for an

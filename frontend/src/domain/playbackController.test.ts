@@ -59,7 +59,7 @@ function fakeScheduler() {
 const DECK_DURATION_S = 2.0;
 
 function replay(): CollisionReplayResponse {
-  // A genuinely complete v1 recording: 4,000 steps x 0.0005 s = the 2 s
+  // A genuinely complete v2 recording: 4,000 steps x 0.0005 s = the 2 s
   // cap, with all 41 frames on the recorder's own 0.05 s cadence. Built in
   // full rather than sampled down to three frames, so this fixture is one
   // `acceptReplay` would actually accept -- a sparse stand-in would quietly
@@ -70,6 +70,11 @@ function replay(): CollisionReplayResponse {
   }
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+    // Reaching the cap is what `step_cap` means, and it is the reason
+    // every real seeded throw currently reports — so the lifecycle tests
+    // below exercise the terminal-frame handoff for a run that ended
+    // mid-motion, which is the case that most needs to behave.
+    termination_reason: 'step_cap',
     dt_s: 0.0005,
     sample_every_steps: 100,
     steps_taken: 4000,
@@ -337,6 +342,32 @@ describe('PlaybackController lifecycle', () => {
     fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS);
 
     expect(phases.map((p) => p.kind)).toEqual(['path', 'settled']);
+    expect(fake.pendingCount).toBe(0);
+  });
+
+  it.each([
+    ['a v1 payload', { model_version: 'planar-collision-replay-2d-v1' }],
+    ['an unknown termination reason', { termination_reason: 'timeout' }],
+    ['no termination reason at all', { termination_reason: undefined }],
+  ])('runs no deck loop for %s', (_label, override) => {
+    // End to end through the firewall rather than passing `null` directly:
+    // this is what actually happens to a payload the client cannot vouch
+    // for, and the point is that it costs no animation frames.
+    const rejected = acceptReplay({ ...replay(), ...override } as CollisionReplayResponse);
+    expect(rejected).toBeNull();
+
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+
+    controller.start({ replay: rejected }, false);
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS);
+    // Well past where a deck phase would have run, had one been started.
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000 + 100);
+
+    expect(phases.map((p) => p.kind)).toEqual(['path', 'settled']);
+    expect(phases.some((p) => p.kind === 'deck')).toBe(false);
     expect(fake.pendingCount).toBe(0);
   });
 

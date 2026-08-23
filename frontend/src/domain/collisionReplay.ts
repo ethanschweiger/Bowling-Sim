@@ -15,10 +15,22 @@
  * ## Version gating
  *
  * Only `SUPPORTED_REPLAY_MODEL_VERSION` is played. A replay stamped with
- * anything else — a future 3D solver, say — is refused rather than
- * reinterpreted through assumptions that no longer hold. Refusal is not
- * an error state: the canvas simply shows the settled server rack, the
- * same thing it shows for a gutter ball or a heuristic-model result.
+ * anything else — an older v1 recording, or a future 3D solver — is
+ * refused rather than reinterpreted through assumptions that no longer
+ * hold. Refusal is not an error state: the canvas simply shows the static
+ * server rack, the same thing it shows for a gutter ball or a
+ * heuristic-model result.
+ *
+ * ## What playback does and doesn't claim
+ *
+ * The last frame is the run's *terminal* snapshot — the final state the
+ * solver computed. It is not a settled scene: the solver may have stopped
+ * at its step cap with bodies still in motion, in which case playback ends
+ * mid-flight because there is genuinely nothing further to show.
+ * `termination_reason` says which of the two happened. Neither value is
+ * evidence about real pins, and nothing here may turn it into pin state or
+ * scoring — the server's `fallen_pin_ids`/`standing_pin_ids` remain the
+ * only authority, exactly as before this field existed.
  *
  * ## Coordinates
  *
@@ -41,8 +53,59 @@
 import type { CollisionReplayResponse, ReplayFrameResponse } from '../api/types';
 
 /** The one replay shape this client understands. Must match
- * `REPLAY_MODEL_VERSION` in `backend/app/physics/replay.py`. */
-export const SUPPORTED_REPLAY_MODEL_VERSION = 'planar-collision-replay-2d-v1';
+ * `REPLAY_MODEL_VERSION` in `backend/app/physics/replay.py`.
+ *
+ * v1 is deliberately *not* also accepted. v2 added `termination_reason` as
+ * a required field, and no v1 payload can be upgraded to it: v1 recorded
+ * no distinction between the solver's two exits, so every v1 replay is
+ * genuinely ambiguous. Assuming a value would be inventing the very fact
+ * the field exists to state. A v1 payload therefore falls back to the
+ * static server rack, like any other unknown version. */
+export const SUPPORTED_REPLAY_MODEL_VERSION = 'planar-collision-replay-2d-v2';
+
+/**
+ * How the recorded run ended. Mirrors `TerminationReason` in
+ * `backend/app/physics/replay.py`.
+ *
+ * Neither value is a claim about real pins. `'settled'` means every body
+ * in the planar model dropped below its velocity threshold; `'step_cap'`
+ * means the solver stopped at its fixed 2 s limit with bodies still
+ * moving — a numerical safety stop with no physical meaning. Playback of a
+ * `'step_cap'` run simply ends mid-motion, which is honest: the server has
+ * no later state to show.
+ *
+ * This is presentation metadata only. Nothing in this client may derive
+ * pin state, scoring, or collision outcomes from it — `fallen_pin_ids` and
+ * `standing_pin_ids` remain the only authority on what happened.
+ */
+export type ReplayTerminationReason = 'settled' | 'step_cap';
+
+/** The exact permitted set, so the validator and tests can't drift from
+ * each other by restating the strings independently. */
+export const REPLAY_TERMINATION_REASONS: readonly ReplayTerminationReason[] = [
+  'settled',
+  'step_cap',
+];
+
+/**
+ * A replay that has passed `acceptReplay`.
+ *
+ * Structurally the payload it came from — the same object, never a copy —
+ * but with `termination_reason` narrowed to a value that has actually been
+ * checked. The distinction is the whole point of the firewall: an
+ * unvalidated `CollisionReplayResponse` may carry any string or none, and
+ * only this type says otherwise.
+ */
+export interface AcceptedReplay extends CollisionReplayResponse {
+  termination_reason: ReplayTerminationReason;
+}
+
+function isTerminationReason(value: unknown): value is ReplayTerminationReason {
+  return (
+    typeof value === 'string' &&
+    (REPLAY_TERMINATION_REASONS as readonly string[]).includes(value)
+  );
+}
 
 // --- The recorded contract's own documented bounds -----------------------
 // Mirrors backend/app/physics/{collision,replay}.py. A payload claiming to
@@ -53,18 +116,22 @@ export const SUPPORTED_REPLAY_MODEL_VERSION = 'planar-collision-replay-2d-v1';
 
 /** `COLLISION_DT_S` in backend/app/physics/collision.py — fixed for this
  * model version, not a free parameter a payload may choose. */
-export const V1_DT_S = 0.0005;
+export const V2_DT_S = 0.0005;
 /** `REPLAY_SAMPLE_EVERY_STEPS` in backend/app/physics/replay.py — likewise
- * fixed for v1. Together with `V1_DT_S` these pin down the exact set of
- * frames a genuine v1 recording contains. */
-export const V1_SAMPLE_EVERY_STEPS = 100;
+ * fixed for v2. Together with `V2_DT_S` these pin down the exact set of
+ * frames a genuine v2 recording contains. Both values are unchanged from
+ * v1: the version bump is about the added `termination_reason`, not about
+ * any change to the cadence or the numbers a run produces. */
+export const V2_SAMPLE_EVERY_STEPS = 100;
 
 /** `MAX_REPLAY_FRAMES` in the backend recorder. */
 export const MAX_ACCEPTED_REPLAY_FRAMES = 64;
 /** `MAX_COLLISION_STEPS` — the solver's own iteration cap. */
 export const MAX_ACCEPTED_STEPS = 4000;
 /** `MAX_COLLISION_SECONDS` — the solver stops at this cap even if bodies
- * are still moving, so a terminal frame is not necessarily settled. */
+ * are still moving, which is the `'step_cap'` termination reason. A
+ * terminal frame is therefore the last state the solver computed, not a
+ * state in which anything came to rest. */
 export const MAX_ACCEPTED_DURATION_S = 2.0;
 /** The ball plus at most a full rack. */
 export const MAX_ACCEPTED_BODIES = 11;
@@ -122,15 +189,26 @@ function isInBounds(value: number): boolean {
  * IDs including the ball.
  *
  * Returns the replay unchanged on success (never a copy — the caller's
- * data stays the server's), or `null` for anything missing, malformed, or
- * of an unknown version. Never throws: a canvas that threw on a surprising
- * payload would take the whole panel down over a decoration.
+ * data stays the server's), typed as `AcceptedReplay` so its
+ * `termination_reason` is a value that has actually been checked. Returns
+ * `null` for anything missing, malformed, or of an unknown version. Never
+ * throws: a canvas that threw on a surprising payload would take the whole
+ * panel down over a decoration.
  */
-export function acceptReplay(replay: CollisionReplayResponse | null | undefined): CollisionReplayResponse | null {
+export function acceptReplay(
+  replay: CollisionReplayResponse | null | undefined,
+): AcceptedReplay | null {
   if (!replay || typeof replay !== 'object') {
     return null;
   }
   if (replay.model_version !== SUPPORTED_REPLAY_MODEL_VERSION) {
+    return null;
+  }
+  // Required in v2, and required to be one of exactly two values. A
+  // missing or unrecognized reason means this payload does not describe a
+  // run whose ending this client can state, so it is refused outright
+  // rather than played with the question left open.
+  if (!isTerminationReason(replay.termination_reason)) {
     return null;
   }
 
@@ -138,11 +216,11 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
   if (!isFiniteNumber(replay.dt_s) || replay.dt_s <= 0) {
     return null;
   }
-  // v1's cadence and timestep are fixed constants, not payload-chosen
+  // v2's cadence and timestep are fixed constants, not payload-chosen
   // values. Pinning them is what makes the *complete* frame schedule below
   // derivable — without it, a payload could pick a stride that makes any
   // sparse frame list look "on cadence".
-  if (replay.dt_s !== V1_DT_S || replay.sample_every_steps !== V1_SAMPLE_EVERY_STEPS) {
+  if (replay.dt_s !== V2_DT_S || replay.sample_every_steps !== V2_SAMPLE_EVERY_STEPS) {
     return null;
   }
   if (!isPositiveSafeInteger(replay.steps_taken) || replay.steps_taken > MAX_ACCEPTED_STEPS) {
@@ -168,7 +246,7 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
   // being accepted and then having two seconds of collision motion
   // invented by interpolating across the frames it omitted.
   const expectedSteps: number[] = [];
-  for (let step = 0; step <= replay.steps_taken; step += V1_SAMPLE_EVERY_STEPS) {
+  for (let step = 0; step <= replay.steps_taken; step += V2_SAMPLE_EVERY_STEPS) {
     expectedSteps.push(step);
   }
   if (expectedSteps[expectedSteps.length - 1] !== replay.steps_taken) {
@@ -189,7 +267,7 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
     }
     // Each frame must sit at its own scheduled step — computed from the
     // integer step index, so float drift never accumulates across frames.
-    const expectedT = expectedSteps[index] * V1_DT_S;
+    const expectedT = expectedSteps[index] * V2_DT_S;
     if (Math.abs(frame.t_s - expectedT) > TIME_TOLERANCE_S) {
       return null;
     }
@@ -252,7 +330,10 @@ export function acceptReplay(replay: CollisionReplayResponse | null | undefined)
     }
   }
 
-  return replay;
+  // The very same object the caller passed in — the assertion only records
+  // the `termination_reason` narrowing checked at the top, and copies or
+  // rewrites nothing. The server's data stays the server's.
+  return replay as AcceptedReplay;
 }
 
 /**

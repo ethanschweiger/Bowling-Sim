@@ -96,7 +96,10 @@ either way.
 `simulate_collision` steps forward at `COLLISION_DT_S` seconds per step,
 for at most `MAX_COLLISION_STEPS` steps, or until every body's speed drops
 below `SETTLE_SPEED_IN_S` — whichever comes first. It always terminates in
-one of those two ways. Each step: bodies move by velocity * dt, velocities
+one of those two ways, and a recorded replay reports which one as its
+`termination_reason` (`step_cap` or `settled`). Neither is a statement
+about real pins coming to rest; see `replay.py`'s "How a run ends".
+Each step: bodies move by velocity * dt, velocities
 decay by the (< 1) damping factor, and any pair of circles found
 overlapping is resolved by a standard elastic/inelastic impulse along
 their contact normal (restitution <= 1, so a collision never adds kinetic
@@ -128,7 +131,10 @@ from app.physics.rack import validate_pin_ids
 from app.physics.replay import (
     MAX_REPLAY_FRAMES,
     REPLAY_SAMPLE_EVERY_STEPS,
+    TERMINATION_SETTLED,
+    TERMINATION_STEP_CAP,
     CollisionReplay,
+    TerminationReason,
     _ReplayRecorder,
 )
 from app.physics.units import IN_PER_FT, mph_to_in_per_s, weight_lbf_to_mass_blob
@@ -136,7 +142,12 @@ from app.physics.units import IN_PER_FT, mph_to_in_per_s, weight_lbf_to_mass_blo
 COLLISION_DT_S = 0.0005
 MAX_COLLISION_SECONDS = 2.0
 MAX_COLLISION_STEPS = int(MAX_COLLISION_SECONDS / COLLISION_DT_S)  # 4000
-SETTLE_SPEED_IN_S = 0.5  # every body below this speed counts as "settled"
+# The planar velocity threshold below which this model stops stepping.
+# A purely numerical criterion on sliding circles: it does not observe a
+# pin standing, lying down, or coming to physical rest, because nothing in
+# this 2D model represents any of those. `replay.TERMINATION_SETTLED` names
+# a run that ended this way, and is documented in exactly those terms.
+SETTLE_SPEED_IN_S = 0.5
 LINEAR_DAMPING_PER_S = 1.2
 
 OZ_PER_LB = 16.0
@@ -347,6 +358,16 @@ def _simulate_collision_detail(
         # The initial frame: bodies as placed, before any stepping.
         recorder.capture(0, bodies)
 
+    # Set at the exit that actually fires. Initialized to the step cap
+    # because that is what running the loop to exhaustion means: reaching
+    # the last iteration without the settle condition ever holding. The
+    # only way this stays `step_cap` is for `break` never to be taken.
+    # Deliberately not derived afterwards from `steps_taken`, frame count,
+    # or terminal positions — those are consequences of the exit, not the
+    # exit itself, and inferring backwards from them is exactly the kind of
+    # plausible-but-unfounded claim this field exists to remove.
+    termination_reason: TerminationReason = TERMINATION_STEP_CAP
+
     steps_taken = 0
     for step in range(MAX_COLLISION_STEPS):
         steps_taken = step + 1
@@ -365,16 +386,20 @@ def _simulate_collision_detail(
             if not pin.fell and pin.displacement_in() >= FALL_DISPLACEMENT_THRESHOLD_IN:
                 pin.fell = True
 
-        # Read-only sampling, after this step's physics has fully settled.
+        # Read-only sampling, after this step's physics has fully resolved
+        # (moves, impulses, and positional corrections all applied).
         # Nothing below influences the loop's own state or termination.
         if recorder is not None and recorder.should_capture(steps_taken):
             recorder.capture(steps_taken, bodies)
 
         if all(body.speed_in_s() < SETTLE_SPEED_IN_S for body in bodies):
+            termination_reason = TERMINATION_SETTLED
             break
 
     fallen_ids = tuple(sorted(pin.pin_id for pin in pins if pin.fell))
-    replay = recorder.finish(steps_taken, bodies) if recorder is not None else None
+    replay = (
+        recorder.finish(steps_taken, bodies, termination_reason) if recorder is not None else None
+    )
     return _CollisionRun(fallen_pin_ids=fallen_ids, steps_taken=steps_taken, replay=replay)
 
 

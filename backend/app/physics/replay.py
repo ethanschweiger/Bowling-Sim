@@ -32,6 +32,32 @@ It increases strictly across a replay's frames.
 began, so a replay can only ever describe pins that genuinely existed for
 that impact. Ids are stable across frames and sorted within each frame.
 
+## How a run ends
+
+The last frame is the run's *terminal* snapshot: the final state the
+solver computed, whatever that state happens to be. It is deliberately
+not called "settled", because the loop has two quite different exits and
+only one of them means the motion actually stopped. Every replay carries
+`termination_reason` saying which occurred, recorded at the exit itself
+rather than guessed afterward from frame count or position:
+
+- `settled` — every simulated body's speed fell below
+  `collision.SETTLE_SPEED_IN_S`. That is a planar velocity threshold, and
+  the only sense in which this model can say motion ceased. It is not a
+  claim that real pins came to rest: these are sliding circles with no
+  height, tilt, or toppling, so nothing here observes a pin standing or
+  lying down.
+- `step_cap` — the solver exhausted `collision.MAX_COLLISION_STEPS`
+  (2 seconds of simulated time) while bodies were still moving above that
+  threshold. This is a numerical safety stop that bounds the run; it says
+  nothing physical at all. Playback of such a run simply ends mid-motion,
+  which is honest — the server has no later state to show.
+
+A client must not read either value as "the pins have finished falling",
+and must not derive scoring from it. Which pins fell is decided solely by
+`collision.FALL_DISPLACEMENT_THRESHOLD_IN` and published as
+`fallen_pin_ids`, independently of how the loop terminated.
+
 ## Why 2D only
 
 Flat circles sliding on a plane: no height, tilt, rotation, or toppling
@@ -48,13 +74,42 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 # Bumped whenever the meaning of recorded fields changes, so stored or
 # in-flight replay data can never be silently reinterpreted by a different
 # solver. Distinct from `PinfallModel.model_id`: that names which model
 # resolved the pins, this names the shape/semantics of the replay itself.
-REPLAY_MODEL_VERSION = "planar-collision-replay-2d-v1"
+#
+# v1 -> v2 adds `termination_reason` as a *required* field. A v1 payload
+# cannot be upgraded by assuming a value: v1 recorded no distinction, so
+# every v1 replay is genuinely ambiguous between the two exits. Consumers
+# must reject an unrecognized version and fall back rather than guess —
+# which is exactly why the version string exists.
+REPLAY_MODEL_VERSION = "planar-collision-replay-2d-v2"
+
+# Why a `Literal` alias rather than an `Enum`: these two values are a wire
+# contract shared with the API layer and the browser, and a Literal keeps
+# the domain, the Pydantic response model, and the TypeScript union spelled
+# as the same two strings, statically checked in each. It also avoids the
+# `str, Enum` formatting divergence between Python 3.9 and 3.11 that
+# `ball.Coverstock` documents. `schemas.oil_pattern` already establishes
+# Literal as this codebase's spelling for a small validated value set.
+TerminationReason = Literal["settled", "step_cap"]
+
+#: Every body's speed fell below `collision.SETTLE_SPEED_IN_S` — a planar
+#: velocity threshold, not observed physical rest. See "How a run ends".
+TERMINATION_SETTLED: TerminationReason = "settled"
+#: The solver exhausted `collision.MAX_COLLISION_STEPS` with bodies still
+#: moving — a numerical safety stop, carrying no physical meaning.
+TERMINATION_STEP_CAP: TerminationReason = "step_cap"
+
+#: Both permitted values, for validators and tests that need the exact set
+#: rather than restating it (which is how the two drift apart).
+TERMINATION_REASONS: tuple[TerminationReason, ...] = (
+    TERMINATION_SETTLED,
+    TERMINATION_STEP_CAP,
+)
 
 # Sample every Nth solver step, plus a guaranteed initial and final frame.
 # At COLLISION_DT_S = 0.0005 s, every 100 steps is one frame per 50 ms —
@@ -113,9 +168,11 @@ class CollisionReplay:
     """A complete bounded replay of one planar collision run.
 
     `frames` always holds at least the initial state; a run that actually
-    stepped also ends with a final settled frame, so the first and last
-    frames bracket the whole run regardless of where the sampling cadence
-    happened to land.
+    stepped also ends with a frame at its true final step, so the first and
+    last frames bracket the whole run regardless of where the sampling
+    cadence happened to land. That last frame is the run's terminal
+    snapshot — see `termination_reason` for what ended it, and "How a run
+    ends" above for why it is not called settled.
     """
 
     model_version: str
@@ -123,6 +180,9 @@ class CollisionReplay:
     sample_every_steps: int
     steps_taken: int
     frames: tuple[ReplayFrame, ...]  # strictly increasing t_s
+    # Which of the solver loop's two exits produced the terminal frame.
+    # Recorded at the exit itself, never inferred from the data.
+    termination_reason: TerminationReason
 
 
 class _ReplayRecorder:
@@ -161,10 +221,21 @@ class _ReplayRecorder:
     def should_capture(self, step_index: int) -> bool:
         return step_index % self._sample_every_steps == 0
 
-    def finish(self, steps_taken: int, bodies: Sequence[_RecordableBody]) -> CollisionReplay:
+    def finish(
+        self,
+        steps_taken: int,
+        bodies: Sequence[_RecordableBody],
+        termination_reason: TerminationReason,
+    ) -> CollisionReplay:
         """Close the replay, guaranteeing a final frame at the true end of
         the run. If the cadence already captured exactly that step, this
-        doesn't duplicate it — timestamps stay strictly increasing."""
+        doesn't duplicate it — timestamps stay strictly increasing.
+
+        `termination_reason` is supplied by the caller because only the
+        solver loop knows which of its exits it actually took. The recorder
+        stays passive: it stamps the value it is handed and never examines
+        positions, step counts, or frames to decide one for itself.
+        """
         final_t_s = steps_taken * self._dt_s
         if steps_taken > 0 and (not self._frames or self._frames[-1].t_s < final_t_s):
             self.capture(steps_taken, bodies)
@@ -174,4 +245,5 @@ class _ReplayRecorder:
             sample_every_steps=self._sample_every_steps,
             steps_taken=steps_taken,
             frames=tuple(self._frames),
+            termination_reason=termination_reason,
         )

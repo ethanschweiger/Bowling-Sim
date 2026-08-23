@@ -12,6 +12,7 @@ import {
   replayDurationS,
   replayMaxDistanceFt,
   replayPositionsAt,
+  REPLAY_TERMINATION_REASONS,
   SUPPORTED_REPLAY_MODEL_VERSION,
 } from './collisionReplay';
 
@@ -26,11 +27,19 @@ function body(body_id: number, x_in: number, y_in: number) {
 // used 4,000 steps ending at 0.1 s, which no real recorder could produce
 // -- and which the strengthened validator now correctly rejects.
 
+// Each fixture below carries the `termination_reason` the real solver
+// would have recorded for its step count, rather than a convenient
+// constant: stopping short of the 4,000-step cap is only reachable through
+// the settle branch, and reaching the cap is by definition `step_cap`.
+// Fixtures that contradicted that would be describing runs the backend
+// cannot produce.
+
 /** A pocket-shaped replay: ball arriving left of center, headpin ahead.
  * 200 steps at 0.0005 s = 0.1 s, with frames on the 0.05 s cadence. */
 function pocketReplay(): CollisionReplayResponse {
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+    termination_reason: 'settled',
     dt_s: 0.0005,
     sample_every_steps: 100,
     steps_taken: 200,
@@ -47,6 +56,7 @@ function pocketReplay(): CollisionReplayResponse {
 function partialRackReplay(): CollisionReplayResponse {
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+    termination_reason: 'settled',
     dt_s: 0.0005,
     sample_every_steps: 100,
     steps_taken: 100,
@@ -68,6 +78,8 @@ function fullLengthReplay(): CollisionReplayResponse {
   }
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+    // Reaching the cap is exactly what `step_cap` means.
+    termination_reason: 'step_cap',
     dt_s: 0.0005,
     sample_every_steps: 100,
     steps_taken: 4000,
@@ -98,6 +110,66 @@ describe('acceptReplay', () => {
   it('refuses an unknown or future model version rather than reinterpreting it', () => {
     const future = { ...pocketReplay(), model_version: 'planar-collision-replay-3d-v2' };
     expect(acceptReplay(future)).toBeNull();
+  });
+
+  // --- The v2 termination contract ---------------------------------------
+  //
+  // v2 exists because `termination_reason` became required. These pin the
+  // three ways a payload can fail to state how its run ended -- an older
+  // version, a missing field, an unrecognized value -- since each would
+  // otherwise leave the client silently guessing.
+
+  it('is pinned to the v2 model version', () => {
+    // The literal string, not the constant: every other assertion in this
+    // file follows a bump automatically, so without this one a version
+    // change would pass unnoticed on both sides of the contract.
+    expect(SUPPORTED_REPLAY_MODEL_VERSION).toBe('planar-collision-replay-2d-v2');
+  });
+
+  it('refuses a v1 payload rather than assuming how its run ended', () => {
+    // v1 recorded no distinction between the solver's two exits, so there
+    // is no correct value to supply on its behalf. Even with an otherwise
+    // perfect frame schedule it must fall back.
+    const v1 = { ...pocketReplay(), model_version: 'planar-collision-replay-2d-v1' };
+    expect(acceptReplay(v1)).toBeNull();
+
+    // And a v1 payload that *also* omits the field -- the shape a real v1
+    // backend actually sent.
+    const { termination_reason: _omitted, ...withoutReason } = v1;
+    expect(acceptReplay(withoutReason as CollisionReplayResponse)).toBeNull();
+  });
+
+  it('refuses a v2 payload with no termination reason', () => {
+    const { termination_reason: _omitted, ...missing } = pocketReplay();
+    expect(acceptReplay(missing as CollisionReplayResponse)).toBeNull();
+  });
+
+  it('refuses an unrecognized termination reason', () => {
+    for (const bad of ['SETTLED', 'settled ', 'cap', 'unknown', '', 'timeout']) {
+      expect(acceptReplay({ ...pocketReplay(), termination_reason: bad })).toBeNull();
+    }
+  });
+
+  it('refuses a termination reason that is not a string at all', () => {
+    for (const bad of [0, 1, true, null, {}, ['settled']]) {
+      const forged = { ...pocketReplay(), termination_reason: bad } as CollisionReplayResponse;
+      expect(acceptReplay(forged)).toBeNull();
+    }
+  });
+
+  it('accepts both real termination reasons and reports them unchanged', () => {
+    // Both values must survive the firewall -- a validator that only ever
+    // admitted the common one would quietly drop every settled run.
+    for (const reason of REPLAY_TERMINATION_REASONS) {
+      const replay = { ...pocketReplay(), termination_reason: reason };
+      const accepted = acceptReplay(replay);
+      expect(accepted).toBe(replay);
+      expect(accepted?.termination_reason).toBe(reason);
+    }
+  });
+
+  it('allows exactly the two reasons the backend can record', () => {
+    expect([...REPLAY_TERMINATION_REASONS]).toEqual(['settled', 'step_cap']);
   });
 
   it('refuses non-finite coordinates', () => {
@@ -221,6 +293,10 @@ describe('acceptReplay', () => {
     }));
     const nonCadenceTerminal: CollisionReplayResponse = {
       model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+      // Stopping at step 250 means the settle branch fired — and this is
+      // the shape a real low-energy run produces, since settling lands on
+      // an arbitrary step rather than a cadence tick.
+      termination_reason: 'settled',
       dt_s: 0.0005,
       sample_every_steps: 100,
       steps_taken: 250,
@@ -232,6 +308,7 @@ describe('acceptReplay', () => {
   it('refuses a non-cadence terminal step whose extra frame is missing', () => {
     const missingTerminal: CollisionReplayResponse = {
       model_version: SUPPORTED_REPLAY_MODEL_VERSION,
+      termination_reason: 'settled',
       dt_s: 0.0005,
       sample_every_steps: 100,
       steps_taken: 250,

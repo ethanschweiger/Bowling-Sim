@@ -105,6 +105,12 @@ def pinfall_to_response(pinfall: object) -> PinfallInfo:
                     )
                     for frame in replay.frames
                 ],
+                # Carried straight through from the solver's own recorded
+                # exit. This mapping never re-derives it — if the domain
+                # ever failed to set one, the Literal above must reject the
+                # response rather than let this layer invent a plausible
+                # value.
+                termination_reason=replay.termination_reason,
             )
         ),
     )

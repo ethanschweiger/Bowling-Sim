@@ -58,13 +58,34 @@ export interface ReplayFrameResponse {
  * collision run. `model_version` names the replay's own shape/semantics
  * (distinct from `PinfallInfo.model_id`, which names the model that
  * resolved the pins), so a client can refuse data it doesn't understand
- * rather than misinterpreting it. */
+ * rather than misinterpreting it.
+ *
+ * Every field here is typed as it arrives on the wire, not as it will be
+ * once trusted: this is the *unvalidated* shape. `domain/collisionReplay.ts`
+ * is what turns it into something playable, and only it may narrow these. */
 export interface CollisionReplayResponse {
   model_version: string;
   dt_s: number;
   sample_every_steps: number;
   steps_taken: number;
   frames: ReplayFrameResponse[];
+  /**
+   * Which of the solver's two loop exits produced the final frame —
+   * `'settled'` or `'step_cap'` (see `backend/app/physics/replay.py`).
+   *
+   * Deliberately `string | undefined` rather than that union: this
+   * describes a payload, and a payload can carry anything, including
+   * nothing at all — a v1 replay predates the field entirely. Narrowing it
+   * here would let a consumer read an unvalidated string as if it were one
+   * of the two known values. `acceptReplay` does the narrowing, after
+   * checking.
+   *
+   * Neither value describes pin state. `'settled'` means every body fell
+   * under the planar model's velocity threshold; `'step_cap'` means the
+   * solver hit its 2 s limit with bodies still moving. Which pins fell is
+   * `PinfallInfo.fallen_pin_ids`, and nothing else.
+   */
+  termination_reason?: string;
 }
 
 export interface PinfallInfo {

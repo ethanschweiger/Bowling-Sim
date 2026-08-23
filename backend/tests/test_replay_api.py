@@ -7,9 +7,13 @@ published still means exactly what it did. These tests check the new
 the score would be animating a different collision than the one played.
 """
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from app.main import app
+from app.models.schemas import CollisionReplayResponse
+from app.physics.collision import MAX_COLLISION_SECONDS, MAX_COLLISION_STEPS
 from app.physics.replay import BALL_BODY_ID, MAX_REPLAY_FRAMES, REPLAY_MODEL_VERSION
 
 client = TestClient(app)
@@ -209,3 +213,89 @@ def test_heuristic_model_maps_to_a_null_replay():
     assert mapped.model_id == "entry-angle-heuristic-v1"
     # It still reports a pin count; only the replay is absent.
     assert mapped.fallen_pin_ids == []
+
+
+# --- Termination is published, on both routes ----------------------------
+
+
+def test_game_throw_publishes_the_v2_model_and_a_valid_termination_reason():
+    replay = _throw(_create_game())["pinfall"]["replay"]
+
+    # The literal string, not the constant: a consumer keys its firewall off
+    # this exact value, so the response must be pinned independently of
+    # whatever the backend currently defines.
+    assert replay["model_version"] == "planar-collision-replay-2d-v2"
+    assert replay["termination_reason"] in ("settled", "step_cap")
+
+
+def test_legacy_route_publishes_the_same_v2_termination_contract():
+    client.post("/api/v1/games/legacy-default/reset")
+
+    response = client.post("/api/v1/simulations/throws", json=THROW_PAYLOAD)
+    assert response.status_code == 200
+    replay = response.json()["pinfall"]["replay"]
+
+    assert replay["model_version"] == "planar-collision-replay-2d-v2"
+    assert replay["termination_reason"] in ("settled", "step_cap")
+
+
+def test_a_seeded_full_rack_throw_reports_the_step_cap_it_actually_hits():
+    # The representative case a browser sees: a normal legal release runs
+    # the full 2 s without every body dropping under the settle threshold.
+    replay = _throw(_create_game())["pinfall"]["replay"]
+
+    assert replay["termination_reason"] == "step_cap"
+    assert replay["steps_taken"] == MAX_COLLISION_STEPS
+    assert replay["dt_s"] * replay["steps_taken"] == MAX_COLLISION_SECONDS
+
+
+def test_the_serialized_reason_matches_the_domain_run_it_came_from():
+    # Same impact through the mapper rather than the HTTP stack, so the
+    # published value is checked against the solver's own recorded exit
+    # instead of merely against the set of legal strings.
+    from app.api.routes.games import pinfall_to_response
+    from app.physics.collision import DEFAULT_PINFALL_MODEL
+    from app.physics.impact import ImpactState
+
+    impact = ImpactState(
+        lateral_position_in=-2.6,
+        heading_deg=1.4,
+        speed_mph=17.0,
+        ball_mass_lbs=15.0,
+        ball_radius_in=4.29,
+        lane_condition_version=1,
+    )
+    result = DEFAULT_PINFALL_MODEL.resolve(impact)
+    mapped = pinfall_to_response(result)
+
+    assert mapped.replay is not None
+    assert mapped.replay.termination_reason == result.replay.termination_reason
+
+
+def test_a_gutter_throw_still_has_no_replay_to_carry_a_reason():
+    body = _throw(_create_game(), GUTTER_PAYLOAD)
+
+    # The field is required *within* a replay; a run that never happened
+    # has no replay at all, so nothing gains invented metadata.
+    assert body["pinfall"]["replay"] is None
+
+
+def test_the_response_model_refuses_an_unknown_or_missing_reason():
+    # The Literal is the boundary guard: an unrecognized reason must fail
+    # validation here rather than reach a client that would have to guess.
+    valid = {
+        "model_version": REPLAY_MODEL_VERSION,
+        "dt_s": 0.0005,
+        "sample_every_steps": 100,
+        "steps_taken": 4000,
+        "frames": [],
+        "termination_reason": "step_cap",
+    }
+    assert CollisionReplayResponse(**valid).termination_reason == "step_cap"
+
+    for bad in ("SETTLED", "settled ", "cap", "unknown", "", None):
+        with pytest.raises(ValidationError):
+            CollisionReplayResponse(**{**valid, "termination_reason": bad})
+
+    with pytest.raises(ValidationError):
+        CollisionReplayResponse(**{k: v for k, v in valid.items() if k != "termination_reason"})

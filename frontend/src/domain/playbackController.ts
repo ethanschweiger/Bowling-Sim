@@ -21,9 +21,10 @@
  *   second on screen. Unlike the path phase this *is* a real timing
  *   relationship, because the replay carries real timestamps.
  *
- * A throw with no playable replay (gutter, heuristic model, unknown
- * version) simply has no deck phase; the sequence ends settled after the
- * path, exactly as it did before replays existed.
+ * A throw with no playable replay (gutter, heuristic model, unknown or v1
+ * version, missing termination reason) simply has no deck phase; the
+ * sequence ends settled after the path, exactly as it did before replays
+ * existed.
  */
 
 import type { CollisionReplayResponse } from '../api/types';
@@ -32,16 +33,25 @@ import { TRAJECTORY_ANIMATION_DURATION_MS } from './trajectoryAnimation';
 
 const MS_PER_S = 1000;
 
-/** Where a sequence is at one instant. `settled` is the resting state:
- * full static path, server's own rack, no replay bodies drawn. */
+/**
+ * Where a sequence is at one instant.
+ *
+ * `settled` here names *this player's* resting state — full static path,
+ * server's own rack, no replay bodies drawn — and nothing about physics.
+ * It is unrelated to the replay's `termination_reason: 'settled'`, which
+ * describes how the solver's loop exited. The player reaches `settled`
+ * after every sequence, including one whose recording ended at the step
+ * cap mid-motion.
+ */
 export type PlaybackPhase =
   | { kind: 'path'; progress: number }
-  /** `isTerminal` marks the run's last recorded frame. It is the solver's
-   * *terminal* snapshot, not necessarily a settled one — the backend stops
-   * at a two-second cap whether or not the bodies have come to rest — so
-   * it is presented as the end of the recording, never described as
-   * "settled". The controller paints it and holds it for a frame before
-   * handing back to the static rack. */
+  /** `isTerminal` marks the run's last recorded frame: the solver's
+   * terminal snapshot, which is not necessarily a state of rest — the
+   * backend stops at a two-second cap whether or not the bodies were still
+   * moving (`termination_reason: 'step_cap'`). It is presented as the end
+   * of the recording, never as pins having come to rest. The controller
+   * paints it and holds it for a frame before handing back to the static
+   * rack. */
   | { kind: 'deck'; tS: number; isTerminal: boolean }
   | { kind: 'settled' };
 
