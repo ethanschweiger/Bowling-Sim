@@ -274,6 +274,63 @@ describe('PlaybackController lifecycle', () => {
     expect(phases).toEqual([{ kind: 'settled' }]);
   });
 
+  it('calls completion exactly once after a natural sequence end', () => {
+    const fake = fakeScheduler();
+    const { onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+    let completions = 0;
+    const END_MS = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+
+    controller.start({ replay: replay() }, false, () => {
+      completions += 1;
+    });
+    fake.advanceTo(END_MS);
+    expect(completions).toBe(0);
+
+    fake.advanceTo(END_MS + TERMINAL_HOLD_MS);
+    expect(completions).toBe(1);
+
+    fake.advanceTo(END_MS + TERMINAL_HOLD_MS + 5000);
+    expect(completions).toBe(1);
+  });
+
+  it('reports immediate completion under reduced motion without scheduling a frame', () => {
+    const fake = fakeScheduler();
+    const { onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+    let completions = 0;
+
+    controller.start({ replay: replay() }, true, () => {
+      completions += 1;
+    });
+
+    expect(completions).toBe(1);
+    expect(fake.pendingCount).toBe(0);
+  });
+
+  it('never completes a sequence that reset, replay, or unmount interrupts', () => {
+    const fake = fakeScheduler();
+    const { onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+    let completions = 0;
+    const onComplete = () => {
+      completions += 1;
+    };
+
+    controller.start({ replay: replay() }, false, onComplete);
+    fake.advanceTo(100);
+    controller.settle();
+    expect(completions).toBe(0);
+
+    controller.start({ replay: replay() }, false, onComplete);
+    fake.advanceTo(200);
+    controller.start({ replay: replay() }, false);
+    expect(completions).toBe(0);
+
+    controller.dispose();
+    expect(completions).toBe(0);
+  });
+
   it('cancels the previous loop when a rapid second replay starts', () => {
     const fake = fakeScheduler();
     const { onPhase } = collect();

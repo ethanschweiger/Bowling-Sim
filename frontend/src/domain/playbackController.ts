@@ -149,6 +149,10 @@ export class PlaybackController {
   private readonly onPhase: (phase: PlaybackPhase) => void;
   private handle: number | null = null;
   private disposed = false;
+  /** Increments whenever a run is cancelled. A callback that the browser
+   * had already dequeued before cancellation can therefore never complete
+   * an older run after a newer one has started. */
+  private runId = 0;
 
   constructor(scheduler: FrameScheduler, onPhase: (phase: PlaybackPhase) => void) {
     this.scheduler = scheduler;
@@ -169,13 +173,17 @@ export class PlaybackController {
    * loop that finishes immediately — a user who asked for reduced motion
    * gets no animation frames, not a brief one.
    */
-  start(sequence: PlaybackSequence, reducedMotion: boolean): void {
+  start(sequence: PlaybackSequence, reducedMotion: boolean, onComplete?: () => void): void {
     this.cancel();
     if (this.disposed) {
       return;
     }
+    const runId = this.runId;
     if (reducedMotion) {
       this.onPhase(SETTLED);
+      if (!this.disposed && runId === this.runId) {
+        onComplete?.();
+      }
       return;
     }
 
@@ -189,8 +197,16 @@ export class PlaybackController {
     this.onPhase(phaseAt(sequence, 0));
 
     let terminalPainted = false;
+    let completed = false;
+    const complete = (): void => {
+      if (completed || this.disposed || runId !== this.runId) {
+        return;
+      }
+      completed = true;
+      onComplete?.();
+    };
     const tick = (now: number): void => {
-      if (this.disposed) {
+      if (this.disposed || runId !== this.runId) {
         return;
       }
       const elapsed = now - startedAt;
@@ -209,11 +225,12 @@ export class PlaybackController {
         // frame itself is not.
         this.onPhase({ kind: 'deck', tS: replayDurationS(sequence.replay), isTerminal: true });
         this.handle = this.scheduler.requestFrame(() => {
-          if (this.disposed) {
+          if (this.disposed || runId !== this.runId) {
             return;
           }
           this.onPhase(SETTLED);
           this.handle = null;
+          complete();
         });
         return;
       }
@@ -221,6 +238,7 @@ export class PlaybackController {
       this.onPhase(phase);
       if (phase.kind === 'settled') {
         this.handle = null;
+        complete();
         return;
       }
       this.handle = this.scheduler.requestFrame(tick);
@@ -245,6 +263,7 @@ export class PlaybackController {
   }
 
   private cancel(): void {
+    this.runId += 1;
     if (this.handle !== null) {
       this.scheduler.cancelFrame(this.handle);
       this.handle = null;

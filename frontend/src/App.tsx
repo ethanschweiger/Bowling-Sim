@@ -44,6 +44,13 @@ function App() {
   const [latestThrow, setLatestThrow] = useState<GameThrowResponse | null>(null);
   const [latestRequestedRelease, setLatestRequestedRelease] = useState<ThrowRequest | null>(null);
   const [status, setStatus] = useState<ThrowStatus>({ kind: 'idle' });
+  // A request completing only means the server scored it; it does not mean
+  // the player has finished seeing that ball travel and reach the deck.
+  // Keep submission locked through the entire authoritative presentation.
+  // The ref closes the tiny interval before React re-renders after a click,
+  // so two rapid click events still produce at most one HTTP throw request.
+  const [presentationLocked, setPresentationLocked] = useState(false);
+  const presentationLockRef = useRef(false);
   // True from the moment an ordinary throw rejection lands (e.g. a 503
   // truncated-trajectory response) until an actual successful state
   // transition supersedes it — a new successful throw, a reset, or a new
@@ -66,6 +73,19 @@ function App() {
       mountedRef.current = false;
     };
   }, []);
+
+  const setPresentationLock = useCallback((locked: boolean) => {
+    presentationLockRef.current = locked;
+    setPresentationLocked(locked);
+  }, []);
+
+  const handlePlaybackStarted = useCallback(() => {
+    setPresentationLock(true);
+  }, [setPresentationLock]);
+
+  const handlePlaybackCompleted = useCallback(() => {
+    setPresentationLock(false);
+  }, [setPresentationLock]);
 
   const runBootstrap = useCallback(() => {
     setInitError(null);
@@ -104,7 +124,7 @@ function App() {
   }, []);
 
   async function handleThrow() {
-    if (!game) {
+    if (!game || presentationLockRef.current || status.kind === 'loading') {
       return;
     }
     const requestedRelease: ThrowRequest = { ball_id: ballId, ...releaseValues };
@@ -116,6 +136,7 @@ function App() {
     if (parsedSeed.kind === 'valid') {
       requestedRelease.seed = parsedSeed.seed;
     }
+    setPresentationLock(true);
     setStatus({ kind: 'loading', label: 'Throwing' });
     try {
       const response = await throwBall(game.gameId, requestedRelease);
@@ -142,6 +163,7 @@ function App() {
         return;
       }
       if (classification.kind === 'confirmed-missing-game') {
+        setPresentationLock(false);
         setStatus({ kind: 'idle' });
         setStaleGameMessage('This game no longer exists on the server (it may have restarted).');
       } else {
@@ -150,6 +172,7 @@ function App() {
         // look replayable again the instant this status becomes 'error'
         // — see canReplay's docstring for why isBusy alone can't gate this.
         setThrowRejected(true);
+        setPresentationLock(false);
         setStatus({ kind: 'error', message: messageFor(classification.error, 'The throw did not go through.') });
       }
     }
@@ -159,6 +182,7 @@ function App() {
     if (!game) {
       return;
     }
+    setPresentationLock(true);
     setStatus({ kind: 'loading', label: 'Resetting' });
     try {
       const response = await resetGame(game.gameId);
@@ -171,21 +195,25 @@ function App() {
       setLatestThrow(null);
       setLatestRequestedRelease(null);
       setThrowRejected(false);
+      setPresentationLock(false);
       setStatus({ kind: 'success', message: 'Game reset — fresh rack, blank scorecard.' });
     } catch (error) {
       if (!mountedRef.current) {
         return;
       }
       if (isStaleGameError(error)) {
+        setPresentationLock(false);
         setStatus({ kind: 'idle' });
         setStaleGameMessage('This game no longer exists on the server (it may have restarted).');
       } else {
+        setPresentationLock(false);
         setStatus({ kind: 'error', message: messageFor(error, 'The reset did not go through.') });
       }
     }
   }
 
   async function handleStartNewGame() {
+    setPresentationLock(true);
     setStatus({ kind: 'loading', label: 'Starting a new game' });
     try {
       const result = await startNewGame();
@@ -199,6 +227,7 @@ function App() {
       setLatestRequestedRelease(null);
       setStaleGameMessage(null);
       setThrowRejected(false);
+      setPresentationLock(false);
       setStatus({ kind: 'success', message: 'Started a new game.' });
     } catch (error) {
       if (!mountedRef.current) {
@@ -206,6 +235,7 @@ function App() {
       }
       // Stay in the stale state — the recovery control stays visible and
       // retryable rather than silently discarding the (already-gone) game.
+      setPresentationLock(false);
       setStatus({ kind: 'error', message: messageFor(error, 'Could not start a new game.') });
     }
   }
@@ -241,14 +271,18 @@ function App() {
               Set up your throw
             </h2>
             <div className={styles.controlsStack}>
-              <BallSelect value={ballId} onChange={setBallId} disabled={isBusy || isStale} />
-              <ReleaseControls values={releaseValues} onChange={handleReleaseChange} disabled={isBusy || isStale} />
+              <BallSelect value={ballId} onChange={setBallId} disabled={isBusy || isStale || presentationLocked} />
+              <ReleaseControls
+                values={releaseValues}
+                onChange={handleReleaseChange}
+                disabled={isBusy || isStale || presentationLocked}
+              />
               <ReleaseSeedControl
                 value={releaseSeed}
                 onChange={setReleaseSeed}
                 lastSeed={latestThrow?.seed ?? null}
                 onUseLastSeed={() => setReleaseSeed(String(latestThrow?.seed ?? ''))}
-                disabled={isBusy || isStale}
+                disabled={isBusy || isStale || presentationLocked}
               />
               {staleGameMessage && (
                 <StaleGameNotice message={staleGameMessage} onStartNewGame={() => void handleStartNewGame()} disabled={isBusy} />
@@ -258,6 +292,7 @@ function App() {
                 onReset={() => void handleReset()}
                 isGameComplete={game.gameState.is_game_complete}
                 status={status}
+                cooldown={presentationLocked}
                 disabled={isStale}
               />
             </div>
@@ -271,7 +306,9 @@ function App() {
               standingPinIds={game.gameState.standing_pin_ids}
               latestThrow={latestThrow}
               latestRequestedRelease={latestRequestedRelease}
-              replayEnabled={canReplay(latestThrow, isBusy, isStale, throwRejected)}
+              replayEnabled={canReplay(latestThrow, isBusy || presentationLocked, isStale, throwRejected)}
+              onPlaybackStarted={handlePlaybackStarted}
+              onPlaybackCompleted={handlePlaybackCompleted}
               requestPending={isBusy}
             />
           </section>

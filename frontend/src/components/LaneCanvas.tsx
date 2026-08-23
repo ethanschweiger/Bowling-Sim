@@ -35,6 +35,12 @@ interface LaneCanvasProps {
    * doesn't otherwise know about); replaying itself is entirely local to
    * this component and never calls the API or touches game state. */
   replayEnabled: boolean;
+  /** The parent uses this to lock new throws while either an automatic
+   * result playback or a manual replay is on screen. */
+  onPlaybackStarted: () => void;
+  /** Called only after a sequence naturally reaches its settled state;
+   * cancellations for reset, unmount, or a newer run never call it. */
+  onPlaybackCompleted: () => void;
   /** Whether a throw/reset/new-game request is currently in flight.
    * Starting a new one must settle any in-flight animation of the
    * *preceding* result immediately — see `decidePlaybackAction`. */
@@ -88,6 +94,8 @@ export function LaneCanvas({
   latestThrow,
   latestRequestedRelease,
   replayEnabled,
+  onPlaybackStarted,
+  onPlaybackCompleted,
   requestPending,
 }: LaneCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -228,8 +236,9 @@ export function LaneCanvas({
       controller.settle();
       return;
     }
-    controller.start({ replay }, prefersReducedMotion());
-  }, [latestThrowPath, requestPending, replayCount, replay]);
+    onPlaybackStarted();
+    controller.start({ replay }, prefersReducedMotion(), onPlaybackCompleted);
+  }, [latestThrowPath, onPlaybackCompleted, onPlaybackStarted, requestPending, replayCount, replay]);
 
   // What to draw is decided by `buildLaneScene` — one place, testable
   // without a canvas — so `draw` below renders a scene and makes no phase
