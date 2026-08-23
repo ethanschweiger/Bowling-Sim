@@ -1,5 +1,6 @@
 from dataclasses import fields
 
+from app.models.schemas import ThrowRequest
 from app.physics.throw import _NOISE_CLAMP_STD, _RELEASE_NOISE_STD, Throw, sample_release
 
 REQUESTED = Throw(
@@ -10,6 +11,11 @@ REQUESTED = Throw(
     launch_angle=2.0,
     launch_position=28.0,
 )
+
+
+def test_api_and_simulation_defaults_share_the_right_handed_starter_line():
+    assert Throw().launch_angle == -1.5
+    assert ThrowRequest(ball_id="reactive_pearl").launch_angle == Throw().launch_angle
 
 
 def test_seeded_throws_repeat_exactly():

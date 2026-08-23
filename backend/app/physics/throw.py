@@ -13,7 +13,7 @@ class Throw:
     rev_rate: float = 350.0        # revolutions per minute
     axis_rotation: float = 45.0    # degrees; 0 = full roll, 90 = full spinner
     axis_tilt: float = 15.0        # degrees; higher tilt = more skid, later hook
-    launch_angle: float = 2.0      # degrees off the lane's centerline at release
+    launch_angle: float = -1.5     # right-handed starter line: aimed toward lower/right boards
     launch_position: float = 28.0  # the ball's laydown board at the foul line, 1-39 — NOT the bowler's stance board
 
 

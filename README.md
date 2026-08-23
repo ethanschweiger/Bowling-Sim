@@ -758,7 +758,7 @@ curl -X POST http://localhost:8000/api/v1/games/{game_id}/throws \
     "rev_rate": 350,
     "axis_rotation": 45,
     "axis_tilt": 15,
-    "launch_angle": 0.5,
+    "launch_angle": -1.5,
     "launch_position": 28
   }'
 ```
