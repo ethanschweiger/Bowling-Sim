@@ -279,6 +279,11 @@ function draw(
 
     ctx.strokeStyle = colors.trajectory;
     ctx.lineWidth = 2.5;
+    // The route remains the server's exact polyline. Rounded joins/caps only
+    // remove the mechanical-looking corners between its dense samples; they
+    // do not interpolate, bend, or otherwise replace any physics point.
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
     ctx.beginPath();
     shownPath.forEach((point, index) => {
       const x = projection.boardToX(point.board);
