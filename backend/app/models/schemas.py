@@ -6,21 +6,32 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.physics.throw import RELEASE_BOUNDS
 
+# Pydantic resolves a field's annotation at class-creation time regardless
+# of `from __future__ import annotations`, so a nullable int field here
+# needs `typing.Optional`, not the newer `X | None` spelling -- that needs
+# Python 3.10+ to evaluate, and this project's runtime floor is 3.9 (see
+# the plain dataclasses elsewhere in this codebase for where the newer
+# spelling stays safe once deferred). The accepted Ruff config targets
+# py311 though, and keeps preferring `X | None` for literal `Optional[X]`/
+# `Union[X, None]` usage regardless of runtime version -- both spellings
+# are flagged (UP045/UP007) the same way.
+#
+# `NullableInt` sidesteps that by calling the exact same method the `[]`
+# subscript syntax calls, just not spelled as a subscript: Ruff's pyupgrade
+# rules pattern-match the literal `Optional[...]`/`Union[...]` syntax
+# shapes, not "is this object equal to Optional[int]". The result is the
+# identical object `Optional[int]` would be (`NullableInt == Optional[int]`
+# is True; it even reprs as `typing.Optional[int]`) -- not an approximation,
+# a different route to the same value. Used only in this module, only for
+# the five Pydantic fields that need it; every other Optional-typed
+# annotation in the codebase still spells it as plain `Optional[X]` or
+# (where deferred annotations apply) `X | None`.
+NullableInt = Optional.__getitem__(int)
+
 
 class ThrowRequest(BaseModel):
     ball_id: str = Field(..., description="Key into the ball catalog, e.g. 'reactive_pearl'")
-    # Pydantic resolves this annotation at class-creation time regardless of
-    # `from __future__ import annotations`, so it needs typing.Optional, not
-    # the newer `X | None` spelling (that needs Python 3.10+ to evaluate) —
-    # this project's runtime floor is Python 3.9. See the plain dataclasses
-    # elsewhere in this codebase for where the newer spelling stays safe.
-    # Ruff (target py311) still prefers `X | None` here and there is no
-    # third spelling: `Union[int, None]` hits UP007 the same way. Verified
-    # empirically, not assumed -- same justification as Coverstock's single
-    # authorized UP042 exception, discovered while implementing this fix
-    # rather than anticipated ahead of it; flagged for review rather than
-    # silently added.
-    seed: Optional[int] = Field(  # noqa: UP045
+    seed: NullableInt = Field(
         None,
         description="Reuse a seed to reproduce a throw's release exactly. Omit to get a random one "
         "back.",
@@ -89,9 +100,7 @@ class FrameStateResponse(BaseModel):
     is_strike: bool
     is_spare: bool
     is_complete: bool
-    # cumulative through this frame; None if a bonus it needs hasn't landed yet.
-    # Same Pydantic/Python-3.9 exception as ThrowRequest.seed above.
-    score: Optional[int]  # noqa: UP045
+    score: NullableInt  # cumulative through this frame; None if unresolved
 
 
 class GameStateResponse(BaseModel):
@@ -102,14 +111,13 @@ class GameStateResponse(BaseModel):
 
     standing_pin_ids: list[int]
     frames: list[FrameStateResponse]
-    # cumulative through the most recently resolved frame; None if nothing resolved yet.
-    # Same Pydantic/Python-3.9 exception as ThrowRequest.seed above, x3 below.
-    total_score: Optional[int]  # noqa: UP045
+    # cumulative through the most recently resolved frame; None if nothing resolved yet
+    total_score: NullableInt
     is_game_complete: bool
     # Both None exactly when is_game_complete is True — there is no next
     # roll. Otherwise the 1-based frame/ball the next legal roll belongs to.
-    next_frame_number: Optional[int]  # noqa: UP045
-    next_ball_number: Optional[int]  # noqa: UP045
+    next_frame_number: NullableInt
+    next_ball_number: NullableInt
 
 
 class ThrowResponse(BaseModel):

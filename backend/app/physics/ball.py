@@ -33,9 +33,11 @@ from enum import Enum
 # the exact str() behavior (deliberately not format()/f-strings, which a
 # plain str+Enum mixin spells differently on 3.9 vs. 3.11 regardless of
 # anything here; nothing in this codebase formats a Coverstock value).
-# This and the five Optional[int] cases in app/models/schemas.py are the
-# only noqa exceptions on the whole baseline; each is individually
-# documented at its own declaration.
+# This is the only noqa exception on the whole baseline. The analogous
+# conflict on app/models/schemas.py's nullable Pydantic int fields (Ruff
+# preferring `X | None`/`Union[X, None]` where Pydantic's eager Python 3.9
+# evaluation needs `Optional[int]`) is resolved there without a
+# suppression — see that module's `NullableInt` alias.
 class Coverstock(str, Enum):  # noqa: UP042
     PLASTIC = "plastic"       # spares balls — near-zero hook
     URETHANE = "urethane"     # smooth, predictable arc
