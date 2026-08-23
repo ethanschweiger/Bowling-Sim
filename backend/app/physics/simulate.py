@@ -121,7 +121,7 @@ SLIP_EFFICIENCY = 0.17
 # Peak lateral acceleration on a fully dry lane, as a fraction of g. This
 # sets how *fast* slip converts — the hook's sharpness and where it
 # finishes — not how much total turn is available.
-LATERAL_TRACTION = 0.045
+LATERAL_TRACTION = 0.065
 
 # Traction falls off faster than the nominal friction coefficient does,
 # because an oil film carries part of the load rather than merely
@@ -137,10 +137,34 @@ TRACTION_FRICTION_EXPONENT = 2.0
 # to spend, so it still hooks.
 TILT_DELAY = 0.55
 
+# --- Track flare: why a "straight axis" release still reads the lane ----
+# A ball's RG differential makes its rotation axis migrate as it travels,
+# so the contact track moves across the cover instead of retracing itself
+# — the reason a spec sheet quotes differential at all, and the reason a
+# drilled ball leaves multiple oil rings rather than one. That migration
+# keeps a small side component in the contact patch even when the release
+# axis carries none, so a nominally end-over-end reactive ball still
+# develops some turn.
+#
+# It is deliberately bounded and small: flare *supplements* the release's
+# own rotation and never replaces it, so axis rotation stays a continuum
+# — low rotation gives an earlier, gentler shape, not an off switch.
+FLARE_REFERENCE_DIFFERENTIAL = 0.060  # top of the current ball catalog's range
+FLARE_SIDE_FRACTION = 0.22            # residual side fraction at that differential
+
 # Below this remaining slip the ball is rolling: friction has nothing
 # sideways left to work on, so lateral acceleration is zero and the path
 # continues straight. Expressed in ft/s.
 ROLL_SLIP_FPS = 0.02
+
+# Slip scale at which traction approaches its ceiling. Lateral force grows
+# with how fast the patch is actually sliding sideways, saturating rather
+# than growing without bound — so a release carrying more slip turns
+# harder as well as longer. Setting this far below typical slip values
+# would flatten that out: `tanh` would sit at 1.0 for every release and
+# acceleration would ignore slip magnitude entirely, making every rotation
+# above roughly 45 degrees produce the identical trajectory.
+SLIP_REFERENCE_FPS = 1.0
 
 # Standard gravity in ft/s^2, for the Coulomb lateral-acceleration term.
 GRAVITY_FT_PER_S2 = 32.174
@@ -276,24 +300,34 @@ def simulate_throw(
     # curve anything. All curvature below comes from slip.
     lateral_velocity_fps = math.tan(math.radians(throw.launch_angle)) * forward_velocity_fps
 
-    # The slip reservoir the hook will spend. Axis rotation decides how much
-    # of the ball's rotation is oriented sideways rather than along the
-    # direction of travel: a full roll (0 deg) has no sideways component and
-    # so cannot hook, which is the correct physical result rather than a
-    # tuning choice. A full spinner (90 deg) carries the most.
+    # The slip reservoir the hook will spend. Two things put a sideways
+    # component into the contact patch:
+    #
+    #   1. Axis rotation — how much of the release's own rotation is
+    #      oriented across the direction of travel. A full spinner (90 deg)
+    #      contributes all of it, an end-over-end release (0 deg) none.
+    #   2. Track flare — axis migration from the ball's RG differential,
+    #      which keeps a small side component present regardless of how the
+    #      ball was released (see FLARE_SIDE_FRACTION above).
+    #
+    # Because of (2), axis rotation is a bounded continuum rather than an
+    # on/off switch: a 0 deg reactive release still reads the lane, just
+    # earlier and more gently than a rotated one, and a low-differential
+    # plastic ball still barely reads it at all.
     #
     # This is a *reservoir*, not a force multiplier — that distinction is
-    # the whole point. More rotation means more slip to spend, which means
-    # the turn continues further down the lane, not that every foot of lane
-    # gets a proportionally harder shove.
+    # the whole point. More slip means the turn continues further down the
+    # lane, not that every foot of lane gets a proportionally harder shove.
     angular_velocity_rad_s = rpm_to_rad_per_s(throw.rev_rate)
     ball_radius_ft = ball.radius_in / 12.0
+    rotation_side = math.sin(math.radians(throw.axis_rotation))
+    flare_side = FLARE_SIDE_FRACTION * min(1.0, ball.differential / FLARE_REFERENCE_DIFFERENTIAL)
+    # Blended so flare fills in what the release axis doesn't supply and the
+    # total stays within [flare_side, 1.0] — never pushing past a full
+    # spinner's own contribution.
+    side_fraction = rotation_side + (1.0 - rotation_side) * flare_side
     lateral_slip_fps = (
-        angular_velocity_rad_s
-        * ball_radius_ft
-        * math.sin(math.radians(throw.axis_rotation))
-        * SLIP_EFFICIENCY
-        * ball.hook_potential
+        angular_velocity_rad_s * ball_radius_ft * side_fraction * SLIP_EFFICIENCY * ball.hook_potential
     )
 
     # Axis tilt scales how fast that slip converts, never how much exists.
@@ -354,7 +388,7 @@ def simulate_throw(
             # put a corner in the acceleration exactly where the ball stops
             # hooking, which is the one place a corner would be visible.
             grip = (friction / DRY_FRICTION) ** TRACTION_FRICTION_EXPONENT
-            taper = math.tanh(lateral_slip_fps / max(ROLL_SLIP_FPS, 1e-9))
+            taper = math.tanh(lateral_slip_fps / SLIP_REFERENCE_FPS)
             lateral_accel_fps2 = (
                 LATERAL_TRACTION * GRAVITY_FT_PER_S2 * grip * taper * tilt_conversion
             )

@@ -77,11 +77,26 @@ produces, so the *total* lateral velocity a throw can gain is bounded by
 the slip it was released with — the hook is self-limiting rather than
 accelerating for the whole lane, which is what the previous model did.
 
-Axis rotation sets **how much** slip exists (a full roll at 0° has no
-sideways component and genuinely cannot hook; a spinner at 90° carries the
-most). Axis tilt sets **how fast** it converts, so a tilted release skids
-longer and turns more gradually — it is a timing modifier, never a cap.
-Even at maximum tilt the ball still develops real hook, just later.
+Two things put slip in the reservoir. **Axis rotation** contributes the
+part of the release's own rotation that points across the direction of
+travel — none at 0°, all of it at 90°. **Track flare** contributes a small
+residual regardless of release: a ball's RG differential migrates its axis
+as it travels, so the contact track moves across the cover instead of
+retracing itself (the reason a drilled ball leaves multiple oil rings, and
+the reason differential appears on a spec sheet at all). Flare keeps a
+side component present even in a nominally end-over-end delivery.
+
+So axis rotation is a bounded continuum, not a switch: a 0° reactive ball
+still reads the lane, just earlier and more gently than a rotated one, and
+because flare scales with differential a low-differential plastic ball
+still barely reads it at all. Lateral force also grows with how fast the
+patch is actually sliding sideways — saturating rather than growing
+without bound — so a release carrying more slip turns *harder* as well as
+longer, and every rotation value produces a distinct shape.
+
+Axis tilt sets **how fast** slip converts, so a tilted release skids longer
+and turns more gradually — a timing modifier, never a cap. Even at maximum
+tilt the ball still develops real hook, just later.
 
 Traction falls off faster than the nominal friction coefficient, because an
 oil film carries load rather than merely lubricating: the ball is closer to
@@ -96,8 +111,8 @@ cited at their use sites. The *phase ordering* is sourced from the motion
 study above, and the directional facts about house-shot oil distribution
 from USBC coaching guidance. Everything numeric in the trajectory
 model — `SLIP_EFFICIENCY`, `LATERAL_TRACTION`, `TRACTION_FRICTION_EXPONENT`,
-`TILT_DELAY`, `FORWARD_DRAG`, the oil pattern's own shape — is a **chosen
-modeling coefficient**, tuned so a reactive ball on the bundled house shot
+`SLIP_REFERENCE_FPS`, `TILT_DELAY`, `FLARE_SIDE_FRACTION`, `FORWARD_DRAG`,
+the oil pattern's own shape — is a **chosen modeling coefficient**, tuned so a reactive ball on the bundled house shot
 skids, turns over in the midlane, and rolls out before the deck. They are
 not measurements, and this is not a calibrated ball-motion study.
 

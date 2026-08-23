@@ -133,18 +133,100 @@ def test_the_hook_is_self_limiting_rather_than_accelerating_forever():
 # --- Inputs still matter ------------------------------------------------
 
 
+LAUNCH_ANGLE = -1.5
+
+
+def _run(ball_id, rotation, lane, **overrides):
+    return simulate_throw(
+        BALL_CATALOG[ball_id],
+        Throw(launch_position=28.0, launch_angle=LAUNCH_ANGLE, axis_rotation=rotation, **overrides),
+        lane,
+    )
+
+
+def _hook_developed(result):
+    """How far the heading turned back toward higher boards over the run."""
+    return result.terminal.heading_deg - LAUNCH_ANGLE
+
+
 def test_axis_rotation_sets_how_much_hook_is_available():
     lane = LaneCondition.house_shot()
-    ball = BALL_CATALOG["reactive_pearl"]
+    # More rotation puts more slip in the reservoir, so the ball finishes
+    # further left.
+    assert _run("reactive_pearl", 0.0, lane).terminal.board < _run(
+        "reactive_pearl", 30.0, lane
+    ).terminal.board < _run("reactive_pearl", 60.0, lane).terminal.board
 
-    def entry(rotation):
-        return simulate_throw(
-            ball, Throw(launch_position=28.0, launch_angle=-1.5, axis_rotation=rotation), lane
-        ).terminal.board
 
-    # A full roll has no sideways component and so cannot hook; more
-    # rotation gives the ball more slip to spend and it finishes further left.
-    assert entry(0.0) < entry(30.0) < entry(60.0)
+def test_zero_axis_rotation_still_reads_the_lane():
+    """Track flare, not an on/off switch.
+
+    An earlier version scaled the slip reservoir by `sin(axis_rotation)`
+    alone, so a 0-degree release had exactly zero slip and a reactive ball
+    could not hook at all — the model then described that impossibility as
+    physically correct. A real ball's RG differential migrates its axis as
+    it travels, keeping a small side component present regardless of how it
+    left the hand, so a nominally end-over-end reactive ball still turns.
+    """
+    lane = LaneCondition.house_shot()
+    reactive = _run("reactive_pearl", 0.0, lane)
+    plastic = _run("house_ball", 0.0, lane)
+
+    # Measurable, not merely non-zero in the last decimal.
+    assert _hook_developed(reactive) > 0.25, _hook_developed(reactive)
+    # And still clearly separated from a low-differential plastic ball on
+    # the identical release — flare scales with differential, so this is not
+    # a blanket floor applied to every ball.
+    assert _hook_developed(reactive) > _hook_developed(plastic) + 0.25
+    assert reactive.terminal.board > plastic.terminal.board + 1.0
+
+    # Bounded and finite, not a runaway.
+    assert reactive.terminal.reached_pin_deck
+    assert 0.0 <= reactive.terminal.board <= 40.0
+    assert abs(reactive.terminal.heading_deg) < 45.0
+
+
+def test_axis_rotation_is_a_continuum_across_its_whole_range():
+    """Every rotation must matter, including above 45 degrees.
+
+    Guards a subtle failure found in review: with lateral acceleration
+    saturating far below typical slip levels, `tanh` sat at 1.0 for every
+    release, acceleration ignored slip magnitude, and 45/70/90 degrees
+    produced byte-identical trajectories.
+    """
+    lane = LaneCondition.house_shot()
+    rotations = [0.0, 20.0, 45.0, 70.0, 90.0]
+    entries = [_run("reactive_pearl", r, lane).terminal.board for r in rotations]
+
+    assert entries == sorted(entries), entries
+    for a, b in zip(entries, entries[1:]):
+        assert b - a > 0.1, f"rotations too close to distinguish: {entries}"
+
+
+def test_a_low_rotation_reactive_release_still_finds_the_lane():
+    """Low rotation is an earlier, gentler shape — not an absence of shape."""
+    lane = LaneCondition.house_shot()
+    reactive = _run("reactive_pearl", 15.0, lane, rev_rate=500.0)
+    plastic = _run("house_ball", 15.0, lane, rev_rate=500.0)
+
+    path = reactive.path
+    breakpoint_point = min(path, key=lambda p: p.board)
+
+    # Out toward lower boards first.
+    early = min(path, key=lambda p: abs(p.distance_ft - 20.0))
+    assert early.board < path[0].board
+    # Turns over before the deck, not at it.
+    assert breakpoint_point.distance_ft < reactive.terminal.distance_ft
+    # And comes back afterwards, arriving with a positive heading.
+    after = [p for p in path if p.distance_ft > breakpoint_point.distance_ft]
+    late_slope = (after[-1].board - breakpoint_point.board) / (
+        after[-1].distance_ft - breakpoint_point.distance_ft
+    )
+    assert late_slope > 0
+    assert reactive.terminal.heading_deg > 0
+
+    # Materially different from the same release with a plastic ball.
+    assert reactive.terminal.board > plastic.terminal.board + 3.0
 
 
 def test_axis_tilt_delays_the_hook_without_forbidding_it():
