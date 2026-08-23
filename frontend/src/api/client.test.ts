@@ -95,14 +95,11 @@ describe('throwBall', () => {
   });
 
   it('surfaces a 503 for a rejected (truncated-trajectory) solver throw', async () => {
-    // The exact detail text lives on the backend
-    // (app/api/routes/games.py's TRUNCATED_TRAJECTORY_DETAIL); this is a
-    // representative copy for the test, not an import of it — the client
-    // must stay decoupled from that constant and just relay whatever
-    // `detail` string the server sends.
-    const detail =
-      'the simulated trajectory did not reach the pin deck; this throw was ' +
-      'not recorded and game state is unchanged. Retrying is expected to work.';
+    // Deliberately arbitrary fixture text, not a copy of the backend's own
+    // TRUNCATED_TRAJECTORY_DETAIL constant (app/api/routes/games.py): the
+    // client must relay whatever `detail` string the server actually
+    // sends, generically, not one it happens to recognize or duplicate.
+    const detail = 'server-fixture-only: throw rejected, nothing was saved, try again';
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ detail }, { status: 503 }));
     vi.stubGlobal('fetch', fetchMock);
 

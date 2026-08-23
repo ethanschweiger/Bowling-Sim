@@ -215,10 +215,10 @@ describe('classifyThrowFailure', () => {
     // was never in question, so — unlike a throw's 404, which is genuinely
     // ambiguous between "missing game" and "unknown ball_id" — this must
     // never trigger a confirmation GET or the stale-game recovery path.
-    const originalError = new ApiError(
-      503,
-      'the simulated trajectory did not reach the pin deck; this throw was not recorded and game state is unchanged. Retrying is expected to work.',
-    );
+    // Deliberately arbitrary fixture text, not a copy of the backend's own
+    // TRUNCATED_TRAJECTORY_DETAIL constant — see the identical note in
+    // api/client.test.ts.
+    const originalError = new ApiError(503, 'server-fixture-only: throw rejected, nothing was saved, try again');
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 

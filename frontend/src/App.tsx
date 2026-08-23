@@ -44,6 +44,14 @@ function App() {
   const [latestThrow, setLatestThrow] = useState<GameThrowResponse | null>(null);
   const [latestRequestedRelease, setLatestRequestedRelease] = useState<ThrowRequest | null>(null);
   const [status, setStatus] = useState<ThrowStatus>({ kind: 'idle' });
+  // True from the moment an ordinary throw rejection lands (e.g. a 503
+  // truncated-trajectory response) until an actual successful state
+  // transition supersedes it — a new successful throw, a reset, or a new
+  // game. Exists solely to keep "Replay last shot" disabled on the still-
+  // displayed prior throw for that whole span; `status` alone can't do
+  // this because it moves from 'loading' back to 'error' the instant the
+  // request settles, which would otherwise re-enable replay immediately.
+  const [throwRejected, setThrowRejected] = useState(false);
 
   // Guards every async setState below against firing after a real unmount.
   // Re-armed (not just initialized) inside the effect below because
@@ -118,6 +126,7 @@ function App() {
       setLatestRequestedRelease(requestedRelease);
       setGame({ gameId: response.game_id, gameState: response.game_state });
       setLastThrowRanAgainstVersion(response.lane_condition_version);
+      setThrowRejected(false);
       const pinWord = response.pins_knocked === 1 ? 'pin' : 'pins';
       setStatus({ kind: 'success', message: `Threw it — ${response.pins_knocked} ${pinWord} down.` });
     } catch (error) {
@@ -136,6 +145,11 @@ function App() {
         setStatus({ kind: 'idle' });
         setStaleGameMessage('This game no longer exists on the server (it may have restarted).');
       } else {
+        // An ordinary rejection (e.g. the solver's 503): the previously
+        // completed throw stays exactly as displayed, but it must not
+        // look replayable again the instant this status becomes 'error'
+        // — see canReplay's docstring for why isBusy alone can't gate this.
+        setThrowRejected(true);
         setStatus({ kind: 'error', message: messageFor(classification.error, 'The throw did not go through.') });
       }
     }
@@ -156,6 +170,7 @@ function App() {
       setLastThrowRanAgainstVersion(null);
       setLatestThrow(null);
       setLatestRequestedRelease(null);
+      setThrowRejected(false);
       setStatus({ kind: 'success', message: 'Game reset — fresh rack, blank scorecard.' });
     } catch (error) {
       if (!mountedRef.current) {
@@ -183,6 +198,7 @@ function App() {
       setLatestThrow(null);
       setLatestRequestedRelease(null);
       setStaleGameMessage(null);
+      setThrowRejected(false);
       setStatus({ kind: 'success', message: 'Started a new game.' });
     } catch (error) {
       if (!mountedRef.current) {
@@ -255,7 +271,7 @@ function App() {
               standingPinIds={game.gameState.standing_pin_ids}
               latestThrow={latestThrow}
               latestRequestedRelease={latestRequestedRelease}
-              replayEnabled={canReplay(latestThrow, isBusy, isStale)}
+              replayEnabled={canReplay(latestThrow, isBusy, isStale, throwRejected)}
               requestPending={isBusy}
             />
           </section>

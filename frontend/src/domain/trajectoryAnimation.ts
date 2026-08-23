@@ -87,19 +87,30 @@ export function initialAnimationProgress(reducedMotion: boolean): number {
 }
 
 /** Whether "Replay last shot" should be enabled right now: a completed
- * throw with a real path exists, no request is in flight, and the saved
- * game isn't in the confirmed-stale state. A pure predicate — it never
- * reads game state beyond its own three arguments and never calls the
- * API client (this module imports nothing from `api/client`), so
- * replaying can't mutate score, pins, lane condition, game id, or
- * release values; it only restarts the canvas's own local animation over
- * the exact path already stored from that throw. */
+ * throw with a real path exists, no request is in flight, the saved game
+ * isn't in the confirmed-stale state, and the most recent throw attempt
+ * didn't end in a rejected/failed request. A pure predicate — it never
+ * reads game state beyond its own four arguments and never calls the API
+ * client (this module imports nothing from `api/client`), so replaying
+ * can't mutate score, pins, lane condition, game id, or release values;
+ * it only restarts the canvas's own local animation over the exact path
+ * already stored from that throw.
+ *
+ * `throwRejected` exists so a request that fails after `isBusy` returns
+ * to `false` (e.g. a 503 truncated-trajectory rejection) can't re-enable
+ * replay on the *previous* completed throw's path — the display is
+ * meant to stay settled and inert until an actual successful state
+ * transition (a new successful throw, a reset, or a new game) supersedes
+ * it, not a bare status change from loading to error. This never
+ * discards or mutates `latestThrow` itself; it only withholds the
+ * ability to restart its animation while the failure is unresolved. */
 export function canReplay(
   latestThrow: Pick<GameThrowResponse, 'path'> | null,
   isBusy: boolean,
   isStale: boolean,
+  throwRejected: boolean,
 ): boolean {
-  return latestThrow !== null && latestThrow.path.length > 0 && !isBusy && !isStale;
+  return latestThrow !== null && latestThrow.path.length > 0 && !isBusy && !isStale && !throwRejected;
 }
 
 /** The two signals a playback decision depends on, snapshotted once per

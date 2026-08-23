@@ -98,23 +98,23 @@ describe('initialAnimationProgress', () => {
 
 describe('canReplay', () => {
   it('is false with no completed throw', () => {
-    expect(canReplay(null, false, false)).toBe(false);
+    expect(canReplay(null, false, false, false)).toBe(false);
   });
 
   it('is false when the throw has an empty path', () => {
-    expect(canReplay({ path: [] }, false, false)).toBe(false);
+    expect(canReplay({ path: [] }, false, false, false)).toBe(false);
   });
 
   it('is false while a request is in flight', () => {
-    expect(canReplay({ path: PATH }, true, false)).toBe(false);
+    expect(canReplay({ path: PATH }, true, false, false)).toBe(false);
   });
 
   it('is false while the game is confirmed stale', () => {
-    expect(canReplay({ path: PATH }, false, true)).toBe(false);
+    expect(canReplay({ path: PATH }, false, true, false)).toBe(false);
   });
 
   it('is true for a completed throw with no request pending and a live game', () => {
-    expect(canReplay({ path: PATH }, false, false)).toBe(true);
+    expect(canReplay({ path: PATH }, false, false, false)).toBe(true);
   });
 
   it('does not mutate the throw response it inspects (a frozen input stays intact)', () => {
@@ -123,8 +123,27 @@ describe('canReplay', () => {
     // not just an equality check, that gating a replay never mutates the
     // game-state object it was handed.
     const frozenThrow = Object.freeze({ path: PATH });
-    expect(() => canReplay(frozenThrow, false, false)).not.toThrow();
-    expect(canReplay(frozenThrow, false, false)).toBe(true);
+    expect(() => canReplay(frozenThrow, false, false, false)).not.toThrow();
+    expect(canReplay(frozenThrow, false, false, false)).toBe(true);
+  });
+
+  // The defect this corrective milestone fixes: once a request finishes
+  // (isBusy back to false) a rejected throw would otherwise look
+  // replayable again on the *previous*, still-displayed completed throw
+  // -- exactly the moment a 503 truncated-trajectory rejection settles.
+  // Every other argument here is identical to the "is true" case above;
+  // `throwRejected` alone is what must flip the result to false, proving
+  // it is load-bearing and not redundant with `isBusy`/`isStale`.
+  it('is false once a throw has been rejected, even though the request is no longer in flight', () => {
+    expect(canReplay({ path: PATH }, false, false, true)).toBe(false);
+  });
+
+  it('is true again once a rejection clears via a genuine successful transition', () => {
+    // App.tsx clears `throwRejected` only on a new successful throw, a
+    // reset, or a new game -- never on a bare status change or a timer.
+    // From canReplay's perspective that transition is just this argument
+    // going back to false while the rest of the state is unchanged.
+    expect(canReplay({ path: PATH }, false, false, false)).toBe(true);
   });
 });
 
