@@ -4,3 +4,12 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+# Checks against this project's actual runtime floor (backend/.venv is
+# Python 3.9.6), not CI's Python 3.11 runner -- that pin is for running
+# tests/lint on a currently-supported interpreter, not a statement that
+# 3.11-only typing behavior is part of the supported runtime contract.
+python_version = "3.9"
+strict = true
+warn_unused_ignores = true
