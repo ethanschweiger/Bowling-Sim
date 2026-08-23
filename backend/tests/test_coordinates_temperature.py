@@ -48,8 +48,8 @@ def test_representative_throws_stay_in_bounds_without_artificial_clipping():
 def test_release_angle_moves_the_path_in_the_documented_lateral_direction():
     ball = BALL_CATALOG["house_ball"]
     lane = LaneCondition.house_shot()
-    # axis_rotation=0 => hook_direction is exactly zero (see simulate.py),
-    # isolating lateral motion to the release angle alone.
+    # Zero rotation leaves only the small documented flare residual. It stays
+    # far too small to reverse the requested launch-angle direction here.
     straight = Throw(speed_mph=17.0, rev_rate=350.0, axis_rotation=0.0, axis_tilt=15.0, launch_angle=0.0, launch_position=20.0)
     angled = Throw(speed_mph=17.0, rev_rate=350.0, axis_rotation=0.0, axis_tilt=15.0, launch_angle=5.0, launch_position=20.0)
 

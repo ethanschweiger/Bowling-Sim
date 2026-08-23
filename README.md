@@ -71,28 +71,27 @@ sideways, and it consumes the slip that was driving the push.
   whatever heading the hook left it with.
 
 Nothing switches phase by name or by distance. A ball that never finds
-friction never leaves skid; one that exhausts its slip early rolls the rest
-of the way. Critically, the slip is spent by exactly the impulse it
-produces, so the *total* lateral velocity a throw can gain is bounded by
-the slip it was released with — the hook is self-limiting rather than
-accelerating for the whole lane, which is what the previous model did.
+friction stays in skid; one that exhausts its slip early rolls the rest of
+the lane. Each integration step caps lateral transfer at the remaining slip
+before it adds that transfer to lateral velocity. The total lateral velocity
+gain stays bounded by the release reservoir.
 
 Two things put slip in the reservoir. **Axis rotation** contributes the
 part of the release's own rotation that points across the direction of
-travel — none at 0°, all of it at 90°. **Track flare** contributes a small
-residual regardless of release: a ball's RG differential migrates its axis
-as it travels, so the contact track moves across the cover instead of
-retracing itself (the reason a drilled ball leaves multiple oil rings, and
-the reason differential appears on a spec sheet at all). Flare keeps a
-side component present even in a nominally end-over-end delivery.
+travel: none at 0°, all at 90°. A **track-flare-inspired residual** adds a
+small differential-scaled side component at every release angle.
+
+The simulator does not calculate true core-axis migration, drilling layout,
+cover tracks, or ball topography. It uses the residual as a bounded empirical
+term so a nominally end-over-end reactive release can still read the lane.
 
 So axis rotation is a bounded continuum, not a switch: a 0° reactive ball
-still reads the lane, just earlier and more gently than a rotated one, and
-because flare scales with differential a low-differential plastic ball
-still barely reads it at all. Lateral force also grows with how fast the
-patch is actually sliding sideways — saturating rather than growing
-without bound — so a release carrying more slip turns *harder* as well as
-longer, and every rotation value produces a distinct shape.
+still reads the lane, just earlier and more gently than a rotated one. A
+low-differential plastic ball receives far less of the residual. The engine
+also accumulates dry-equivalent contact length from the same smooth friction
+field. Higher rotation lengthens the contact distance needed for full
+engagement, then uses its larger reservoir for a later, sharper backend.
+No named phase boundary or client-side curve decides that transition.
 
 Axis tilt sets **how fast** slip converts, so a tilted release skids longer
 and turns more gradually — a timing modifier, never a cap. Even at maximum
@@ -111,10 +110,11 @@ cited at their use sites. The *phase ordering* is sourced from the motion
 study above, and the directional facts about house-shot oil distribution
 from USBC coaching guidance. Everything numeric in the trajectory
 model — `SLIP_EFFICIENCY`, `LATERAL_TRACTION`, `TRACTION_FRICTION_EXPONENT`,
-`SLIP_REFERENCE_FPS`, `TILT_DELAY`, `FLARE_SIDE_FRACTION`, `FORWARD_DRAG`,
-the oil pattern's own shape — is a **chosen modeling coefficient**, tuned so a reactive ball on the bundled house shot
-skids, turns over in the midlane, and rolls out before the deck. They are
-not measurements, and this is not a calibrated ball-motion study.
+`SLIP_REFERENCE_FPS`, `TILT_DELAY`, `FLARE_SIDE_FRACTION`,
+`BASE_CONTACT_ENGAGEMENT_FT`, `ROTATION_CONTACT_DELAY_FT`, `FORWARD_DRAG`,
+and the oil pattern shape are **chosen modeling coefficients**. They tune a
+reactive ball on the bundled house shot to skid, turn over, and roll out.
+They are not measurements, and this is not a calibrated ball-motion study.
 
 ### One unit system, declared once
 
@@ -864,9 +864,9 @@ percentages, leave tracking, ball usage stats.
 - `mass_lbs` and `radius_in` are on the `Ball` model but not used in this
   milestone's trajectory calculation — both deliberately, see "Ball
   properties" above (`app/physics/ball.py`).
-- `FORWARD_DRAG`, `SPIN_DECAY`, and `HOOK_GAIN` (`app/physics/simulate.py`)
-  are hand-tuned for bounded, credible motion, not fit to real ball-motion
-  data.
+- Trajectory coefficients such as `FORWARD_DRAG`, `SLIP_EFFICIENCY`,
+  `LATERAL_TRACTION`, and the contact-engagement distances are hand-tuned for
+  bounded, credible motion. They are not fit to real ball-motion data.
 - The trajectory model reproduces the skid → hook → roll *ordering* and
   responds sensibly to ball, release, and oil, but its coefficients are
   chosen rather than fitted (see "Skid, hook, roll" above). Entry boards,

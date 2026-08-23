@@ -8,12 +8,23 @@ toward the bowler's left — the opposite of a conventional line. The tests
 here would all have failed against it.
 """
 
+import math
+from dataclasses import replace
+
 import pytest
 
 from app.physics.ball import BALL_CATALOG
 from app.physics.lane import DRY_FRICTION, OILED_FRICTION, LaneCondition
-from app.physics.simulate import PATH_SAMPLE_FT, simulate_throw, step_cap_for
+from app.physics.simulate import (
+    FLARE_REFERENCE_DIFFERENTIAL,
+    FLARE_SIDE_FRACTION,
+    PATH_SAMPLE_FT,
+    SLIP_EFFICIENCY,
+    simulate_throw,
+    step_cap_for,
+)
 from app.physics.throw import RELEASE_BOUNDS, Throw, sample_release
+from app.physics.units import mph_to_fps, rpm_to_rad_per_s
 
 from tests.trajectory_fixture import (
     DIAGNOSTIC_BALL_ID,
@@ -149,6 +160,26 @@ def _hook_developed(result):
     return result.terminal.heading_deg - LAUNCH_ANGLE
 
 
+def _initial_lateral_slip(ball, throw):
+    """Match the documented release reservoir for a conservation check."""
+    rotation_side = math.sin(math.radians(throw.axis_rotation))
+    flare_side = FLARE_SIDE_FRACTION * min(1.0, ball.differential / FLARE_REFERENCE_DIFFERENTIAL)
+    side_fraction = rotation_side + (1.0 - rotation_side) * flare_side
+    return (
+        rpm_to_rad_per_s(throw.rev_rate)
+        * (ball.radius_in / 12.0)
+        * side_fraction
+        * SLIP_EFFICIENCY
+        * ball.hook_potential
+    )
+
+
+def _late_slope(result):
+    breakpoint = min(result.path, key=lambda p: p.board)
+    assert breakpoint.distance_ft < result.terminal.distance_ft
+    return (result.path[-1].board - breakpoint.board) / (result.path[-1].distance_ft - breakpoint.distance_ft)
+
+
 def test_axis_rotation_sets_how_much_hook_is_available():
     lane = LaneCondition.house_shot()
     # More rotation puts more slip in the reservoir, so the ball finishes
@@ -196,11 +227,14 @@ def test_axis_rotation_is_a_continuum_across_its_whole_range():
     """
     lane = LaneCondition.house_shot()
     rotations = [0.0, 20.0, 45.0, 70.0, 90.0]
-    entries = [_run("reactive_pearl", r, lane).terminal.board for r in rotations]
+    runs = [_run("reactive_pearl", r, lane) for r in rotations]
+    entries = [result.terminal.board for result in runs]
+    headings = [result.terminal.heading_deg for result in runs]
 
     assert entries == sorted(entries), entries
-    for a, b in zip(entries, entries[1:]):
-        assert b - a > 0.1, f"rotations too close to distinguish: {entries}"
+    assert headings == sorted(headings), headings
+    for a, b in zip(headings, headings[1:]):
+        assert b - a > 0.05, f"rotations too close to distinguish: {headings}"
 
 
 def test_a_low_rotation_reactive_release_still_finds_the_lane():
@@ -227,6 +261,46 @@ def test_a_low_rotation_reactive_release_still_finds_the_lane():
 
     # Materially different from the same release with a plastic ball.
     assert reactive.terminal.board > plastic.terminal.board + 3.0
+
+
+def test_higher_axis_rotation_delays_the_breakpoint_and_sharpens_the_backend():
+    """Rotation changes timing and shape, rather than only total hook."""
+    lane = LaneCondition.house_shot()
+    low = _run("reactive_pearl", 15.0, lane, rev_rate=500.0, axis_tilt=12.0)
+    high = _run("reactive_pearl", 60.0, lane, rev_rate=500.0, axis_tilt=12.0)
+    low_breakpoint = min(low.path, key=lambda p: p.board)
+    high_breakpoint = min(high.path, key=lambda p: p.board)
+
+    # Low rotation reads earlier and arcs smoothly. Higher rotation saves its
+    # larger reservoir for a later, sharper move through the backend.
+    assert high_breakpoint.distance_ft >= low_breakpoint.distance_ft + 0.5
+    assert high.terminal.heading_deg > low.terminal.heading_deg + 0.5
+    assert _late_slope(high) > _late_slope(low) * 2.0
+
+
+def test_lateral_transfer_never_exceeds_the_remaining_slip_reservoir():
+    """A coarse dry integration step still has to obey the same bound."""
+    fresh = LaneCondition.house_shot()
+    dry = replace(
+        fresh,
+        oil_grid=tuple(tuple(0.0 for _ in row) for row in fresh.oil_grid),
+    )
+    ball = BALL_CATALOG["reactive_pearl"]
+    throw = Throw(
+        speed_mph=12.0,
+        rev_rate=150.0,
+        axis_rotation=0.0,
+        axis_tilt=0.0,
+        launch_position=20.0,
+        launch_angle=0.0,
+    )
+
+    result = simulate_throw(ball, throw, dry, step_ft=10.0)
+    gained_lateral_velocity = math.tan(math.radians(result.terminal.heading_deg)) * mph_to_fps(
+        result.terminal.speed_mph
+    )
+
+    assert gained_lateral_velocity <= _initial_lateral_slip(ball, throw) + 1e-9
 
 
 def test_axis_tilt_delays_the_hook_without_forbidding_it():

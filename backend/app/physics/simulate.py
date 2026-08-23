@@ -121,7 +121,7 @@ SLIP_EFFICIENCY = 0.17
 # Peak lateral acceleration on a fully dry lane, as a fraction of g. This
 # sets how *fast* slip converts — the hook's sharpness and where it
 # finishes — not how much total turn is available.
-LATERAL_TRACTION = 0.065
+LATERAL_TRACTION = 0.24
 
 # Traction falls off faster than the nominal friction coefficient does,
 # because an oil film carries part of the load rather than merely
@@ -137,14 +137,19 @@ TRACTION_FRICTION_EXPONENT = 2.0
 # to spend, so it still hooks.
 TILT_DELAY = 0.55
 
-# --- Track flare: why a "straight axis" release still reads the lane ----
-# A ball's RG differential makes its rotation axis migrate as it travels,
-# so the contact track moves across the cover instead of retracing itself
-# — the reason a spec sheet quotes differential at all, and the reason a
-# drilled ball leaves multiple oil rings rather than one. That migration
-# keeps a small side component in the contact patch even when the release
-# axis carries none, so a nominally end-over-end reactive ball still
-# develops some turn.
+# Lane contact must settle before its available side slip can convert at the
+# full rate. Higher rotation lengthens that settling distance, which gives the
+# release a longer skid before its larger reservoir makes a sharper backend.
+# This is a chosen empirical contact-engagement state, not a calculation of
+# core-axis migration or lane topography.
+BASE_CONTACT_ENGAGEMENT_FT = 1.5
+ROTATION_CONTACT_DELAY_FT = 22.0
+
+# --- Track-flare approximation: why a "straight axis" release still reads
+# The model uses RG differential to scale a small residual side component,
+# inspired by track flare. It does not calculate axis migration, drilling,
+# cover tracks, or core dynamics. The residual prevents a nominally end-over-
+# end reactive release from becoming an all-or-nothing no-hook special case.
 #
 # It is deliberately bounded and small: flare *supplements* the release's
 # own rotation and never replaces it, so axis rotation stays a continuum
@@ -306,9 +311,9 @@ def simulate_throw(
     #   1. Axis rotation — how much of the release's own rotation is
     #      oriented across the direction of travel. A full spinner (90 deg)
     #      contributes all of it, an end-over-end release (0 deg) none.
-    #   2. Track flare — axis migration from the ball's RG differential,
-    #      which keeps a small side component present regardless of how the
-    #      ball was released (see FLARE_SIDE_FRACTION above).
+    #   2. A track-flare-inspired residual, scaled from ball differential.
+    #      This empirical term keeps a small side component present even at
+    #      zero release rotation; it is not a core-axis-migration model.
     #
     # Because of (2), axis rotation is a bounded continuum rather than an
     # on/off switch: a 0 deg reactive release still reads the lane, just
@@ -329,6 +334,10 @@ def simulate_throw(
     lateral_slip_fps = (
         angular_velocity_rad_s * ball_radius_ft * side_fraction * SLIP_EFFICIENCY * ball.hook_potential
     )
+    # Accumulated dry-equivalent contact length. Oil contributes only its
+    # declared traction fraction, so a higher-rotation release carries more
+    # slip through the heads before it can convert at full strength.
+    contact_exposure_ft = 0.0
 
     # Axis tilt scales how fast that slip converts, never how much exists.
     # High tilt therefore delays and softens the hook instead of capping it:
@@ -388,12 +397,26 @@ def simulate_throw(
             # put a corner in the acceleration exactly where the ball stops
             # hooking, which is the one place a corner would be visible.
             grip = (friction / DRY_FRICTION) ** TRACTION_FRICTION_EXPONENT
+            contact_exposure_ft += grip * this_step_ft
+            engagement_length_ft = BASE_CONTACT_ENGAGEMENT_FT + (
+                ROTATION_CONTACT_DELAY_FT * rotation_side
+            )
+            rotation_conversion = 1.0 - math.exp(-contact_exposure_ft / engagement_length_ft)
             taper = math.tanh(lateral_slip_fps / SLIP_REFERENCE_FPS)
             lateral_accel_fps2 = (
-                LATERAL_TRACTION * GRAVITY_FT_PER_S2 * grip * taper * tilt_conversion
+                LATERAL_TRACTION
+                * GRAVITY_FT_PER_S2
+                * grip
+                * taper
+                * tilt_conversion
+                * rotation_conversion
             )
-            delta_v = lateral_accel_fps2 * dt
-            lateral_velocity_fps += delta_v
+            candidate_transfer = lateral_accel_fps2 * dt
+            # A coarse dry step can ask for more impulse than remains in the
+            # reservoir. Spend only what exists, and apply that same amount
+            # to lateral velocity, so the self-limiting bound stays exact.
+            lateral_transfer = min(candidate_transfer, lateral_slip_fps)
+            lateral_velocity_fps += lateral_transfer
 
             # The slip is spent by exactly the impulse it produced. That
             # single line is what makes the hook self-limiting and bounds
@@ -401,7 +424,7 @@ def simulate_throw(
             # never exceed the slip the release started with, so a ball
             # cannot accelerate sideways forever the way the old always-on
             # force did.
-            lateral_slip_fps = max(0.0, lateral_slip_fps - delta_v)
+            lateral_slip_fps -= lateral_transfer
         # else: rolling — no sideways slip left, so no lateral force, and
         # the ball holds whatever heading the hook left it with.
 
