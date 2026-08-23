@@ -167,3 +167,51 @@ export function decidePlaybackAction(previous: PlaybackState, next: PlaybackStat
 
   return { kind: 'none' };
 }
+
+/** The state a canvas compares against before it has seen anything: no
+ * completed throw, idle, and no replay presses yet. Exported so a remount
+ * can reset to exactly the same starting point the first mount used. */
+export const INITIAL_PLAYBACK_STATE: PlaybackState = {
+  latestThrowPath: null,
+  isBusy: false,
+  replayCount: 0,
+};
+
+export interface PlaybackTransition {
+  action: PlaybackAction;
+  /** The snapshot to compare against next time. */
+  snapshot: PlaybackState;
+}
+
+/**
+ * `decidePlaybackAction` plus the rule for when that decision may be
+ * recorded as *made*.
+ *
+ * The distinction matters because the decision is a transition, not a
+ * property of the current state: it is derived by comparing against the
+ * previous snapshot, so advancing that snapshot consumes the decision. If
+ * the caller advances it while unable to act, the action is gone — every
+ * later comparison sees no change and answers `none`.
+ *
+ * That is exactly the defect this exists to prevent. A canvas mounting with
+ * a completed throw already in hand decides `start` in its layout pass; if
+ * its player is created by a *passive* effect, that player does not exist
+ * yet, and recording the snapshot anyway means the throw never animates at
+ * all. Passing `canAct: false` keeps the old snapshot, so the identical
+ * comparison happens again on the next pass and the decision survives.
+ *
+ * The ordering fix (create the player in an earlier layout effect) is what
+ * makes `canAct` true in practice; this is the guarantee that a future
+ * reordering cannot silently lose a throw again.
+ */
+export function planPlaybackTransition(
+  previous: PlaybackState,
+  next: PlaybackState,
+  canAct: boolean,
+): PlaybackTransition {
+  const action = decidePlaybackAction(previous, next);
+  if (!canAct) {
+    return { action: { kind: 'none' }, snapshot: previous };
+  }
+  return { action, snapshot: next };
+}

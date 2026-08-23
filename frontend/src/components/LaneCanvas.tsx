@@ -17,8 +17,9 @@ import {
   type PlaybackPhase,
 } from '../domain/playbackController';
 import {
-  decidePlaybackAction,
+  INITIAL_PLAYBACK_STATE,
   interpolatePathPosition,
+  planPlaybackTransition,
   trajectoryEndpoint,
   type PlaybackState,
 } from '../domain/trajectoryAnimation';
@@ -108,7 +109,7 @@ export function LaneCanvas({
   const [replayCount, setReplayCount] = useState(0);
   const controllerRef = useRef<PlaybackController | null>(null);
   const latestThrowPath = latestThrow && latestThrow.path.length > 0 ? latestThrow.path : null;
-  const previousPlaybackStateRef = useRef<PlaybackState>({ latestThrowPath: null, isBusy: false, replayCount: 0 });
+  const previousPlaybackStateRef = useRef<PlaybackState>(INITIAL_PLAYBACK_STATE);
 
   // Validated once per response, not per frame: an unknown version or a
   // malformed payload becomes `null` here and the deck phase simply
@@ -151,7 +152,15 @@ export function LaneCanvas({
   // One controller for this component's whole lifetime, owning at most one
   // in-flight loop across *both* phases. Disposed on unmount so a frame
   // the browser already queued can't set state on a gone component.
-  useEffect(() => {
+  //
+  // Deliberately a **layout** effect, and declared **before** the playback
+  // driver below. React runs every layout effect before any passive one, so
+  // while this was a passive `useEffect` a canvas mounting with a completed
+  // throw already in hand ran its driver first, found no controller, and
+  // dropped that throw's `start` — it never animated at all. Layout effects
+  // run in declaration order, so putting this one first is what guarantees
+  // the controller exists by the time the driver looks for it.
+  useLayoutEffect(() => {
     const controller = new PlaybackController(
       {
         requestFrame: (callback) => requestAnimationFrame(callback),
@@ -164,6 +173,13 @@ export function LaneCanvas({
     return () => {
       controller.dispose();
       controllerRef.current = null;
+      // Reset the comparison baseline too. Under StrictMode's
+      // setup/cleanup/remount cycle the refs survive, so without this the
+      // second mount would compare against the first mount's own snapshot,
+      // conclude nothing changed, and leave a preloaded throw unplayed —
+      // the same defect by a different route. Resetting means a remount
+      // decides from exactly the state a first mount starts from.
+      previousPlaybackStateRef.current = INITIAL_PLAYBACK_STATE;
     };
     // `publishPhase` has an empty dependency list of its own, so it is
     // stable and this effect still runs exactly once per lifetime.
@@ -185,11 +201,20 @@ export function LaneCanvas({
   // settles the preceding result, and a stale callback still cannot revive
   // an old scene (the controller latches off on dispose).
   useLayoutEffect(() => {
-    const nextState: PlaybackState = { latestThrowPath, isBusy: requestPending, replayCount };
-    const action = decidePlaybackAction(previousPlaybackStateRef.current, nextState);
-    previousPlaybackStateRef.current = nextState;
-
     const controller = controllerRef.current;
+    const nextState: PlaybackState = { latestThrowPath, isBusy: requestPending, replayCount };
+    // The snapshot only advances when there is a controller to carry the
+    // decision out — otherwise the same comparison is retried next pass
+    // rather than being consumed and lost. The effect ordering above makes
+    // that the unreachable case; this keeps it unreachable if the ordering
+    // is ever disturbed. See `planPlaybackTransition`.
+    const { action, snapshot } = planPlaybackTransition(
+      previousPlaybackStateRef.current,
+      nextState,
+      controller !== null,
+    );
+    previousPlaybackStateRef.current = snapshot;
+
     if (action.kind === 'none' || !controller) {
       return;
     }

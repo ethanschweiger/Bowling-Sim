@@ -9,7 +9,12 @@ import {
   type FrameScheduler,
   type PlaybackPhase,
 } from './playbackController';
-import { TRAJECTORY_ANIMATION_DURATION_MS } from './trajectoryAnimation';
+import {
+  INITIAL_PLAYBACK_STATE,
+  planPlaybackTransition,
+  TRAJECTORY_ANIMATION_DURATION_MS,
+  type PlaybackState,
+} from './trajectoryAnimation';
 
 /**
  * A deterministic stand-in for requestAnimationFrame. Nothing here sleeps
@@ -433,5 +438,160 @@ describe('PlaybackController lifecycle', () => {
     const expected = ['path', 'path', 'deck', 'deck', 'settled'];
     expect(afterFirst).toEqual(expected);
     expect(phases.map((p) => p.kind)).toEqual(expected);
+  });
+});
+
+describe('preloaded mount lifecycle', () => {
+  // Simulates the two possible effect orderings for a canvas that mounts
+  // with a completed throw already in hand. React runs every layout effect
+  // before any passive one, so whether the controller exists when the
+  // driver runs is decided purely by which kind of effect creates it.
+  //
+  // Not a React render (this suite runs without a DOM); it exercises the
+  // exact pair of collaborators the component wires together, which is where
+  // the defect actually lived.
+
+  const PATH = [
+    { distance_ft: 0, board: 28 },
+    { distance_ft: 60, board: 17 },
+  ];
+  const PRELOADED: PlaybackState = { latestThrowPath: PATH, isBusy: false, replayCount: 0 };
+
+  /** One mount pass. `controllerFirst` mirrors creating the controller in a
+   * layout effect declared before the driver; `false` mirrors the passive
+   * effect that caused the regression. */
+  function mount(controllerFirst: boolean) {
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    let controller: PlaybackController | null = null;
+    let snapshot = INITIAL_PLAYBACK_STATE;
+
+    const createController = () => {
+      controller = new PlaybackController(fake.scheduler, onPhase);
+    };
+    const runDriver = () => {
+      const planned = planPlaybackTransition(snapshot, PRELOADED, controller !== null);
+      snapshot = planned.snapshot;
+      if (planned.action.kind === 'start' && controller) {
+        controller.start({ replay: replay() }, false);
+      }
+    };
+
+    if (controllerFirst) {
+      createController();
+      runDriver();
+    } else {
+      runDriver();      // layout pass: no controller yet
+      createController(); // passive effect, too late for that pass
+    }
+
+    return { fake, phases, snapshot, getController: () => controller, runDriver };
+  }
+
+  it('animates a preloaded throw when the controller is created first', () => {
+    const { fake, phases, getController } = mount(true);
+
+    // Exactly one path-zero emission, staged synchronously before paint.
+    expect(phases).toEqual([{ kind: 'path', progress: 0 }]);
+    // Exactly one live loop.
+    expect(fake.pendingCount).toBe(1);
+    expect(getController()!.isRunning).toBe(true);
+  });
+
+  it('reproduces the regression when the controller is created afterwards', () => {
+    // With the old passive-effect ordering the decision is made while no
+    // controller exists. This is what the fix has to prevent.
+    const { phases, fake } = mount(false);
+
+    expect(phases).toEqual([]);
+    expect(fake.pendingCount).toBe(0);
+  });
+
+  it('recovers on the next pass rather than losing the throw for good', () => {
+    // Even in that ordering the decision survives, because the snapshot was
+    // not advanced -- so the very next driver pass starts it exactly once.
+    const session = mount(false);
+    expect(session.snapshot).toBe(INITIAL_PLAYBACK_STATE);
+
+    session.runDriver();
+    expect(session.phases).toEqual([{ kind: 'path', progress: 0 }]);
+    expect(session.fake.pendingCount).toBe(1);
+
+    // And no second start from a third pass over identical props.
+    session.runDriver();
+    expect(session.phases).toEqual([{ kind: 'path', progress: 0 }]);
+  });
+
+  it('plays the full path/deck/terminal-hold sequence from a preloaded mount', () => {
+    const { fake, phases, getController } = mount(true);
+    const END_MS = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
+    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 500);
+    fake.advanceTo(END_MS);
+    expect(phases[phases.length - 1]).toEqual({
+      kind: 'deck',
+      tS: DECK_DURATION_S,
+      isTerminal: true,
+    });
+
+    // Still held part-way through the terminal interval, then handed over.
+    fake.advanceTo(END_MS + TERMINAL_HOLD_MS / 2);
+    expect(phases[phases.length - 1]).toMatchObject({ isTerminal: true });
+
+    fake.advanceTo(END_MS + TERMINAL_HOLD_MS);
+    expect(phases[phases.length - 1]).toEqual({ kind: 'settled' });
+    expect(getController()!.isRunning).toBe(false);
+    expect(fake.pendingCount).toBe(0);
+  });
+
+  it('starts exactly once across a StrictMode setup/cleanup/remount cycle', () => {
+    // StrictMode keeps the refs, so the cleanup must restore the baseline or
+    // the second mount compares against its own first-mount snapshot and
+    // decides nothing changed.
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    let snapshot = INITIAL_PLAYBACK_STATE;
+
+    const mountOnce = () => {
+      const controller = new PlaybackController(fake.scheduler, onPhase);
+      const planned = planPlaybackTransition(snapshot, PRELOADED, true);
+      snapshot = planned.snapshot;
+      if (planned.action.kind === 'start') {
+        controller.start({ replay: replay() }, false);
+      }
+      return controller;
+    };
+
+    const first = mountOnce();
+    expect(phases).toEqual([{ kind: 'path', progress: 0 }]);
+
+    // Cleanup: dispose and restore the baseline, exactly as the effect does.
+    first.dispose();
+    snapshot = INITIAL_PLAYBACK_STATE;
+    expect(first.isRunning).toBe(false);
+
+    const second = mountOnce();
+    // One further path-zero emission for the remount, and one live loop --
+    // the disposed controller is latched off and cannot contribute.
+    expect(phases).toEqual([
+      { kind: 'path', progress: 0 },
+      { kind: 'path', progress: 0 },
+    ]);
+    expect(second.isRunning).toBe(true);
+    expect(fake.pendingCount).toBe(1);
+  });
+
+  it('schedules nothing on a preloaded mount under reduced motion', () => {
+    const fake = fakeScheduler();
+    const { phases, onPhase } = collect();
+    const controller = new PlaybackController(fake.scheduler, onPhase);
+    const planned = planPlaybackTransition(INITIAL_PLAYBACK_STATE, PRELOADED, true);
+
+    expect(planned.action.kind).toBe('start');
+    controller.start({ replay: replay() }, true);
+
+    expect(fake.pendingCount).toBe(0);
+    expect(phases).toEqual([{ kind: 'settled' }]);
   });
 });

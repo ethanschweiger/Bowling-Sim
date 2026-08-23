@@ -3,6 +3,8 @@ import {
   canReplay,
   decidePlaybackAction,
   easeOutCubic,
+  INITIAL_PLAYBACK_STATE,
+  planPlaybackTransition,
   initialAnimationProgress,
   interpolatePathPosition,
   trajectoryEndpoint,
@@ -247,5 +249,115 @@ describe('trajectoryEndpoint', () => {
     const settled = interpolatePathPosition(PATH, 1);
     expect(settled.board).toBe(endpoint.board);
     expect(settled.distanceFt).toBe(endpoint.distance_ft);
+  });
+});
+
+describe('planPlaybackTransition', () => {
+  // The mount-lifecycle defect this guards, precisely: the decision is a
+  // *transition*, so advancing the snapshot consumes it. A canvas that
+  // mounts with a completed throw already in hand decides `start` during its
+  // layout pass; if its player is created by a passive effect it does not
+  // exist yet, and recording the snapshot regardless means every later
+  // comparison sees no change and the throw never animates at all.
+
+  const PRELOADED: PlaybackState = { latestThrowPath: PATH, isBusy: false, replayCount: 0 };
+
+  it('would decide start for a canvas mounting with a completed throw', () => {
+    expect(decidePlaybackAction(INITIAL_PLAYBACK_STATE, PRELOADED)).toEqual({
+      kind: 'start',
+      path: PATH,
+    });
+  });
+
+  it('does not consume that decision when nothing can act on it', () => {
+    const { action, snapshot } = planPlaybackTransition(
+      INITIAL_PLAYBACK_STATE,
+      PRELOADED,
+      false,
+    );
+
+    // Nothing may be started yet.
+    expect(action).toEqual({ kind: 'none' });
+    // The critical half: the baseline is untouched, so the decision is still
+    // pending rather than spent.
+    expect(snapshot).toBe(INITIAL_PLAYBACK_STATE);
+  });
+
+  it('still yields exactly one start once something can act', () => {
+    // Pass one: no player. Pass two: the identical props, now with a player.
+    const first = planPlaybackTransition(INITIAL_PLAYBACK_STATE, PRELOADED, false);
+    const second = planPlaybackTransition(first.snapshot, PRELOADED, true);
+
+    expect(second.action).toEqual({ kind: 'start', path: PATH });
+    expect(second.snapshot).toBe(PRELOADED);
+
+    // And exactly one: a third pass over the same props starts nothing more,
+    // so a retry can never become an auto-replay.
+    const third = planPlaybackTransition(second.snapshot, PRELOADED, true);
+    expect(third.action).toEqual({ kind: 'none' });
+  });
+
+  it('consumes the decision normally when a player is present', () => {
+    const { action, snapshot } = planPlaybackTransition(
+      INITIAL_PLAYBACK_STATE,
+      PRELOADED,
+      true,
+    );
+
+    expect(action).toEqual({ kind: 'start', path: PATH });
+    expect(snapshot).toBe(PRELOADED);
+  });
+
+  it('holds back a settle just as it holds back a start', () => {
+    const busy: PlaybackState = { latestThrowPath: null, isBusy: true, replayCount: 0 };
+    const withoutPlayer = planPlaybackTransition(INITIAL_PLAYBACK_STATE, busy, false);
+
+    expect(withoutPlayer.action).toEqual({ kind: 'none' });
+    expect(withoutPlayer.snapshot).toBe(INITIAL_PLAYBACK_STATE);
+    expect(planPlaybackTransition(withoutPlayer.snapshot, busy, true).action).toEqual({
+      kind: 'settle',
+    });
+  });
+
+  it('resets cleanly for a remount, the StrictMode setup/cleanup/remount case', () => {
+    // StrictMode mounts, cleans up, and mounts again with the same refs. The
+    // cleanup restores INITIAL_PLAYBACK_STATE, so the second mount decides
+    // from exactly where a first mount would -- without that reset it would
+    // compare against its own first-mount snapshot and conclude `none`,
+    // leaving a preloaded throw unplayed by a different route.
+    const firstMount = planPlaybackTransition(INITIAL_PLAYBACK_STATE, PRELOADED, true);
+    expect(firstMount.action).toEqual({ kind: 'start', path: PATH });
+
+    // Without the reset: the stale snapshot swallows the second decision.
+    expect(planPlaybackTransition(firstMount.snapshot, PRELOADED, true).action).toEqual({
+      kind: 'none',
+    });
+
+    // With it: the remount starts the sequence exactly once, as it should.
+    const afterCleanup = INITIAL_PLAYBACK_STATE;
+    expect(planPlaybackTransition(afterCleanup, PRELOADED, true).action).toEqual({
+      kind: 'start',
+      path: PATH,
+    });
+  });
+
+  it('leaves every ordinary decision unchanged when a player is present', () => {
+    // planPlaybackTransition must add a gate, not new behaviour: with a
+    // player it has to agree with decidePlaybackAction on every input.
+    const states: PlaybackState[] = [
+      INITIAL_PLAYBACK_STATE,
+      PRELOADED,
+      { latestThrowPath: PATH, isBusy: true, replayCount: 0 },
+      { latestThrowPath: PATH, isBusy: false, replayCount: 1 },
+      { latestThrowPath: null, isBusy: false, replayCount: 2 },
+    ];
+
+    for (const previous of states) {
+      for (const next of states) {
+        expect(planPlaybackTransition(previous, next, true).action).toEqual(
+          decidePlaybackAction(previous, next),
+        );
+      }
+    }
   });
 });
