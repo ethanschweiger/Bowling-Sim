@@ -108,7 +108,21 @@ from typing import Literal, Protocol
 # every v1 replay is genuinely ambiguous between the two exits. Consumers
 # must reject an unrecognized version and fall back rather than guess —
 # which is exactly why the version string exists.
-REPLAY_MODEL_VERSION = "planar-collision-replay-2d-v2"
+#
+# v2 -> v3 changes the sampling cadence from every 100 steps (50 ms, 20 Hz)
+# to every 20 steps (10 ms, 100 Hz). That is a version bump rather than a
+# server-side tuning detail because the *complete frame schedule* is part of
+# the validated wire contract: a consumer derives exactly which frames must
+# be present from `dt_s` and `sample_every_steps`, so changing the cadence
+# changes what a valid payload is. A v2 payload is still perfectly
+# well-formed data — it is simply a different contract, and is refused
+# rather than reinterpreted.
+#
+# Why denser: at 50 ms a 25 mph ball covers roughly 22 in between adjacent
+# samples, so an impulse the solver resolved could not become visible until
+# up to one whole interval later. 10 ms cuts that to about 4.4 in. This
+# records the same run more finely; it does not change the run.
+REPLAY_MODEL_VERSION = "planar-collision-replay-2d-v3"
 
 # Why a `Literal` alias rather than an `Enum`: these two values are a wire
 # contract shared with the API layer and the browser, and a Literal keeps
@@ -134,18 +148,23 @@ TERMINATION_REASONS: tuple[TerminationReason, ...] = (
 )
 
 # Sample every Nth solver step, plus a guaranteed initial and final frame.
-# At COLLISION_DT_S = 0.0005 s, every 100 steps is one frame per 50 ms —
-# 20 frames of simulated time per second, enough for smooth playback,
-# while turning a full 4,000-step run into roughly 42 frames rather than
+# At COLLISION_DT_S = 0.0005 s, every 20 steps is one frame per 10 ms — 100
+# frames of simulated time per second. Dense enough that a contact becomes
+# visible within about 4.4 in of ball travel at the fastest legal release,
+# while still turning a full 4,000-step run into 201 frames rather than
 # 4,000. Deliberately a fixed count of solver steps, not a wall-clock or
 # paint-rate interval: the cadence has to be reproducible on any machine.
-REPLAY_SAMPLE_EVERY_STEPS = 100
+REPLAY_SAMPLE_EVERY_STEPS = 20
 
 # Hard ceiling on frames in one replay, enforced (not merely expected) by
-# the recorder. With the cadence above a full-length run lands near 42, so
-# this leaves generous headroom while still guaranteeing the response can
-# never become a solver-step flood.
-MAX_REPLAY_FRAMES = 64
+# the recorder — the response can never become a solver-step flood.
+#
+# The arithmetic it has to contain: a full-length run is
+# MAX_COLLISION_STEPS / REPLAY_SAMPLE_EVERY_STEPS + 1 = 4000 / 20 + 1 = 201
+# frames (steps 0, 20, ... 4000, with 4000 itself on cadence so no extra
+# terminal frame is appended). 256 clears that with 55 frames of headroom
+# and stays a small, fixed, documented bound rather than an open-ended one.
+MAX_REPLAY_FRAMES = 256
 
 BALL_BODY_ID = 0
 

@@ -14,6 +14,14 @@ and does not validate, and how to rerun it.
 If a documented value here changes, that is the point: the expectation and
 the note must be updated in the same commit, stating which model assumption
 moved and why. A silent update would waste the baseline.
+
+Recorded change, replay v2 -> v3: `frame_count` only. The sampling cadence
+went from every 100 solver steps (50 ms) to every 20 (10 ms), so a
+full-length run now records 201 frames instead of 41 and the early-settle
+case 49 instead of 11. Nothing else moved -- fallen ids, step counts,
+termination reasons and final timestamps are all identical, which is exactly
+what a recording-density change should look like. Recording stays passive:
+the solver was not touched.
 """
 
 # Plain dataclasses only, so deferred annotations are safe here and `X | None`
@@ -160,7 +168,7 @@ CALIBRATION_CORPUS: tuple = (
         steps_taken=4000,
         termination_reason="step_cap",
         final_t_s=2.0,
-        frame_count=41,
+        frame_count=201,
     ),
     CorpusCase(
         name="head_on",
@@ -172,7 +180,7 @@ CALIBRATION_CORPUS: tuple = (
         steps_taken=4000,
         termination_reason="step_cap",
         final_t_s=2.0,
-        frame_count=41,
+        frame_count=201,
     ),
     CorpusCase(
         name="light_hit",
@@ -190,7 +198,7 @@ CALIBRATION_CORPUS: tuple = (
         steps_taken=4000,
         termination_reason="step_cap",
         final_t_s=2.0,
-        frame_count=41,
+        frame_count=201,
     ),
     CorpusCase(
         name="brooklyn",
@@ -202,7 +210,7 @@ CALIBRATION_CORPUS: tuple = (
         steps_taken=4000,
         termination_reason="step_cap",
         final_t_s=2.0,
-        frame_count=41,
+        frame_count=201,
     ),
     CorpusCase(
         name="spare_3_6_10",
@@ -215,7 +223,7 @@ CALIBRATION_CORPUS: tuple = (
         steps_taken=4000,
         termination_reason="step_cap",
         final_t_s=2.0,
-        frame_count=41,
+        frame_count=201,
     ),
     CorpusCase(
         name="low_energy_settle",
@@ -230,7 +238,7 @@ CALIBRATION_CORPUS: tuple = (
         steps_taken=942,
         termination_reason="settled",
         final_t_s=0.471,
-        frame_count=11,
+        frame_count=49,
     ),
     CorpusCase(
         name="terminal_settle",
@@ -246,7 +254,7 @@ CALIBRATION_CORPUS: tuple = (
         steps_taken=4000,
         termination_reason="settled",
         final_t_s=2.0,
-        frame_count=41,
+        frame_count=201,
     ),
 )
 

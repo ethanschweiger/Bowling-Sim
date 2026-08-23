@@ -65,14 +65,15 @@ function fakeScheduler() {
 const DECK_DURATION_S = 2.0;
 
 function replay(): CollisionReplayResponse {
-  // A genuinely complete v2 recording: 4,000 steps x 0.0005 s = the 2 s
-  // cap, with all 41 frames on the recorder's own 0.05 s cadence. Built in
-  // full rather than sampled down to three frames, so this fixture is one
-  // `acceptReplay` would actually accept -- a sparse stand-in would quietly
-  // describe data the client is now required to reject.
+  // A genuinely complete v3 recording: 4,000 steps x 0.0005 s = the 2 s cap,
+  // with all 201 frames on the recorder's own 0.01 s cadence. Built in full
+  // rather than sampled down, so this fixture is one `acceptReplay` would
+  // actually accept -- a sparse stand-in would quietly describe data the
+  // client is required to reject.
   const frames = [];
-  for (let i = 0; i <= 40; i += 1) {
-    frames.push({ t_s: i * 0.05, bodies: [{ body_id: 0, x_in: -3 + i * 0.05, y_in: i * 0.6 }] });
+  for (let step = 0; step <= 4000; step += 20) {
+    const tS = step * 0.0005;
+    frames.push({ t_s: tS, bodies: [{ body_id: 0, x_in: -3 + tS * 0.5, y_in: tS * 6 }] });
   }
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
@@ -84,7 +85,7 @@ function replay(): CollisionReplayResponse {
     // treats both identically, since it never reads the reason.)
     termination_reason: 'step_cap',
     dt_s: 0.0005,
-    sample_every_steps: 100,
+    sample_every_steps: 20,
     steps_taken: 4000,
     frames,
   };
@@ -101,7 +102,7 @@ describe('the shared fixture', () => {
     // really reach the controller, not a shape acceptReplay would reject.
     const r = replay();
     expect(acceptReplay(r)).toBe(r);
-    expect(r.frames.length).toBe(41);
+    expect(r.frames.length).toBe(201);
   });
 });
 

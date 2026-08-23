@@ -75,7 +75,8 @@ export interface CollisionReplayResponse {
    *
    * Deliberately `string | undefined` rather than that union: this
    * describes a payload, and a payload can carry anything, including
-   * nothing at all — a v1 replay predates the field entirely. Narrowing it
+   * nothing at all — a v1 replay predates the field entirely, and an older
+   * version may not match this contract at all. Narrowing it
    * here would let a consumer read an unvalidated string as if it were one
    * of the two known values. `acceptReplay` does the narrowing, after
    * checking.

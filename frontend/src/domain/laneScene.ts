@@ -53,7 +53,7 @@ import type { PlaybackPhase } from './playbackController';
 import { easeOutCubic, interpolatePathPosition } from './trajectoryAnimation';
 
 /**
- * The v2 replay records *positions over time*, not fall events. A pin's
+ * The v3 replay records *positions over time*, not fall events. A pin's
  * `fallen` status comes from `fallen_pin_ids`, decided server-side by a
  * displacement threshold, and the frames never say at which timestamp that
  * threshold was crossed.
@@ -70,7 +70,7 @@ import { easeOutCubic, interpolatePathPosition } from './trajectoryAnimation';
  * decision, and is out of scope here.
  */
 export const FALL_TIMING_LIMITATION =
-  'v2 replay frames carry positions, not fall-event times; no fall timing is inferred here.';
+  'v3 replay frames carry positions, not fall-event times; no fall timing is inferred here.';
 
 export interface ScenePin {
   pinId: number;

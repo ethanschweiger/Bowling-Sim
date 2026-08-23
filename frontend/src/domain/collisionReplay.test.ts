@@ -14,6 +14,8 @@ import {
   replayPositionsAt,
   REPLAY_TERMINATION_REASONS,
   SUPPORTED_REPLAY_MODEL_VERSION,
+  V3_DT_S,
+  V3_SAMPLE_EVERY_STEPS,
 } from './collisionReplay';
 
 function body(body_id: number, x_in: number, y_in: number) {
@@ -21,81 +23,97 @@ function body(body_id: number, x_in: number, y_in: number) {
 }
 
 // Fixtures below obey the recorded contract the backend actually emits:
-// dt_s 0.0005, cadence every 100 steps (so on-cadence frames land on
-// multiples of 0.05 s), a first frame exactly at impact, and a final
-// frame at exactly dt_s * steps_taken. An earlier version of this file
-// used 4,000 steps ending at 0.1 s, which no real recorder could produce
-// -- and which the strengthened validator now correctly rejects.
-
-// Each fixture below carries a `termination_reason` the real solver could
-// actually have recorded alongside its step count, rather than a
-// convenient constant.
+// dt_s 0.0005, cadence every 20 steps (so on-cadence frames land on
+// multiples of 0.01 s), a first frame exactly at impact, and a final frame
+// at exactly dt_s * steps_taken.
 //
-// Only one implication constrains that pairing: stopping short of the
-// 4,000-step cap is reachable only through the settle branch, so a fixture
-// with `steps_taken < 4000` must say `settled`. The converse does NOT
-// hold -- a run whose bodies cross the velocity threshold on the final
-// permitted step records `settled` with `steps_taken === 4000` -- so at
-// the cap either reason describes a producible run. See "The reason is not
-// a function of steps_taken" in backend/app/physics/replay.py.
+// v3 raised the cadence from every 100 steps (50 ms) to every 20 (10 ms),
+// which is why these are built programmatically rather than listed by hand:
+// a full-length run is 201 frames, and a fixture that merely *looked* dense
+// enough would be exactly the sparse payload the validator must reject.
+//
+// Each fixture carries a `termination_reason` the real solver could actually
+// have recorded alongside its step count. Only one implication constrains
+// that pairing: stopping short of the 4,000-step cap is reachable only
+// through the settle branch, so a fixture with `steps_taken < 4000` must say
+// `settled`. The converse does NOT hold -- a run whose bodies cross the
+// velocity threshold on the final permitted step records `settled` with
+// `steps_taken === 4000` -- so at the cap either reason describes a
+// producible run. See "The reason is not a function of steps_taken" in
+// backend/app/physics/replay.py.
 //
 // None of this is something the client may reason from: `acceptReplay`
-// validates the reason as one of two strings and never checks it against
-// the step count. These notes are about keeping the fixtures honest.
+// validates the reason as one of two strings and never checks it against the
+// step count. These notes are about keeping the fixtures honest.
 
-/** A pocket-shaped replay: ball arriving left of center, headpin ahead.
- * 200 steps at 0.0005 s = 0.1 s, with frames on the 0.05 s cadence. */
-function pocketReplay(): CollisionReplayResponse {
+/** Every step a v3 recorder must emit a frame for: step 0, each cadence
+ * tick, and the final step when it is not itself a tick. */
+function scheduledSteps(stepsTaken: number): number[] {
+  const steps: number[] = [];
+  for (let step = 0; step <= stepsTaken; step += V3_SAMPLE_EVERY_STEPS) {
+    steps.push(step);
+  }
+  if (steps[steps.length - 1] !== stepsTaken) {
+    steps.push(stepsTaken);
+  }
+  return steps;
+}
+
+/** Builds a complete v3 replay: one frame per scheduled step, with each
+ * body placed by `positionAt` as a pure function of elapsed time. */
+function buildReplay(
+  stepsTaken: number,
+  terminationReason: 'settled' | 'step_cap',
+  bodyIds: readonly number[],
+  positionAt: (bodyId: number, tS: number) => { x_in: number; y_in: number },
+): CollisionReplayResponse {
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-    termination_reason: 'settled',
-    dt_s: 0.0005,
-    sample_every_steps: 100,
-    steps_taken: 200,
-    frames: [
-      { t_s: 0, bodies: [body(BALL_BODY_ID, -3.2, 0), body(1, 0, 0), body(3, -6, 10.392)] },
-      { t_s: 0.05, bodies: [body(BALL_BODY_ID, -3.0, 2), body(1, 0.1, 0.4), body(3, -6, 10.392)] },
-      { t_s: 0.1, bodies: [body(BALL_BODY_ID, -2.8, 4), body(1, 0.3, 1.2), body(3, -5.6, 10.8)] },
-    ],
+    termination_reason: terminationReason,
+    dt_s: V3_DT_S,
+    sample_every_steps: V3_SAMPLE_EVERY_STEPS,
+    steps_taken: stepsTaken,
+    frames: scheduledSteps(stepsTaken).map((step) => {
+      const tS = step * V3_DT_S;
+      return {
+        t_s: tS,
+        bodies: bodyIds.map((id) => {
+          const { x_in, y_in } = positionAt(id, tS);
+          return body(id, x_in, y_in);
+        }),
+      };
+    }),
   };
+}
+
+/** A pocket-shaped replay: ball arriving left of center, headpin ahead.
+ * 200 steps at 0.0005 s = 0.1 s, so 11 frames on the 0.01 s cadence. */
+function pocketReplay(): CollisionReplayResponse {
+  return buildReplay(200, 'settled', [BALL_BODY_ID, 1, 3], (id, tS) => {
+    if (id === BALL_BODY_ID) return { x_in: -3.2 + tS * 4, y_in: tS * 40 };
+    if (id === 1) return { x_in: tS * 3, y_in: tS * 12 };
+    return { x_in: -6 + tS * 4, y_in: 10.392 + tS * 4 };
+  });
 }
 
 /** A second-ball spare attempt: only the pins that were still standing.
- * 100 steps = 0.05 s, so the final frame is also the first cadence tick. */
+ * 100 steps = 0.05 s, so the final step is itself a cadence tick. */
 function partialRackReplay(): CollisionReplayResponse {
-  return {
-    model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-    termination_reason: 'settled',
-    dt_s: 0.0005,
-    sample_every_steps: 100,
-    steps_taken: 100,
-    frames: [
-      { t_s: 0, bodies: [body(BALL_BODY_ID, 5, 0), body(7, 18, 31.18), body(10, -18, 31.18)] },
-      { t_s: 0.05, bodies: [body(BALL_BODY_ID, 5.2, 3), body(7, 18, 31.18), body(10, -18, 31.18)] },
-    ],
-  };
+  return buildReplay(100, 'settled', [BALL_BODY_ID, 7, 10], (id, tS) => {
+    if (id === BALL_BODY_ID) return { x_in: 5 + tS * 4, y_in: tS * 60 };
+    if (id === 7) return { x_in: 18, y_in: 31.18 };
+    return { x_in: -18, y_in: 31.18 };
+  });
 }
 
-/** A full-length run: the solver's own 4,000-step / 2 s cap, 41 frames. */
+/** A full-length run: the solver's own 4,000-step / 2 s cap, 201 frames. */
 function fullLengthReplay(): CollisionReplayResponse {
-  const frames = [];
-  for (let i = 0; i <= 40; i += 1) {
-    frames.push({
-      t_s: i * 0.05,
-      bodies: [body(BALL_BODY_ID, -3.2 + i * 0.1, i * 4), body(1, 0, 0)],
-    });
-  }
-  return {
-    model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-    // A full-length run that never settled. `settled` at 4,000 steps would
-    // be equally producible; this fixture is the common case, not the only
-    // legal pairing.
-    termination_reason: 'step_cap',
-    dt_s: 0.0005,
-    sample_every_steps: 100,
-    steps_taken: 4000,
-    frames,
-  };
+  // A full-length run that never settled. `settled` at 4,000 steps would be
+  // equally producible; this fixture is the common case, not the only legal
+  // pairing.
+  return buildReplay(4000, 'step_cap', [BALL_BODY_ID, 1], (id, tS) =>
+    id === BALL_BODY_ID ? { x_in: -3.2 + tS * 2, y_in: tS * 80 } : { x_in: 0, y_in: 0 },
+  );
 }
 
 describe('acceptReplay', () => {
@@ -123,18 +141,19 @@ describe('acceptReplay', () => {
     expect(acceptReplay(future)).toBeNull();
   });
 
-  // --- The v2 termination contract ---------------------------------------
+  // --- The version and termination contract -------------------------------
   //
-  // v2 exists because `termination_reason` became required. These pin the
-  // three ways a payload can fail to state how its run ended -- an older
-  // version, a missing field, an unrecognized value -- since each would
-  // otherwise leave the client silently guessing.
+  // v2 introduced the required `termination_reason`; v3 additionally moved
+  // the sampling cadence to every 20 steps. These pin the ways a payload can
+  // fail to be this contract -- an older version, a missing reason, an
+  // unrecognized value, or v2's sparser schedule -- since each would
+  // otherwise leave the client guessing or interpolating over gaps.
 
-  it('is pinned to the v2 model version', () => {
+  it('is pinned to the v3 model version', () => {
     // The literal string, not the constant: every other assertion in this
     // file follows a bump automatically, so without this one a version
     // change would pass unnoticed on both sides of the contract.
-    expect(SUPPORTED_REPLAY_MODEL_VERSION).toBe('planar-collision-replay-2d-v2');
+    expect(SUPPORTED_REPLAY_MODEL_VERSION).toBe('planar-collision-replay-2d-v3');
   });
 
   it('refuses a v1 payload rather than assuming how its run ended', () => {
@@ -150,7 +169,93 @@ describe('acceptReplay', () => {
     expect(acceptReplay(withoutReason as CollisionReplayResponse)).toBeNull();
   });
 
-  it('refuses a v2 payload with no termination reason', () => {
+  it('refuses a genuine v2 payload — right shape, wrong contract', () => {
+    // A well-formed v2 recording: correct version string for v2, its own
+    // 100-step cadence, and a complete schedule *for that cadence*. It is
+    // perfectly good data and still must not play, because v3 validates a
+    // different schedule and interpolating across v2's wider gaps is exactly
+    // the visible-latency problem the bump exists to fix.
+    const v2Frames = [];
+    for (let step = 0; step <= 4000; step += 100) {
+      v2Frames.push({
+        t_s: step * 0.0005,
+        bodies: [body(BALL_BODY_ID, -3.2 + step * 0.001, step * 0.04)],
+      });
+    }
+    const v2: CollisionReplayResponse = {
+      model_version: 'planar-collision-replay-2d-v2',
+      termination_reason: 'step_cap',
+      dt_s: 0.0005,
+      sample_every_steps: 100,
+      steps_taken: 4000,
+      frames: v2Frames,
+    };
+
+    expect(v2Frames.length).toBe(41); // a complete v2 schedule, not a stub
+    expect(acceptReplay(v2)).toBeNull();
+
+    // And relabelling it v3 does not rescue it: the cadence and the frame
+    // count are both still v2's.
+    expect(acceptReplay({ ...v2, model_version: SUPPORTED_REPLAY_MODEL_VERSION })).toBeNull();
+  });
+
+  it('refuses a v3-labelled payload carrying only the old 50 ms samples', () => {
+    // The sparse case stated precisely: correct version, correct cadence
+    // metadata, but only every fifth scheduled frame present.
+    const dense = fullLengthReplay();
+    const sparse = {
+      ...dense,
+      frames: dense.frames.filter((_frame, index) => index % 5 === 0),
+    };
+
+    expect(sparse.frames.length).toBe(41);
+    expect(acceptReplay(sparse)).toBeNull();
+  });
+
+  it('refuses a v3 payload missing a single interior frame', () => {
+    const dense = fullLengthReplay();
+    const missingOne = {
+      ...dense,
+      frames: dense.frames.filter((_frame, index) => index !== 100),
+    };
+
+    expect(missingOne.frames.length).toBe(200);
+    expect(acceptReplay(missingOne)).toBeNull();
+  });
+
+  it('refuses a v3 payload with one extra frame the recorder would not emit', () => {
+    const dense = fullLengthReplay();
+    const extra = {
+      ...dense,
+      frames: [
+        ...dense.frames.slice(0, 100),
+        { t_s: 100 * V3_SAMPLE_EVERY_STEPS * V3_DT_S + V3_DT_S, bodies: dense.frames[100].bodies },
+        ...dense.frames.slice(100),
+      ],
+    };
+
+    expect(extra.frames.length).toBe(202);
+    expect(acceptReplay(extra)).toBeNull();
+  });
+
+  it('refuses a v3 payload whose frame bodies are malformed', () => {
+    const missingBody = fullLengthReplay();
+    missingBody.frames[50] = { t_s: missingBody.frames[50].t_s, bodies: [] };
+    expect(acceptReplay(missingBody)).toBeNull();
+
+    const wrongMembership = fullLengthReplay();
+    wrongMembership.frames[50] = {
+      t_s: wrongMembership.frames[50].t_s,
+      bodies: [body(BALL_BODY_ID, 0, 0), body(9, 0, 0)],
+    };
+    expect(acceptReplay(wrongMembership)).toBeNull();
+
+    const notFinite = fullLengthReplay();
+    notFinite.frames[50].bodies[0].x_in = Number.NaN;
+    expect(acceptReplay(notFinite)).toBeNull();
+  });
+
+  it('refuses a payload with no termination reason', () => {
     const { termination_reason: _omitted, ...missing } = pocketReplay();
     expect(acceptReplay(missing as CollisionReplayResponse)).toBeNull();
   });
@@ -235,7 +340,11 @@ describe('acceptReplay', () => {
   it('accepts a full-length run at the solver caps', () => {
     const replay = fullLengthReplay();
     expect(acceptReplay(replay)).toBe(replay);
-    expect(replay.frames.length).toBe(MAX_ACCEPTED_REPLAY_FRAMES - 23);
+    // Derived, not a magic number: 4000 / 20 + 1 = 201 scheduled frames,
+    // comfortably inside the 256 cap.
+    expect(replay.frames.length).toBe(MAX_ACCEPTED_STEPS / V3_SAMPLE_EVERY_STEPS + 1);
+    expect(replay.frames.length).toBe(201);
+    expect(replay.frames.length).toBeLessThanOrEqual(MAX_ACCEPTED_REPLAY_FRAMES);
     expect(replay.steps_taken).toBe(MAX_ACCEPTED_STEPS);
   });
 
@@ -283,7 +392,7 @@ describe('acceptReplay', () => {
     expect(acceptReplay(shuffled)).toBeNull();
   });
 
-  it('refuses an altered fixed v1 timestep or sample stride', () => {
+  it('refuses an altered fixed v3 timestep or sample stride', () => {
     // dt_s and sample_every_steps are constants of this model version, not
     // payload-chosen values. Letting a payload pick them would let it
     // define a cadence that makes any sparse frame list look valid.
@@ -292,28 +401,30 @@ describe('acceptReplay', () => {
     expect(acceptReplay(otherDt)).toBeNull();
 
     const otherStride = fullLengthReplay();
-    otherStride.sample_every_steps = 200;
+    otherStride.sample_every_steps = 100; // v2's cadence -- valid data, wrong contract
     expect(acceptReplay(otherStride)).toBeNull();
   });
 
   it('accepts a run whose final step is not itself a cadence tick', () => {
-    // 250 steps -> ticks at 0, 100, 200, plus a terminal frame at 250.
-    const frames = [0, 100, 200, 250].map((step) => ({
-      t_s: step * 0.0005,
-      bodies: [body(BALL_BODY_ID, -3 + step / 100, step / 50)],
+    // 250 steps at the v3 cadence -> ticks at 0, 20, ... 240, plus one
+    // terminal frame at 250. Stopping there means the settle branch fired,
+    // which is the shape a real low-energy run produces: settling usually
+    // lands on an arbitrary step rather than a cadence tick. (Not always —
+    // a crossing on step 4,000 settles exactly on one.)
+    const nonCadenceTerminal = buildReplay(250, 'settled', [BALL_BODY_ID], (_id, tS) => ({
+      x_in: -3 + tS * 20,
+      y_in: tS * 40,
     }));
-    const nonCadenceTerminal: CollisionReplayResponse = {
-      model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-      // Stopping at step 250 means the settle branch fired, and this is
-      // the shape a real low-energy run produces: settling usually lands
-      // on an arbitrary step rather than a cadence tick. (Not always — a
-      // crossing on step 4,000 settles exactly on one.)
-      termination_reason: 'settled',
-      dt_s: 0.0005,
-      sample_every_steps: 100,
-      steps_taken: 250,
-      frames,
-    };
+
+    // Ticks 0, 20, ... 240 is 13 frames; the terminal frame at 250 makes 14.
+    expect(nonCadenceTerminal.frames.length).toBe(
+      Math.floor(250 / V3_SAMPLE_EVERY_STEPS) + 1 + 1,
+    );
+    expect(nonCadenceTerminal.frames.length).toBe(14);
+    expect(nonCadenceTerminal.frames[nonCadenceTerminal.frames.length - 1].t_s).toBeCloseTo(
+      250 * V3_DT_S,
+      12,
+    );
     expect(acceptReplay(nonCadenceTerminal)).toBe(nonCadenceTerminal);
   });
 
@@ -571,16 +682,21 @@ describe('replayPositionsAt', () => {
   });
 
   it('only ever interpolates between two adjacent required samples', () => {
-    // With the complete schedule enforced, every pair of neighbouring
-    // frames is 0.05 s apart, so an interpolated point can never span more
-    // than one recorder interval -- there is no omitted frame to bridge.
+    // With the complete schedule enforced, every pair of neighbouring frames
+    // is one v3 cadence interval (0.01 s) apart, so an interpolated point can
+    // never span more than one recorder interval -- there is no omitted frame
+    // to bridge. That interval is five times shorter than v2's, which is the
+    // whole point of the version bump.
+    const cadenceS = V3_SAMPLE_EVERY_STEPS * V3_DT_S;
+    expect(cadenceS).toBeCloseTo(0.01, 12);
+
     const replay = fullLengthReplay();
     expect(acceptReplay(replay)).toBe(replay);
     for (let i = 1; i < replay.frames.length; i += 1) {
-      expect(replay.frames[i].t_s - replay.frames[i - 1].t_s).toBeCloseTo(0.05, 9);
+      expect(replay.frames[i].t_s - replay.frames[i - 1].t_s).toBeCloseTo(cadenceS, 9);
     }
     // A sample midway between two adjacent frames stays inside that pair.
-    const mid = replayPositionsAt(replay, 0.075);
+    const mid = replayPositionsAt(replay, cadenceS * 1.5);
     const lower = replay.frames[1].bodies[0];
     const upper = replay.frames[2].bodies[0];
     const ball = mid.find((b) => b.bodyId === BALL_BODY_ID)!;
@@ -601,9 +717,10 @@ describe('replayPositionsAt', () => {
 describe('replayDistanceExtentFt', () => {
   it('reports both ends of the recorded downlane span', () => {
     const extent = replayDistanceExtentFt(pocketReplay());
-    // Smallest y_in is 0 (impact plane), largest is 10.8.
+    // Smallest y_in is 0 (the ball on the impact plane at t=0); largest is
+    // pin 3 at the final frame, 10.392 + 0.1 s * 4 in/s = 10.792 in.
     expect(extent.minFt).toBeCloseTo(60, 10);
-    expect(extent.maxFt).toBeCloseTo(60 + 10.8 / 12, 10);
+    expect(extent.maxFt).toBeCloseTo(60 + 10.792 / 12, 10);
   });
 
   it('reports a negative-y body behind the headpin plane', () => {
@@ -627,8 +744,8 @@ describe('replayDistanceExtentFt', () => {
 
 describe('replayMaxDistanceFt', () => {
   it('reports the furthest downlane position any body reaches', () => {
-    // pocketReplay's largest y_in is 10.8 (pin 3 in the last frame).
-    expect(replayMaxDistanceFt(pocketReplay())).toBeCloseTo(60 + 10.8 / 12, 10);
+    // pocketReplay's largest y_in is 10.792 (pin 3 in the last frame).
+    expect(replayMaxDistanceFt(pocketReplay())).toBeCloseTo(60 + 10.792 / 12, 10);
   });
 
   it('accounts for bodies that travel well past the pin deck', () => {

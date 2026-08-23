@@ -445,12 +445,12 @@ def test_a_run_that_never_happened_has_no_reason_to_report():
 # --- The published version names these semantics -------------------------
 
 
-def test_the_model_version_is_pinned_to_v2():
+def test_the_model_version_is_pinned_to_v3():
     # Deliberately the literal string, not the imported constant: the other
     # assertions in this file follow a bump automatically, so without this
     # one a version change -- the very thing that tells consumers the
     # meaning of the payload moved -- would pass unnoticed.
-    assert REPLAY_MODEL_VERSION == "planar-collision-replay-2d-v2"
+    assert REPLAY_MODEL_VERSION == "planar-collision-replay-2d-v3"
 
 
 def test_the_domain_and_the_api_allow_exactly_the_same_reasons():
@@ -462,3 +462,124 @@ def test_the_domain_and_the_api_allow_exactly_the_same_reasons():
 
     assert set(api_reasons) == set(TERMINATION_REASONS)
     assert set(TERMINATION_REASONS) == {"settled", "step_cap"}
+
+
+# --- The v3 sampling cadence ---------------------------------------------
+#
+# v3 records every 20 solver steps rather than every 100: at
+# COLLISION_DT_S = 0.0005 s that is one frame per 10 ms (100 Hz) instead of
+# per 50 ms (20 Hz). The point is visible latency, not physics -- at the
+# fastest legal release a ball covers roughly 22 in between 50 ms samples, so
+# an impulse the solver had already resolved could not appear until up to a
+# whole interval later. Nothing about the run itself changes; only how finely
+# it is recorded.
+
+
+def _expected_schedule(steps_taken: int) -> list:
+    """Every step the recorder must emit a frame for: step 0, each cadence
+    tick, and the final step when it is not itself a tick."""
+    schedule = list(range(0, steps_taken + 1, REPLAY_SAMPLE_EVERY_STEPS))
+    if schedule[-1] != steps_taken:
+        schedule.append(steps_taken)
+    return schedule
+
+
+def test_the_cadence_is_ten_milliseconds():
+    assert REPLAY_SAMPLE_EVERY_STEPS == 20
+    assert REPLAY_SAMPLE_EVERY_STEPS * COLLISION_DT_S == pytest.approx(0.01)
+
+
+def test_the_frame_cap_can_contain_a_full_length_run():
+    # 4000 / 20 + 1 = 201 scheduled frames; the cap must clear that with
+    # room, and must stay a fixed documented bound rather than an open one.
+    full_run_frames = MAX_COLLISION_STEPS // REPLAY_SAMPLE_EVERY_STEPS + 1
+
+    assert full_run_frames == 201
+    assert MAX_REPLAY_FRAMES == 256
+    assert MAX_REPLAY_FRAMES > full_run_frames
+
+
+def test_an_on_cadence_terminal_step_emits_exactly_the_schedule():
+    # A normal contact run exhausts the cap at step 4000, which is itself a
+    # multiple of 20 -- so the terminal frame *is* a cadence frame and no
+    # extra one may be appended.
+    run = _simulate_collision_detail(POCKET, record_replay=True)
+    replay = run.replay
+    schedule = _expected_schedule(run.steps_taken)
+
+    assert run.steps_taken == MAX_COLLISION_STEPS
+    assert run.steps_taken % REPLAY_SAMPLE_EVERY_STEPS == 0
+    assert len(replay.frames) == 201
+    assert len(replay.frames) == len(schedule)
+    for index, step in enumerate(schedule):
+        assert replay.frames[index].t_s == pytest.approx(step * COLLISION_DT_S, abs=1e-12)
+
+
+def test_an_off_cadence_terminal_step_appends_exactly_one_extra_frame():
+    # The early-settle case stops at an arbitrary step, so the run's true end
+    # is not a cadence tick and one terminal frame is appended for it.
+    run = _simulate_collision_detail(LOW_ENERGY, record_replay=True)
+    replay = run.replay
+    schedule = _expected_schedule(run.steps_taken)
+
+    assert run.steps_taken % REPLAY_SAMPLE_EVERY_STEPS != 0
+    assert len(replay.frames) == len(schedule)
+    # Exactly one, not two: the appended frame must not duplicate the last
+    # cadence tick.
+    assert replay.frames[-1].t_s == pytest.approx(run.steps_taken * COLLISION_DT_S)
+    assert replay.frames[-2].t_s < replay.frames[-1].t_s
+    assert len({frame.t_s for frame in replay.frames}) == len(replay.frames)
+
+
+@pytest.mark.parametrize(
+    "label,impact,standing_ids",
+    [
+        ("pocket", POCKET, None),
+        ("brooklyn", BROOKLYN, None),
+        ("partial rack", POCKET, {3, 6, 10}),
+        ("early settle", LOW_ENERGY, None),
+    ],
+)
+def test_every_v3_run_matches_its_derived_schedule(label, impact, standing_ids):
+    run = _simulate_collision_detail(impact, standing_ids=standing_ids, record_replay=True)
+    replay = run.replay
+    schedule = _expected_schedule(run.steps_taken)
+
+    assert len(replay.frames) == len(schedule), label
+    assert len(replay.frames) <= MAX_REPLAY_FRAMES, label
+    for index, step in enumerate(schedule):
+        assert replay.frames[index].t_s == pytest.approx(step * COLLISION_DT_S, abs=1e-12), label
+
+    expected_ids = [BALL_BODY_ID] + sorted(
+        standing_ids if standing_ids is not None else range(1, 11)
+    )
+    for frame in replay.frames:
+        assert [body.body_id for body in frame.bodies] == expected_ids, label
+        for body in frame.bodies:
+            assert abs(body.x_in) < 500.0, label
+            assert abs(body.y_in) < 500.0, label
+
+
+def test_the_denser_cadence_leaves_the_run_itself_untouched():
+    # The whole safety claim of a recording-density change: same fallen ids,
+    # same step count, same termination, recorded or not.
+    for impact, standing_ids in ((POCKET, None), (BROOKLYN, {3, 6, 10}), (LOW_ENERGY, None)):
+        plain = simulate_collision(impact, standing_ids=standing_ids)
+        recorded = _simulate_collision_detail(
+            impact, standing_ids=standing_ids, record_replay=True
+        )
+
+        assert recorded.fallen_pin_ids == plain[0]
+        assert recorded.steps_taken == plain[1]
+
+
+def test_a_fixed_release_replays_byte_identically_at_the_new_cadence():
+    first = _simulate_collision_detail(POCKET, standing_ids={1, 3, 5}, record_replay=True)
+    second = _simulate_collision_detail(POCKET, standing_ids={1, 3, 5}, record_replay=True)
+
+    # Frozen dataclasses throughout, so this compares all 201 frames body by
+    # body and coordinate by coordinate.
+    assert first.replay == second.replay
+    assert len(first.replay.frames) == 201
+    assert first.fallen_pin_ids == second.fallen_pin_ids
+    assert first.steps_taken == second.steps_taken

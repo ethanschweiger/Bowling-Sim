@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { CollisionReplayResponse, TrajectoryPointResponse } from '../api/types';
-import { acceptReplay, BALL_BODY_ID, SUPPORTED_REPLAY_MODEL_VERSION } from './collisionReplay';
+import {
+  acceptReplay,
+  BALL_BODY_ID,
+  SUPPORTED_REPLAY_MODEL_VERSION,
+  V3_DT_S,
+  V3_SAMPLE_EVERY_STEPS,
+} from './collisionReplay';
 import { buildLaneScene, type LaneScene } from './laneScene';
 import { phaseAt, SETTLED, TERMINAL_HOLD_MS } from './playbackController';
 import { TRAJECTORY_ANIMATION_DURATION_MS } from './trajectoryAnimation';
@@ -17,52 +23,61 @@ import { TRAJECTORY_ANIMATION_DURATION_MS } from './trajectoryAnimation';
 
 const DECK_DURATION_S = 2.0;
 
-/** A full-rack replay: ball plus pins 1, 3 and 10, all moving. */
-function fullRackReplay(): CollisionReplayResponse {
-  const frames = [];
-  for (let i = 0; i <= 40; i += 1) {
-    frames.push({
-      t_s: i * 0.05,
-      bodies: [
-        { body_id: BALL_BODY_ID, x_in: -3 + i * 0.05, y_in: i * 0.6 },
-        { body_id: 1, x_in: 0 + i * 0.2, y_in: 0 + i * 0.4 },
-        { body_id: 3, x_in: -6 - i * 0.1, y_in: 10.392 + i * 0.3 },
-        { body_id: 10, x_in: -18, y_in: 31.176 },
-      ],
-    });
+/** Every step a v3 recorder must emit a frame for. */
+function scheduledSteps(stepsTaken: number): number[] {
+  const steps: number[] = [];
+  for (let step = 0; step <= stepsTaken; step += V3_SAMPLE_EVERY_STEPS) {
+    steps.push(step);
   }
+  if (steps[steps.length - 1] !== stepsTaken) {
+    steps.push(stepsTaken);
+  }
+  return steps;
+}
+
+/** A complete v3 replay: one frame per scheduled step, bodies placed by a
+ * pure function of elapsed time. Built rather than listed because a
+ * full-length run at the 10 ms cadence is 201 frames. */
+function buildReplay(
+  stepsTaken: number,
+  bodyIds: readonly number[],
+  positionAt: (bodyId: number, tS: number) => { x_in: number; y_in: number },
+): CollisionReplayResponse {
   return {
     model_version: SUPPORTED_REPLAY_MODEL_VERSION,
     termination_reason: 'step_cap',
-    dt_s: 0.0005,
-    sample_every_steps: 100,
-    steps_taken: 4000,
-    frames,
+    dt_s: V3_DT_S,
+    sample_every_steps: V3_SAMPLE_EVERY_STEPS,
+    steps_taken: stepsTaken,
+    frames: scheduledSteps(stepsTaken).map((step) => {
+      const tS = step * V3_DT_S;
+      return {
+        t_s: tS,
+        bodies: bodyIds.map((body_id) => ({ body_id, ...positionAt(body_id, tS) })),
+      };
+    }),
   };
+}
+
+/** A full-rack replay: ball plus pins 1, 3 and 10. Pin 10 never moves, so a
+ * test can assert nothing invents motion the server did not record. */
+function fullRackReplay(): CollisionReplayResponse {
+  return buildReplay(4000, [BALL_BODY_ID, 1, 3, 10], (id, tS) => {
+    if (id === BALL_BODY_ID) return { x_in: -3 + tS * 0.5, y_in: tS * 6 };
+    if (id === 1) return { x_in: tS * 2, y_in: tS * 4 };
+    if (id === 3) return { x_in: -6 - tS, y_in: 10.392 + tS * 3 };
+    return { x_in: -18, y_in: 31.176 };
+  });
 }
 
 /** A second ball: only the three pins that were still standing. */
 function partialRackReplay(): CollisionReplayResponse {
-  const frames = [];
-  for (let i = 0; i <= 40; i += 1) {
-    frames.push({
-      t_s: i * 0.05,
-      bodies: [
-        { body_id: BALL_BODY_ID, x_in: 5 + i * 0.05, y_in: i * 0.6 },
-        { body_id: 2, x_in: 6, y_in: 10.392 },
-        { body_id: 4, x_in: 12 + i * 0.1, y_in: 20.784 + i * 0.2 },
-        { body_id: 7, x_in: 18, y_in: 31.176 },
-      ],
-    });
-  }
-  return {
-    model_version: SUPPORTED_REPLAY_MODEL_VERSION,
-    termination_reason: 'step_cap',
-    dt_s: 0.0005,
-    sample_every_steps: 100,
-    steps_taken: 4000,
-    frames,
-  };
+  return buildReplay(4000, [BALL_BODY_ID, 2, 4, 7], (id, tS) => {
+    if (id === BALL_BODY_ID) return { x_in: 5 + tS * 0.5, y_in: tS * 6 };
+    if (id === 2) return { x_in: 6, y_in: 10.392 };
+    if (id === 4) return { x_in: 12 + tS, y_in: 20.784 + tS * 2 };
+    return { x_in: 18, y_in: 31.176 };
+  });
 }
 
 const PATH: readonly TrajectoryPointResponse[] = [

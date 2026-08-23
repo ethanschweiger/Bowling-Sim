@@ -218,24 +218,24 @@ def test_heuristic_model_maps_to_a_null_replay():
 # --- Termination is published, on both routes ----------------------------
 
 
-def test_game_throw_publishes_the_v2_model_and_a_valid_termination_reason():
+def test_game_throw_publishes_the_v3_model_and_a_valid_termination_reason():
     replay = _throw(_create_game())["pinfall"]["replay"]
 
     # The literal string, not the constant: a consumer keys its firewall off
     # this exact value, so the response must be pinned independently of
     # whatever the backend currently defines.
-    assert replay["model_version"] == "planar-collision-replay-2d-v2"
+    assert replay["model_version"] == "planar-collision-replay-2d-v3"
     assert replay["termination_reason"] in ("settled", "step_cap")
 
 
-def test_legacy_route_publishes_the_same_v2_termination_contract():
+def test_legacy_route_publishes_the_same_v3_termination_contract():
     client.post("/api/v1/games/legacy-default/reset")
 
     response = client.post("/api/v1/simulations/throws", json=THROW_PAYLOAD)
     assert response.status_code == 200
     replay = response.json()["pinfall"]["replay"]
 
-    assert replay["model_version"] == "planar-collision-replay-2d-v2"
+    assert replay["model_version"] == "planar-collision-replay-2d-v3"
     assert replay["termination_reason"] in ("settled", "step_cap")
 
 
@@ -299,3 +299,97 @@ def test_the_response_model_refuses_an_unknown_or_missing_reason():
 
     with pytest.raises(ValidationError):
         CollisionReplayResponse(**{k: v for k, v in valid.items() if k != "termination_reason"})
+
+
+# --- The v3 cadence survives serialization, on both routes ---------------
+
+
+def _expected_frame_count(steps_taken, sample_every_steps):
+    schedule = list(range(0, steps_taken + 1, sample_every_steps))
+    if schedule[-1] != steps_taken:
+        schedule.append(steps_taken)
+    return len(schedule)
+
+
+def test_game_throw_serializes_the_full_v3_schedule():
+    replay = _throw(_create_game())["pinfall"]["replay"]
+
+    assert replay["model_version"] == "planar-collision-replay-2d-v3"
+    assert replay["sample_every_steps"] == 20
+    assert replay["dt_s"] * replay["sample_every_steps"] == pytest.approx(0.01)
+    # A normal seeded throw runs the full cap, so it carries every one of
+    # the 201 scheduled frames -- none dropped in serialization.
+    assert replay["steps_taken"] == MAX_COLLISION_STEPS
+    assert len(replay["frames"]) == 201
+    assert len(replay["frames"]) <= MAX_REPLAY_FRAMES
+
+    times = [frame["t_s"] for frame in replay["frames"]]
+    assert times[0] == 0.0
+    assert times == sorted(times)
+    assert len(set(times)) == len(times)
+    for index, time in enumerate(times):
+        assert time == pytest.approx(index * 20 * replay["dt_s"], abs=1e-9)
+
+
+def test_legacy_route_serializes_the_same_v3_schedule():
+    client.post("/api/v1/games/legacy-default/reset")
+
+    response = client.post("/api/v1/simulations/throws", json=THROW_PAYLOAD)
+    assert response.status_code == 200
+    replay = response.json()["pinfall"]["replay"]
+
+    assert replay["model_version"] == "planar-collision-replay-2d-v3"
+    assert replay["sample_every_steps"] == 20
+    assert len(replay["frames"]) == 201
+    assert len(replay["frames"]) == _expected_frame_count(
+        replay["steps_taken"], replay["sample_every_steps"]
+    )
+
+
+def test_serialized_v3_bodies_stay_bounded_and_stable_across_every_frame():
+    replay = _throw(_create_game())["pinfall"]["replay"]
+    first_ids = [body["body_id"] for body in replay["frames"][0]["bodies"]]
+
+    assert first_ids == sorted(first_ids)
+    assert first_ids[0] == BALL_BODY_ID
+    for frame in replay["frames"]:
+        assert [body["body_id"] for body in frame["bodies"]] == first_ids
+        for body in frame["bodies"]:
+            # JSON has no NaN/Infinity literal, so serialization would have
+            # failed outright on a non-finite value; this pins magnitude.
+            assert abs(body["x_in"]) < 500.0
+            assert abs(body["y_in"]) < 500.0
+
+
+def test_the_serialized_replay_matches_the_domain_run_frame_for_frame():
+    # Denser sampling is only useful if it survives the mapping intact, so
+    # compare every published frame against the solver's own.
+    from app.api.routes.games import pinfall_to_response
+    from app.physics.collision import DEFAULT_PINFALL_MODEL
+    from app.physics.impact import ImpactState
+
+    impact = ImpactState(
+        lateral_position_in=-2.6,
+        heading_deg=1.4,
+        speed_mph=17.0,
+        ball_mass_lbs=15.0,
+        ball_radius_in=4.29,
+        lane_condition_version=1,
+    )
+    result = DEFAULT_PINFALL_MODEL.resolve(impact)
+    mapped = pinfall_to_response(result)
+
+    assert mapped.replay is not None
+    assert len(mapped.replay.frames) == len(result.replay.frames) == 201
+    # Indexed rather than zipped: `zip(strict=)` needs Python 3.10 and this
+    # project's floor is 3.9, and the lengths are already asserted equal
+    # above, so pairing by index is exact rather than merely truncating.
+    for index in range(len(result.replay.frames)):
+        published = mapped.replay.frames[index]
+        recorded = result.replay.frames[index]
+
+        assert published.t_s == recorded.t_s
+        assert [b.body_id for b in published.bodies] == [b.body_id for b in recorded.bodies]
+        for body_index in range(len(recorded.bodies)):
+            assert published.bodies[body_index].x_in == recorded.bodies[body_index].x_in
+            assert published.bodies[body_index].y_in == recorded.bodies[body_index].y_in

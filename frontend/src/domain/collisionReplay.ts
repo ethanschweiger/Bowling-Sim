@@ -55,13 +55,20 @@ import type { CollisionReplayResponse, ReplayFrameResponse } from '../api/types'
 /** The one replay shape this client understands. Must match
  * `REPLAY_MODEL_VERSION` in `backend/app/physics/replay.py`.
  *
- * v1 is deliberately *not* also accepted. v2 added `termination_reason` as
- * a required field, and no v1 payload can be upgraded to it: v1 recorded
- * no distinction between the solver's two exits, so every v1 replay is
- * genuinely ambiguous. Assuming a value would be inventing the very fact
- * the field exists to state. A v1 payload therefore falls back to the
- * static server rack, like any other unknown version. */
-export const SUPPORTED_REPLAY_MODEL_VERSION = 'planar-collision-replay-2d-v2';
+ * Earlier versions are deliberately *not* also accepted, for reasons that
+ * differ but land the same way:
+ *
+ * - v1 carried no `termination_reason`, so every v1 replay is genuinely
+ *   ambiguous between the solver's two exits. Supplying a value on its
+ *   behalf would invent the very fact the field exists to state.
+ * - v2 sampled every 100 solver steps rather than every 20. Since the
+ *   *complete frame schedule* is derived from the cadence and checked
+ *   exactly, a v2 payload does not merely look sparse — it fails to be the
+ *   contract this client validates against.
+ *
+ * Both fall back to the static server rack, like any other unknown
+ * version. Nothing is reinterpreted. */
+export const SUPPORTED_REPLAY_MODEL_VERSION = 'planar-collision-replay-2d-v3';
 
 /**
  * How the recorded run ended. Mirrors `TerminationReason` in
@@ -116,16 +123,24 @@ function isTerminationReason(value: unknown): value is ReplayTerminationReason {
 
 /** `COLLISION_DT_S` in backend/app/physics/collision.py — fixed for this
  * model version, not a free parameter a payload may choose. */
-export const V2_DT_S = 0.0005;
+export const V3_DT_S = 0.0005;
 /** `REPLAY_SAMPLE_EVERY_STEPS` in backend/app/physics/replay.py — likewise
- * fixed for v2. Together with `V2_DT_S` these pin down the exact set of
- * frames a genuine v2 recording contains. Both values are unchanged from
- * v1: the version bump is about the added `termination_reason`, not about
- * any change to the cadence or the numbers a run produces. */
-export const V2_SAMPLE_EVERY_STEPS = 100;
+ * fixed for v3. Together with `V3_DT_S` these pin down the exact set of
+ * frames a genuine v3 recording contains.
+ *
+ * 20 steps at 0.0005 s is one frame per 10 ms (100 Hz), five times denser
+ * than v2's 100 steps / 50 ms. That is what the version bump is for: the
+ * complete schedule is validated, so the cadence is part of the contract
+ * rather than a server-side detail. Denser sampling shortens how long a
+ * resolved impulse can go unseen — about 4.4 in of ball travel at the
+ * fastest legal release, against roughly 22 in at v2's cadence. It records
+ * the same run more finely; it does not change the run. */
+export const V3_SAMPLE_EVERY_STEPS = 20;
 
-/** `MAX_REPLAY_FRAMES` in the backend recorder. */
-export const MAX_ACCEPTED_REPLAY_FRAMES = 64;
+/** `MAX_REPLAY_FRAMES` in the backend recorder. A full-length run is
+ * 4000 / 20 + 1 = 201 frames, so this bound clears it with headroom while
+ * staying small and fixed. */
+export const MAX_ACCEPTED_REPLAY_FRAMES = 256;
 /** `MAX_COLLISION_STEPS` — the solver's own iteration cap. */
 export const MAX_ACCEPTED_STEPS = 4000;
 /** `MAX_COLLISION_SECONDS` — the solver stops here at the latest, even if
@@ -218,11 +233,11 @@ export function acceptReplay(
   if (!isFiniteNumber(replay.dt_s) || replay.dt_s <= 0) {
     return null;
   }
-  // v2's cadence and timestep are fixed constants, not payload-chosen
+  // v3's cadence and timestep are fixed constants, not payload-chosen
   // values. Pinning them is what makes the *complete* frame schedule below
   // derivable — without it, a payload could pick a stride that makes any
   // sparse frame list look "on cadence".
-  if (replay.dt_s !== V2_DT_S || replay.sample_every_steps !== V2_SAMPLE_EVERY_STEPS) {
+  if (replay.dt_s !== V3_DT_S || replay.sample_every_steps !== V3_SAMPLE_EVERY_STEPS) {
     return null;
   }
   if (!isPositiveSafeInteger(replay.steps_taken) || replay.steps_taken > MAX_ACCEPTED_STEPS) {
@@ -248,7 +263,7 @@ export function acceptReplay(
   // being accepted and then having two seconds of collision motion
   // invented by interpolating across the frames it omitted.
   const expectedSteps: number[] = [];
-  for (let step = 0; step <= replay.steps_taken; step += V2_SAMPLE_EVERY_STEPS) {
+  for (let step = 0; step <= replay.steps_taken; step += V3_SAMPLE_EVERY_STEPS) {
     expectedSteps.push(step);
   }
   if (expectedSteps[expectedSteps.length - 1] !== replay.steps_taken) {
@@ -269,7 +284,7 @@ export function acceptReplay(
     }
     // Each frame must sit at its own scheduled step — computed from the
     // integer step index, so float drift never accumulates across frames.
-    const expectedT = expectedSteps[index] * V2_DT_S;
+    const expectedT = expectedSteps[index] * V3_DT_S;
     if (Math.abs(frame.t_s - expectedT) > TIME_TOLERANCE_S) {
       return null;
     }

@@ -21,7 +21,7 @@
  *   second on screen. Unlike the path phase this *is* a real timing
  *   relationship, because the replay carries real timestamps.
  *
- * A throw with no playable replay (gutter, heuristic model, unknown or v1
+ * A throw with no playable replay (gutter, heuristic model, an older or unknown
  * version, missing termination reason) simply has no deck phase; the
  * sequence ends settled after the path, exactly as it did before replays
  * existed.
@@ -39,7 +39,7 @@ const MS_PER_S = 1000;
  *
  * A **presentation** interval, not a physical one. The solver's last frame
  * often arrives with bodies still moving (`termination_reason: 'step_cap'`),
- * and v2 frames carry no fall-event time, so the moment a pin "goes down"
+ * and v3 frames carry no fall-event time, so the moment a pin "goes down"
  * is never something playback can show. What the hold does is keep the last
  * authoritative positions on screen long enough to read before the static
  * standing/fallen rack replaces them — without it, the recorded result and
