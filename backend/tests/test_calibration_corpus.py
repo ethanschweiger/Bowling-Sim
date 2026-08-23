@@ -473,70 +473,113 @@ def test_the_boundary_case_really_straddles_the_final_step():
 # module attribute at teardown whether the test passes or fails — the
 # production constant is never edited.
 
-# Two boundaries bracket the current 2.383 in threshold, each set by one
-# pin's final displacement:
+# Two displacements bracket the current 2.383 in threshold, one just below
+# and one just above:
 #
-#   0.547127 in  light_hit pin 1 -- moved but standing; the LOWER boundary
-#   2.383    in  the production threshold
-#   2.979317 in  brooklyn  pin 1 -- falls, but only just; the UPPER boundary
+#   d_light     light_hit pin 1 -- moved but standing
+#   2.383 in    the production threshold
+#   d_brooklyn  brooklyn  pin 1 -- falls, but only just
 #
-# Between them no corpus outcome changes. Crossing either reclassifies
-# exactly one pin in exactly one case. The lower boundary is read from the
-# replay at runtime rather than written down, so it cannot drift from the
-# fixture it describes; the upper one is expressed as multipliers of the real
-# constant for the same reason.
-BROOKLYN_PIN_ONE_DISPLACEMENT_IN = 2.979317
-FALL_THRESHOLD_JUST_BELOW = 1.2502
-FALL_THRESHOLD_JUST_ABOVE = 1.2503
+# Both are *derived from the recorded replay at runtime*, never written down.
+# That matters more than convenience: a decimal literal is a different number
+# from the float it approximates, and probing an inequality with the
+# approximation tests a threshold the model never has. An earlier version of
+# the calibration note printed rounded endpoints as if they were exact and
+# was wrong in the gap between the two — 0.5471272762 is above the printed
+# lower endpoint yet still below the real one, so the light hit's headpin
+# still falls there.
+#
+# Everything asserted below is therefore *local*: what happens exactly at a
+# derived boundary, and at the single adjacent representable float. Larger
+# threshold changes cross further boundaries that these probes say nothing
+# about, which `test_larger_changes_cross_further_boundaries` demonstrates
+# rather than leaves implied.
 
 
 def _light_hit_pin_one_displacement() -> float:
-    """The lower boundary, taken from the authoritative recorded replay."""
+    """`d_light` — the lower boundary, from the authoritative replay."""
     return _pin_displacements(_run(_case("light_hit")))[1]
 
 
-def _fallen_with_threshold(monkeypatch, threshold_in: float, case: CorpusCase) -> tuple:
-    monkeypatch.setattr(collision, "FALL_DISPLACEMENT_THRESHOLD_IN", threshold_in)
-    return _simulate_collision_detail(
-        case.impact(), standing_ids=case.standing_ids
-    ).fallen_pin_ids
+def _brooklyn_pin_one_displacement() -> float:
+    """`d_brooklyn` — the upper boundary, from the authoritative replay."""
+    return _pin_displacements(_run(_case("brooklyn")))[1]
+
+
+def _just_above(value: float) -> float:
+    """The next representable float above `value` — the smallest step that
+    can put a threshold strictly past a boundary."""
+    return math.nextafter(value, math.inf)
 
 
 def test_brooklyn_is_the_case_nearest_the_current_threshold_from_above():
-    """Only Brooklyn sits close to the threshold on the falling side. The
-    other struck headpins are not near it, in either direction, so the upper
-    boundary is Brooklyn's alone."""
-    displacement = _pin_displacements(_run(_case("brooklyn")))[1]
-
-    assert displacement == pytest.approx(BROOKLYN_PIN_ONE_DISPLACEMENT_IN, abs=1e-6)
-    # Above the threshold, so it falls -- but only barely.
-    assert displacement > FALL_DISPLACEMENT_THRESHOLD_IN
-    assert displacement < FALL_DISPLACEMENT_THRESHOLD_IN * FALL_THRESHOLD_JUST_ABOVE
-    assert displacement > FALL_DISPLACEMENT_THRESHOLD_IN * FALL_THRESHOLD_JUST_BELOW
-
-    # It is the closest from above: pocket and head-on clear the threshold by
-    # a wide margin, and the light hit is below it entirely.
+    """Brooklyn is the closest case on the falling side, which is why it owns
+    the upper boundary. Pocket and head-on clear the threshold by a wide
+    margin and the light hit is below it entirely."""
     headpin = {
         name: _pin_displacements(_run(_case(name)))[1]
         for name in ("pocket", "head_on", "light_hit", "brooklyn")
     }
+
     above = {n: d for n, d in headpin.items() if d >= FALL_DISPLACEMENT_THRESHOLD_IN}
     assert min(above, key=lambda n: above[n]) == "brooklyn"
     assert headpin["light_hit"] < FALL_DISPLACEMENT_THRESHOLD_IN, "below, and stands"
     assert headpin["head_on"] > 2 * FALL_DISPLACEMENT_THRESHOLD_IN, "well above"
 
 
-def test_raising_the_fall_threshold_past_that_pin_changes_the_outcome(monkeypatch):
-    brooklyn = _case("brooklyn")
-    base = FALL_DISPLACEMENT_THRESHOLD_IN
+# The four local probes. Each compares *every* corpus case, so a second,
+# unnoticed change elsewhere cannot be reported as one pin moving "alone".
 
-    below = _fallen_with_threshold(monkeypatch, base * FALL_THRESHOLD_JUST_BELOW, brooklyn)
-    above = _fallen_with_threshold(monkeypatch, base * FALL_THRESHOLD_JUST_ABOVE, brooklyn)
 
-    assert below == brooklyn.fallen_pin_ids, "just under the marginal pin: unchanged"
-    assert above == tuple(p for p in brooklyn.fallen_pin_ids if p != 1), (
-        "just over it: the headpin alone stops falling"
+def test_just_above_the_lower_boundary_preserves_the_whole_baseline(monkeypatch):
+    result = _all_fallen_with_threshold(monkeypatch, _just_above(_light_hit_pin_one_displacement()))
+
+    assert result == _baseline_fallen()
+
+
+def test_at_the_lower_boundary_only_the_light_hit_headpin_is_added(monkeypatch):
+    # Inclusive: `displacement >= threshold` holds when the two are equal.
+    result = _all_fallen_with_threshold(monkeypatch, _light_hit_pin_one_displacement())
+
+    expected = dict(_baseline_fallen())
+    expected["light_hit"] = (1, 3, 5, 6, 7, 9)
+    assert result == expected
+
+
+def test_at_the_upper_boundary_the_whole_baseline_is_preserved(monkeypatch):
+    # Also inclusive, which is why the boundary itself is still on the
+    # falling side and nothing has changed yet.
+    result = _all_fallen_with_threshold(monkeypatch, _brooklyn_pin_one_displacement())
+
+    assert result == _baseline_fallen()
+
+
+def test_just_above_the_upper_boundary_only_brooklyns_headpin_is_removed(monkeypatch):
+    result = _all_fallen_with_threshold(
+        monkeypatch, _just_above(_brooklyn_pin_one_displacement())
     )
+
+    expected = dict(_baseline_fallen())
+    expected["brooklyn"] = (2, 4, 5, 7, 8, 9)
+    assert result == expected
+
+
+def test_larger_changes_cross_further_boundaries(monkeypatch):
+    """The probes above are deliberately local, and this is what makes that
+    caveat concrete rather than a disclaimer.
+
+    One representable step past `d_brooklyn` moves Brooklyn alone. A larger
+    move — here to 3.4 in, past pocket's own headpin at about 3.3 in — moves
+    pocket as well. So no statement above may be read as "and for every
+    higher threshold".
+    """
+    result = _all_fallen_with_threshold(monkeypatch, 3.4)
+    baseline = _baseline_fallen()
+
+    changed = {name for name, fallen in result.items() if fallen != baseline[name]}
+    assert changed == {"brooklyn", "pocket"}, "a second case crosses out here"
+    assert result["pocket"] == (3, 5, 6, 8, 9, 10)
+    assert result["brooklyn"] == (2, 4, 5, 7, 8, 9)
 
 
 def _all_fallen_with_threshold(monkeypatch, threshold_in: float) -> dict:
@@ -575,32 +618,29 @@ def test_the_lowest_nonzero_displacement_is_the_light_hit_headpin():
     assert len([d for d in moved if d < FALL_DISPLACEMENT_THRESHOLD_IN]) == 1
 
 
-def test_lowering_the_threshold_changes_nothing_until_it_reaches_that_pin(monkeypatch):
-    """The unchanged interval is (light-hit displacement, default] — open at
-    the bottom, because the predicate is `>=` and so the boundary itself
-    already changes the outcome."""
-    boundary = _light_hit_pin_one_displacement()
+def test_sampled_points_inside_the_band_preserve_the_baseline(monkeypatch):
+    """Interior sampling, not a boundary probe — those are the four
+    `nextafter`-based tests below.
+
+    Sampled rather than exhaustive: these points show the unchanged region
+    has real width around the production value instead of being a float
+    hairline. They are not a proof of invariance across the whole band.
+    """
     baseline = _baseline_fallen()
 
-    for threshold in (FALL_DISPLACEMENT_THRESHOLD_IN, 1.0, 0.6, boundary + 1e-12):
+    for threshold in (FALL_DISPLACEMENT_THRESHOLD_IN, 2.0, 1.0, 0.6):
         assert _all_fallen_with_threshold(monkeypatch, threshold) == baseline, threshold
 
 
-def test_at_and_below_that_pin_exactly_the_light_hit_headpin_starts_falling(monkeypatch):
-    boundary = _light_hit_pin_one_displacement()
+def test_sampled_points_below_the_lower_boundary_add_only_that_headpin(monkeypatch):
+    """Likewise interior, on the other side. The boundary itself is probed
+    exactly in `test_at_the_lower_boundary_only_the_light_hit_headpin_is_added`."""
     baseline = _baseline_fallen()
-    light = _case("light_hit")
-    expected_light = tuple(sorted(light.fallen_pin_ids + (1,)))
 
-    # Inclusive at the boundary: `displacement >= threshold` is satisfied when
-    # the two are equal, so the boundary belongs to the changed side.
-    for threshold in (boundary, boundary - 1e-12, 0.1, 1e-9):
+    for threshold in (0.5, 0.1, 1e-9):
         result = _all_fallen_with_threshold(monkeypatch, threshold)
 
-        assert result["light_hit"] == expected_light, threshold
         assert result["light_hit"] == (1, 3, 5, 6, 7, 9), threshold
-        # Exactly one case moves: nothing else in the corpus has a pin in
-        # this band, and untouched pins sit at exactly zero.
         others = {k: v for k, v in result.items() if k != "light_hit"}
         assert others == {k: v for k, v in baseline.items() if k != "light_hit"}, threshold
 

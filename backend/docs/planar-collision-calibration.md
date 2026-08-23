@@ -187,47 +187,73 @@ deck, but the pin the ball strikes first ends up within a few inches of its
 spot. Those first-struck headpins are what sit near the threshold — and they
 sit at quite different distances from it:
 
-| Case | pin 1 | relative to the 2.383 in threshold |
+| Case | pin 1 (approx.) | relative to the 2.383 in threshold |
 |---|---|---|
-| `light_hit` | 0.547127 in | **below** — moved, but stands |
-| `brooklyn` | 2.979317 in | falls, clearing it by only **25%** |
-| `pocket` | 3.301906 in | falls, clearing it by 39% |
-| `head_on` | 5.289243 in | falls, clearing it by 122% — well above |
+| `light_hit` | ≈ 0.547127 in | **below** — moved, but stands |
+| `brooklyn` | ≈ 2.979317 in | falls, clearing it by only **25%** |
+| `pocket` | ≈ 3.301906 in | falls, clearing it by 39% |
+| `head_on` | ≈ 5.289243 in | falls, clearing it by 122% — well above |
+
+Every decimal in this document is an approximation for reading, never a
+threshold to compare against; the tests derive the values they probe.
 
 Only `brooklyn` is near the current threshold from above, and only
 `light_hit` from below. `pocket` and `head_on` are not close to it in either
 direction.
 
-### The intervals
+### Two local crossings
 
-The fall predicate is `displacement >= threshold`, so a boundary belongs to
-the *falling* side. Those two headpins are the only movements anywhere near
-the threshold, which makes the bands exact. Each is backed by a focused test
-that varies the constant through `monkeypatch` (restored at teardown) and
-checks **every** corpus case, not just one.
+Call the two bracketing displacements `d_light` and `d_brooklyn`. **They are
+derived from the recorded replay, not written down**, and the tests read them
+the same way. Approximately:
 
-| Threshold | Effect |
+    d_light     ≈ 0.5471272764  in   (light_hit pin 1)
+    d_brooklyn  ≈ 2.9793172773  in   (brooklyn  pin 1)
+
+Those decimals are for orientation only and **must not be used as interval
+endpoints**. A rounded literal is a different float from the value it
+approximates, so an inequality written against it describes a threshold the
+model does not have. Concretely: 0.5471272762 is greater than a 9-decimal
+rendering of `d_light` yet still below `d_light` itself, so the light hit's
+headpin still falls there.
+
+The fall predicate is `displacement >= threshold`, so each boundary belongs
+to the *falling* side. What is actually proven is the behaviour **at** each
+boundary and at the single adjacent representable float
+(`math.nextafter(boundary, +inf)`), compared across **every** corpus case:
+
+| Threshold | Result |
 |---|---|
-| > 2.979317277 | `brooklyn` loses pin 1: `(1,2,4,5,7,8,9)` → `(2,4,5,7,8,9)` |
-| **(0.547127276, 2.979317277]** | **no corpus outcome changes** — contains the default 2.383 |
-| ≤ 0.547127276, and > 0 | `light_hit` gains pin 1: `(3,5,6,7,9)` → `(1,3,5,6,7,9)` |
+| `nextafter(d_brooklyn, +inf)` | `brooklyn` loses pin 1: `(1,2,4,5,7,8,9)` → `(2,4,5,7,8,9)`; all other cases unchanged |
+| `d_brooklyn` | baseline preserved everywhere |
+| *(the default 2.383 lies between)* | baseline |
+| `nextafter(d_light, +inf)` | baseline preserved everywhere |
+| `d_light` | `light_hit` gains pin 1: `(3,5,6,7,9)` → `(1,3,5,6,7,9)`; all other cases unchanged |
 | exactly 0 | every standing pin in every case is reported fallen |
 
-Notes on the edges:
+### Scope of these statements — deliberately narrow
 
-- The upper crossing is at 2.979317277 / 2.383 = **×1.250238** (+25.02%).
-  ×1.2502 changes nothing; ×1.2503 changes `brooklyn` alone.
-- The lower boundary is **inclusive on the changing side**: at exactly
-  0.547127276 the light hit's pin 1 satisfies `>=` and falls. So the
-  unchanged interval is open at the bottom, and rounding it to "(0, 2.383]"
-  would state something false.
-- Zero is a *different predicate* again, not the limit of the row above:
-  displacement is non-negative, so at zero even an untouched pin satisfies
-  `>=` and the whole rack is reported down. Both contact-free settle cases
-  go from no pins to ten.
+Each row above is a **local** observation at one threshold, not a claim about
+a range. In particular, "past `d_brooklyn`, Brooklyn loses pin 1" describes
+one representable step past that boundary — **not** every higher threshold.
+Move further and other crossings appear: at 3.4 in, past pocket's own headpin
+at ≈3.30 in, `pocket` changes too. A test asserts exactly that, so the limit
+is demonstrated rather than merely disclaimed.
 
-Each crossing reclassifies exactly one pin in exactly one case. Nothing else
-in the corpus lies in these bands.
+A full sweep of the threshold range is not attempted in this milestone. What
+is established is: the production value sits between two adjacent crossings;
+each of those crossings reclassifies exactly one pin in exactly one case; and
+larger excursions cross more.
+
+Between the sampled interior points (2.0, 1.0, 0.6 above the lower boundary;
+0.5, 0.1, 1e-9 below it) the baseline holds, which shows the unchanged region
+has real width rather than being a float hairline — but sampling is not proof
+of invariance across the whole band, and is not offered as such.
+
+Zero remains a *different predicate*, not the limit of the rows above:
+displacement is non-negative, so at zero even an untouched pin satisfies `>=`
+and the whole rack is reported down. Both contact-free settle cases go from
+no pins to ten.
 
 ### Corrections to earlier versions of this note
 
@@ -242,8 +268,16 @@ Recorded because a baseline is only useful if its history is honest.
   (0, 2.383]. Adding the light hit in that same commit is what made the
   claim false — its pin 1 sits inside that interval — and the regression
   behind it checked only `pocket`, which is above every boundary and so
-  could not have caught it. Both are corrected above, and the lowering test
-  is now corpus-wide with the boundary read from the replay itself.
+  could not have caught it.
+- The third version stated the corrected intervals with **rounded decimal
+  endpoints**, which makes the inequalities false in the gap between the
+  printed value and the real one. It also gave "> `d_brooklyn` ⇒ Brooklyn
+  loses pin 1" as if it held for every larger threshold, when a bigger move
+  crosses pocket's headpin as well; and it described both boundary checks as
+  corpus-wide when the upper one ran Brooklyn only and skipped the exact
+  boundary. Now: both values are replay-derived symbols, the probes are
+  `nextafter`-adjacent and compare every case, and the prose is explicitly
+  local.
 
 ### Not characterised here
 
