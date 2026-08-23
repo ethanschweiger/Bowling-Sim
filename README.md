@@ -153,13 +153,13 @@ lower boards through the heads, and the hook brings it back toward higher
 boards into the 1-3 pocket near board 17-18. `launch_position` is the
 ball's laydown board at the foul line, not where the bowler stands.
 
-The current request defaults aim the other way, which sends a ball toward
-the left edge rather than down a playable line. Correcting the default and
-adding on-screen orientation cues belongs to the queued UI milestone; the
-backend convention is documented here so that work has something
-unambiguous to build against. A future left-handed mode would be an
-explicit, separately tested feature — the coordinate system is not
-silently mirrored.
+The API, physics, and frontend starter defaults now use that conventional
+right-handed line: a Reactive Pearl laid down on board 28 at −1.5°. The UI
+also labels the foul-line orientation (39 left, 20 centre, 1 right) and
+calls the input a laydown board rather than a standing board. The House Ball
+remains available for a mostly straight spare attempt. A future left-handed
+mode would be an explicit, separately tested feature — the coordinate
+system is not silently mirrored.
 
 Because a board is a narrow unit (~0.0875 ft), `launch_angle`'s legal range
 is deliberately tight (±2°, see `RELEASE_BOUNDS` in `throw.py`): this model
@@ -665,6 +665,15 @@ the drawn polyline. The canvas is decorative (`aria-hidden`); the visible
 text beside it is the real result summary, and it's never re-announced per
 animation frame.
 
+The separate optional release-seed control accepts the same 0 through
+2,147,483,647 range the backend uses when generating a seed. Leaving it
+blank sends no seed, so the backend creates and returns one; “Use last
+seed” only reuses that number for a later request. The browser never
+samples release variance or invents pinfall. After a throw, the compact
+shot-details disclosure shows the requested release, backend-sampled actual
+release, replay seed, entry data, lane-condition version, and next legal
+roll from the response.
+
 A completed throw plays once: a marker advances along that response's
 *exact* recorded `path`, interpolated between those exact points (never a
 recalculated path of its own — `frontend/src/domain/trajectoryAnimation.ts`),
@@ -873,12 +882,6 @@ percentages, leave tracking, ball usage stats.
   breakpoint distances, and hook magnitudes should be read as
   directionally credible, not as predictions of what a given real ball and
   release would do.
-- The request defaults still aim a positive launch angle, which on this
-  coordinate system points toward the bowler's left — the same direction
-  the hook goes — so the starter configuration runs toward the left edge
-  rather than down a playable line. The backend convention is documented
-  under "Which way is which"; correcting the default and adding on-screen
-  orientation cues is queued as UI work.
 - Only right-handed deliveries are modelled. There is no left-handed mode,
   and the coordinate system is not mirrored to fake one.
 - `launch_angle` is held constant for a throw's whole trip down the lane —
