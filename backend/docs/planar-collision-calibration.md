@@ -298,12 +298,41 @@ structural rather than a coefficient, so no constant was changed.
 
 Corpus and evidence: [`backend/tests/test_pocket_carry_corpus.py`](../tests/test_pocket_carry_corpus.py).
 
+```bash
+cd backend && .venv/bin/python -m pytest tests/test_pocket_carry_corpus.py -q
+```
+
+Fully deterministic, no clock/RNG/network dependence; a difference is always
+a model change.
+
 ### The representative case
 
 An end-to-end reactive house shot — seed 17, board 28, −1.5° — enters at
-board 16.686, 1.32°, 16.25 mph, and knocks **7**, leaving the **2-4-7**. A
-direct `ImpactState` at lateral −2.6 in, heading +1.4°, 17 mph reproduces it
-exactly.
+board 16.686, 1.32°, 16.25 mph (the rounded presentation fields), and knocks
+**7**, leaving the **2-4-7**.
+
+The `ImpactState` that shot actually produces — derived through the same
+`sample_release → simulate_throw → impact_state_from_result` pipeline both
+HTTP throw routes use, from the unrounded trajectory endpoint — is
+**lateral −3.480 in, heading +1.321°, speed 16.249 mph**. That is *not* the
+same as a tidy hand-placed `(−2.6 in, +1.4°, 17 mph)` control: it differs by
+about 0.88 in laterally, 0.08° in heading, and 0.75 mph in speed. The two
+happen to knock the same seven pins today, which is not equivalence of
+input state — an earlier version of this note called the tidy control an
+exact reproduction of the seeded shot, which was wrong.
+
+What is actually verified: calling the collision solver directly on the
+seeded shot's derived `ImpactState` reproduces the **complete** recorded
+run of both the game-scoped and the legacy HTTP throw routes exactly —
+fallen ids, step count, termination reason, and the full ordered
+threshold-crossing set, not just the fallen count. See
+`test_the_seeded_impact_reproduces_exactly_through_the_game_route` and its
+legacy-route counterpart.
+
+The tidy `(−2.6, +1.4, 17)` line is kept in the corpus as its own named case
+(`pocket`) — a synthetic, hand-placed control on the credible right-handed
+entry range, used throughout this section for the sweep and grid
+measurements below. It is never claimed to be the seeded shot.
 
 ### Why the constants cannot fix it
 
@@ -311,24 +340,32 @@ exactly.
 |---|---|---|
 | `FALL_DISPLACEMENT_THRESHOLD_IN` | none | The survivors are never contacted — displacement **exactly 0.00 in**. Nothing sits between zero and the threshold, so lowering it reclassifies nothing. |
 | `LINEAR_DAMPING_PER_S` | none across 1.2 → 0.05 | Extra travel time cannot help a pin that receives no impulse. |
-| `COLLISION_RESTITUTION` | 7 → 8 on one line only | Across the 20-line pocket sweep the mean moves 6.55 → 6.60 and the max stays 8. Typical carry is unchanged. 0.75 is also already above the USBC published range (0.605–0.735). |
-| `PIN_EFFECTIVE_RADIUS_IN` | reaches 9–10, but flattens everything | It inflates the corner control *before* it helps the pocket at all (+1 corner at 2.6 in, pocket still 7). At the radii that reach nine, a thin hit and a corner hit both knock eight and a flush headpin hit strikes. |
+| `COLLISION_RESTITUTION` | mean stays under 7, max never exceeds 8, across 0.605–0.95 | Swept over the full USBC-published range (0.605–0.735) and materially beyond it (to 0.95), against the 20-line entry sweep below. At the production default (0.670) the sweep's mean is exactly 6.55 and its max is 8; at every other tested value the mean stays under 7.0 and the max is always exactly 8, never 9. See `test_restitution_never_lifts_typical_pocket_carry_to_a_credible_strike`. |
+| `PIN_EFFECTIVE_RADIUS_IN` (coupled with its fall threshold) | reaches 9–10, but flattens every control | Tested with `FALL_DISPLACEMENT_THRESHOLD_IN` set to the same value at every step, since the production model defines the threshold as equal to the radius — a decoupled radius-only experiment does not test the rule actually being claimed about. It inflates the corner control *before* it helps the pocket at all (+1 corner at 2.6 in, pocket still 7), and at the radii that reach nine, a thin hit and a corner hit both knock eight and a flush headpin hit strikes. |
 
-A 2-D grid over restitution × radius found **zero** combinations reaching
-nine at the pocket while keeping the light, corner, outside and flush-hit
-controls distinguishable.
+A bounded, explicit 49-cell grid — seven restitution values (the USBC
+low/target/high plus four exploratory values to 0.90) crossed with seven
+coupled radius/threshold values (2.383–3.6 in) — finds **zero** combinations
+reaching nine at the pocket while keeping the light, corner, outside, and
+flush-hit controls distinguishable from it. 13 of the 49 cells reach nine;
+every one of those 13 also flattens the controls. See
+`test_no_grid_cell_reaches_the_pocket_threshold_while_staying_discriminating`
+for the exact axes and predicate, and
+`test_the_lowest_radius_that_reaches_nine_still_flattens_the_named_controls`
+for one concrete cell's full readout.
 
 ### The structural reason
 
 Real 2-4-7 carry comes from the headpin deflecting *left* into the 2, which
-drives the 4 and then the 7. Here the headpin moves about **3.3 in**, while
-every pin the ball or the chain genuinely strikes moves 40–170 in. Two
-causes, neither of them a coefficient:
+drives the 4 and then the 7. Verified on **both** cases: the headpin moves
+about 3.3 in on the synthetic `pocket` control and about 2.6 in on the
+actual seeded shot, while every pin the ball or the chain genuinely strikes
+moves 40 in or more on either. Two causes, neither of them a coefficient:
 
-- The ball begins the run already overlapping the headpin — about 4.07 in at
-  the pocket line, since it starts on the headpin plane — so that first
-  contact is resolved largely by positional correction rather than by an
-  impulse.
+- The ball begins the run already overlapping the headpin — by about 4.07 in
+  on the synthetic control and 3.19 in on the seeded shot, since it starts
+  on the headpin plane — so that first contact is resolved largely by
+  positional correction rather than by an impulse.
 - A flat disc cannot sweep the deck the way a 15 in pin topples across it.
   The swept volume of a falling pin is most of what takes out a neighbouring
   row, and this model has no pose at all.
@@ -338,6 +375,42 @@ impact that begins before contact rather than inside it — not a different
 number. Forcing nine by widening the pins would buy the headline figure by
 making every shot carry, which is a worse model than one that carries too
 little.
+
+### Verified data, product assumptions, and unmeasured questions
+
+To keep this section's claims from blurring together:
+
+**Verified by an executable test in the corpus:**
+- The seeded shot's exact `ImpactState` fields, and that the direct
+  collision call on them reproduces both HTTP routes' complete recorded
+  run — ids, steps, reason, and crossings — exactly.
+- That the pocket's untouched survivors (2, 4, 7) have exactly zero
+  displacement, on both the seeded shot and the synthetic `pocket` control.
+- That the headpin barely moves on both, because both the seeded and the
+  controlled lateral positions start well inside the headpin's contact
+  radius.
+- That damping has no effect on any corpus case across a twenty-fold range.
+- That restitution, swept across the USBC range and materially beyond it,
+  never lifts the 20-line sweep's mean above 7 or its max above 8.
+- That the coupled radius/threshold, swept across a 49-cell grid against
+  restitution, never reaches nine at the pocket while keeping the named
+  controls distinguishable.
+
+**Product assumptions, not measurements:** the specific discriminating
+predicate above (light ≤ pocket−2, corner ≤ pocket−3, outside ≤ 2, and so
+on) is a judgement call about what "still tells shots apart" should mean,
+not a measured fact — a different, still-defensible predicate could in
+principle draw the line elsewhere. The 20-line and 49-cell axes are a
+chosen, bounded sample of the credible right-handed entry range, not an
+exhaustive one.
+
+**Genuinely unmeasured, and not claimed anywhere above:** `PIN_MASS_BLOB`,
+the ball's own mass and radius, lane-condition/oil-pattern sensitivity,
+entry speeds outside the roughly 16–17 mph range swept here, and any
+three-parameter joint tuning (for example restitution, radius, and damping
+together, or the fall threshold deliberately decoupled from radius). None
+of these were tuned, swept, or ruled out in this investigation — they are
+open questions for a future one, not conclusions this note draws.
 
 ### Corrections to earlier versions of this note
 
@@ -362,13 +435,23 @@ Recorded because a baseline is only useful if its history is honest.
   boundary. Now: both values are replay-derived symbols, the probes are
   `nextafter`-adjacent and compare every case, and the prose is explicitly
   local.
-
-### Not characterised here
-
-`COLLISION_RESTITUTION` sensitivity was noted in the earlier version without
-a test behind it, so it has been removed rather than left as an unverified
-number. Characterising it is a separate measurement, not a claim this corpus
-currently supports.
+- The "Pocket carry" section's first version called a tidy `(−2.6, +1.4,
+  17)` synthetic control an exact reproduction of the seeded representative
+  shot; the two `ImpactState` values differ by about 0.88 in laterally,
+  0.08° in heading, and 0.75 mph in speed, and only happened to agree on
+  the fallen set, not on the recorded crossings. It also stated the
+  restitution mean/max and the restitution×radius grid as one-off numbers
+  with no test behind them, while a separate section said restitution
+  sensitivity was unmeasured — a direct contradiction. And its radius
+  experiments varied `PIN_EFFECTIVE_RADIUS_IN` alone, leaving the
+  documented coupled fall threshold at its old value, so they did not test
+  the rule actually being claimed about. All three are corrected above: the
+  representative case is now the real derived impact, proven equivalent to
+  both HTTP routes on the complete run; the restitution and radius×grid
+  claims are now executable, bounded, and reported exactly; and every
+  radius experiment couples the fall threshold with it. See "Verified data,
+  product assumptions, and unmeasured questions" for what is and is not
+  claimed now.
 
 ## Relationship to scoring
 
