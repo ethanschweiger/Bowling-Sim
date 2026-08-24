@@ -289,6 +289,56 @@ it is the evidence that the solver itself was untouched: recording remains
 passive, and the version bump exists because the complete frame schedule is a
 validated wire contract, not because any run changed.
 
+## Pocket carry: investigated, not tuned
+
+A legitimate right-handed pocket entry ends at about seven pins. We asked
+whether the existing collision constants can be calibrated to give
+believable *typical* carry. The answer is **no**, and the blocker is
+structural rather than a coefficient, so no constant was changed.
+
+Corpus and evidence: [`backend/tests/test_pocket_carry_corpus.py`](../tests/test_pocket_carry_corpus.py).
+
+### The representative case
+
+An end-to-end reactive house shot — seed 17, board 28, −1.5° — enters at
+board 16.686, 1.32°, 16.25 mph, and knocks **7**, leaving the **2-4-7**. A
+direct `ImpactState` at lateral −2.6 in, heading +1.4°, 17 mph reproduces it
+exactly.
+
+### Why the constants cannot fix it
+
+| Lever | Effect on pocket carry | Why |
+|---|---|---|
+| `FALL_DISPLACEMENT_THRESHOLD_IN` | none | The survivors are never contacted — displacement **exactly 0.00 in**. Nothing sits between zero and the threshold, so lowering it reclassifies nothing. |
+| `LINEAR_DAMPING_PER_S` | none across 1.2 → 0.05 | Extra travel time cannot help a pin that receives no impulse. |
+| `COLLISION_RESTITUTION` | 7 → 8 on one line only | Across the 20-line pocket sweep the mean moves 6.55 → 6.60 and the max stays 8. Typical carry is unchanged. 0.75 is also already above the USBC published range (0.605–0.735). |
+| `PIN_EFFECTIVE_RADIUS_IN` | reaches 9–10, but flattens everything | It inflates the corner control *before* it helps the pocket at all (+1 corner at 2.6 in, pocket still 7). At the radii that reach nine, a thin hit and a corner hit both knock eight and a flush headpin hit strikes. |
+
+A 2-D grid over restitution × radius found **zero** combinations reaching
+nine at the pocket while keeping the light, corner, outside and flush-hit
+controls distinguishable.
+
+### The structural reason
+
+Real 2-4-7 carry comes from the headpin deflecting *left* into the 2, which
+drives the 4 and then the 7. Here the headpin moves about **3.3 in**, while
+every pin the ball or the chain genuinely strikes moves 40–170 in. Two
+causes, neither of them a coefficient:
+
+- The ball begins the run already overlapping the headpin — about 4.07 in at
+  the pocket line, since it starts on the headpin plane — so that first
+  contact is resolved largely by positional correction rather than by an
+  impulse.
+- A flat disc cannot sweep the deck the way a 15 in pin topples across it.
+  The swept volume of a falling pin is most of what takes out a neighbouring
+  row, and this model has no pose at all.
+
+Believable carry therefore needs a model change — a pin that topples, or an
+impact that begins before contact rather than inside it — not a different
+number. Forcing nine by widening the pins would buy the headline figure by
+making every shot carry, which is a worse model than one that carries too
+little.
+
 ### Corrections to earlier versions of this note
 
 Recorded because a baseline is only useful if its history is honest.
