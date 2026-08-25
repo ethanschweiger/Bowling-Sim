@@ -340,19 +340,29 @@ measurements below. It is never claimed to be the seeded shot.
 |---|---|---|
 | `FALL_DISPLACEMENT_THRESHOLD_IN` | none | The survivors are never contacted — displacement **exactly 0.00 in**. Nothing sits between zero and the threshold, so lowering it reclassifies nothing. |
 | `LINEAR_DAMPING_PER_S` | none across 1.2 → 0.05 | Extra travel time cannot help a pin that receives no impulse. |
-| `COLLISION_RESTITUTION` | mean stays under 7, max never exceeds 8, across 0.605–0.95 | Swept over the full USBC-published range (0.605–0.735) and materially beyond it (to 0.95), against the 20-line entry sweep below. At the production default (0.670) the sweep's mean is exactly 6.55 and its max is 8; at every other tested value the mean stays under 7.0 and the max is always exactly 8, never 9. See `test_restitution_never_lifts_typical_pocket_carry_to_a_credible_strike`. |
-| `PIN_EFFECTIVE_RADIUS_IN` (coupled with its fall threshold) | reaches 9–10, but flattens every control | Tested with `FALL_DISPLACEMENT_THRESHOLD_IN` set to the same value at every step, since the production model defines the threshold as equal to the radius — a decoupled radius-only experiment does not test the rule actually being claimed about. It inflates the corner control *before* it helps the pocket at all (+1 corner at 2.6 in, pocket still 7), and at the radii that reach nine, a thin hit and a corner hit both knock eight and a flush headpin hit strikes. |
+| `COLLISION_RESTITUTION` | mean stays under 7, max never exceeds 8, across 0.605–0.95 | Swept over the full USBC-published range (0.605–0.735) and materially beyond it (to 0.95), against the 20-line entry sweep below. At the production default (0.670) the sweep's mean is exactly 6.55 and its max is 8; at every other tested value the mean stays under 7.0 and the max is always exactly 8, never 9. Each named control is also pinned individually at every swept value, at the production coupled radius/threshold, so no value can flatten a control without failing a test. The one place nine appears at all is the seeded representative line — which is *not* one of the 20 sweep lines — at restitution 0.95, about 29% above the USBC-published maximum, and even there the thin hit is still 5 and the corner still 7. See `test_restitution_never_lifts_typical_pocket_carry_to_a_credible_strike`, `test_every_named_control_matches_its_documented_outcome`, `test_restitution_never_breaks_the_control_ordering`, and `test_only_an_uncertified_restitution_reaches_nine_and_only_on_the_seeded_line`. |
+| `PIN_EFFECTIVE_RADIUS_IN` (coupled with its fall threshold) | reaches 9–10, but the corner control always rises with it | Tested with `FALL_DISPLACEMENT_THRESHOLD_IN` set to the same value at every step, since the production model defines the threshold as equal to the radius — a decoupled radius-only experiment does not test the rule actually being claimed about. It inflates the corner control *before* it helps the pocket at all (+1 corner at 2.6 in, pocket still 7). At production restitution's first nine-carrying cell (0.670 / 3.6 in) the readout is pocket 9, thin 8, corner 8, flush headpin 10 — but that is one cell, not the rule: across all thirteen nine-carrying cells the thin hit runs as low as 7 and the flush headpin as low as 9. Nor does every control collapse: the thin hit still clears its own margin in 4 of the 13. What holds grid-wide is a single blocker — the corner control is never three or more pins behind the pocket in any of the 13, which is exactly what the discriminating predicate requires. See `test_every_cell_that_reaches_nine_lifts_the_corner_control_with_it`. |
 
 A bounded, explicit 49-cell grid — seven restitution values (the USBC
 low/target/high plus four exploratory values to 0.90) crossed with seven
 coupled radius/threshold values (2.383–3.6 in) — finds **zero** combinations
 reaching nine at the pocket while keeping the light, corner, outside, and
-flush-hit controls distinguishable from it. 13 of the 49 cells reach nine;
-every one of those 13 also flattens the controls. See
+flush-hit controls distinguishable from it. Exactly 13 of the 49 cells reach
+nine — that count is asserted by the grid test, not merely quoted here — and
+the corner control blocks every one of the 13. See
 `test_no_grid_cell_reaches_the_pocket_threshold_while_staying_discriminating`
-for the exact axes and predicate, and
-`test_the_lowest_radius_that_reaches_nine_still_flattens_the_named_controls`
+for the exact axes and predicate,
+`test_every_cell_that_reaches_nine_lifts_the_corner_control_with_it` for the
+grid-wide statement and the counterexamples that rule out a stronger one, and
+`test_3_6_is_the_lowest_declared_radius_reaching_nine_at_production_restitution`
 for one concrete cell's full readout.
+
+Holding restitution at the production default (0.670), the pocket's count
+across the declared radii runs 7, 7, 7, 7, 7, 8, 9 — so 3.6 in is the lowest
+declared radius reaching nine *at that restitution*, proved against every
+lower declared radius rather than assumed. It is **not** the lowest in the
+grid: raising restitution reaches nine at smaller radii, and 0.90 already
+does it at 3.0 in.
 
 ### The structural reason
 
@@ -392,6 +402,13 @@ To keep this section's claims from blurring together:
 - That damping has no effect on any corpus case across a twenty-fold range.
 - That restitution, swept across the USBC range and materially beyond it,
   never lifts the 20-line sweep's mean above 7 or its max above 8.
+- That every named control — the seeded representative shot plus the thin,
+  corner, near-channel, and flush-headpin hits — holds its exact documented
+  count at every swept restitution value, at the production coupled
+  radius/threshold, and that the pocket's ordering over them never breaks.
+- That exactly 13 of the grid's 49 cells reach nine, that 3.6 in is the
+  lowest declared radius reaching nine at production restitution, and that
+  the corner control sits within two pins of the pocket in all 13.
 - That the coupled radius/threshold, swept across a 49-cell grid against
   restitution, never reaches nine at the pocket while keeping the named
   controls distinguishable.

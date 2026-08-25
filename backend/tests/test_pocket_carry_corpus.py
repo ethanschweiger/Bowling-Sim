@@ -20,14 +20,21 @@ that runs the claim rather than describing it:
 4. `COLLISION_RESTITUTION`, swept across the full USBC-published range
    (0.605-0.735) and materially beyond it (up to 0.95) over the same
    20-line right-handed entry sweep, never lifts the mean above 7 pins and
-   never lifts the max above 8. Typical carry does not move.
+   never lifts the max above 8. Typical carry does not move. Each named
+   control is pinned individually at every swept value too, so no value can
+   flatten one without failing a test. The single exception to "never
+   nine", reported rather than buried: the seeded representative line --
+   not one of the 20 sweep lines -- reaches nine at 0.95, about 29% above
+   the USBC-published maximum, where the thin hit is still 5 and the corner
+   still 7.
 5. `PIN_EFFECTIVE_RADIUS_IN` -- tested *coupled* with its documented fall
    threshold, since the two are the same value in this model -- does reach
    nine and ten pins, but a full 49-cell grid against restitution finds
    **zero** combinations that reach nine at the pocket while keeping the
    light, corner, outside, and flush-hit controls distinguishable from it.
-   Every combination that reaches nine also makes those controls carry
-   almost as heavily. That is a fragile deck, not carry.
+   In all 13 cells that reach nine, the corner control stays within two
+   pins of the pocket -- that one blocker, not the thin hit, is what fails
+   every cell. That is a fragile deck, not carry.
 
 ## What "the representative case" means here
 
@@ -670,6 +677,203 @@ def test_restitution_is_restored_after_the_sweep():
     assert collision.COLLISION_RESTITUTION == USBC_RESTITUTION_TARGET
 
 
+# --- Restitution: the named controls, not just the aggregate --------------
+#
+# The 20-line sweep above measures a mean and max over *anonymous* entry
+# lines. That is the right shape for "typical carry does not move", but it
+# cannot notice a named control collapsing: a change that lifted the thin
+# hit or the corner onto the pocket would leave the sweep's aggregate
+# largely untouched and its bounds still satisfied. These tests close that
+# gap by measuring the real seeded representative shot and every named
+# corpus control at every explicit sweep value, at the production coupled
+# radius/threshold.
+
+# Pinned as a literal rather than read from the module, so this section
+# cannot silently follow a production change; the two are asserted equal by
+# `test_the_control_table_is_measured_at_production_geometry`.
+PRODUCTION_PIN_RADIUS_IN = 2.383
+
+
+def _restitution_control_readout() -> dict:
+    """Fallen-pin counts for the seeded representative shot and every named
+    corpus control, at whatever collision constants are currently set.
+
+    `_seeded_representative_impact()` is re-derived here rather than cached
+    across values: it is trajectory-only (about 4 ms) and reads no collision
+    constant, so the monkeypatched restitution cannot affect it, and
+    deriving it in place keeps this helper free of cross-test state.
+    """
+    counts = {"seeded": len(_run(_seeded_representative_impact()).fallen_pin_ids)}
+    for case in POCKET_CARRY_CORPUS:
+        counts[case.name] = len(_run(case).fallen_pin_ids)
+    return counts
+
+
+# The exact documented outcome at every explicit sweep value, measured at
+# the production radius. Written out in full as literals -- not computed --
+# so that a change to any single control at any single restitution fails
+# loudly, and names which one.
+RESTITUTION_CONTROL_TABLE = (
+    (
+        USBC_RESTITUTION_LOW,  # 0.605
+        {"seeded": 7, "pocket": 7, "light": 5, "brooklyn": 7,
+         "head_on": 7, "corner10": 6, "outside": 1, "spare_3_6_10": 3},
+    ),
+    (
+        USBC_RESTITUTION_TARGET,  # 0.670 -- production
+        {"seeded": 7, "pocket": 7, "light": 5, "brooklyn": 7,
+         "head_on": 7, "corner10": 5, "outside": 1, "spare_3_6_10": 3},
+    ),
+    (
+        USBC_RESTITUTION_HIGH,  # 0.735
+        {"seeded": 7, "pocket": 8, "light": 5, "brooklyn": 7,
+         "head_on": 7, "corner10": 5, "outside": 1, "spare_3_6_10": 3},
+    ),
+    (
+        0.75,
+        {"seeded": 7, "pocket": 8, "light": 5, "brooklyn": 7,
+         "head_on": 7, "corner10": 5, "outside": 1, "spare_3_6_10": 3},
+    ),
+    (
+        0.80,
+        {"seeded": 8, "pocket": 8, "light": 5, "brooklyn": 6,
+         "head_on": 7, "corner10": 5, "outside": 1, "spare_3_6_10": 3},
+    ),
+    (
+        0.85,
+        {"seeded": 8, "pocket": 8, "light": 5, "brooklyn": 6,
+         "head_on": 7, "corner10": 6, "outside": 1, "spare_3_6_10": 3},
+    ),
+    (
+        0.90,
+        {"seeded": 7, "pocket": 8, "light": 5, "brooklyn": 6,
+         "head_on": 7, "corner10": 6, "outside": 1, "spare_3_6_10": 3},
+    ),
+    (
+        0.95,
+        {"seeded": 9, "pocket": 8, "light": 5, "brooklyn": 7,
+         "head_on": 7, "corner10": 7, "outside": 1, "spare_3_6_10": 3},
+    ),
+)
+
+_CONTROL_TABLE_IDS = [f"{restitution:.3f}" for restitution, _ in RESTITUTION_CONTROL_TABLE]
+
+
+def _controls_stay_separated(outcome: dict) -> bool:
+    """The documented distinguishability rule for this section: the pocket
+    still out-carries both the thin hit and the corner, a flush headpin hit
+    never beats it, a near-channel ball stays a token result, and the
+    partial rack still converts exactly. Deliberately weaker than
+    `_is_discriminating` below -- it asks only that the controls stay
+    *ordered*, not that they stay separated by a margin -- because the point
+    here is that restitution cannot even break the ordering, let alone buy
+    carry.
+    """
+    return (
+        outcome["light"] < outcome["pocket"]
+        and outcome["corner10"] < outcome["pocket"]
+        and outcome["head_on"] <= outcome["pocket"]
+        and outcome["outside"] <= 2
+        and outcome["spare_3_6_10"] == 3
+    )
+
+
+def test_the_control_table_covers_exactly_the_declared_sweep_values():
+    """Guards the table against drifting out of sync with the sweep axes --
+    a table that silently stopped covering a value would make every
+    assertion below weaker without failing."""
+    covered = tuple(restitution for restitution, _ in RESTITUTION_CONTROL_TABLE)
+
+    assert covered == RESTITUTION_SWEEP_VALUES
+    for _, expected in RESTITUTION_CONTROL_TABLE:
+        assert sorted(expected) == sorted(["seeded", *CASE_IDS])
+
+
+def test_the_control_table_is_measured_at_production_geometry():
+    assert collision.PIN_EFFECTIVE_RADIUS_IN == PRODUCTION_PIN_RADIUS_IN
+    assert collision.FALL_DISPLACEMENT_THRESHOLD_IN == PRODUCTION_PIN_RADIUS_IN
+
+
+@pytest.mark.parametrize(
+    "restitution,expected", RESTITUTION_CONTROL_TABLE, ids=_CONTROL_TABLE_IDS
+)
+def test_every_named_control_matches_its_documented_outcome(monkeypatch, restitution, expected):
+    """The explicit per-control regression the aggregate sweep cannot give.
+    Each named control -- and the seeded representative shot, which is *not*
+    one of the 20 sweep lines -- is pinned at every declared restitution."""
+    monkeypatch.setattr(collision, "COLLISION_RESTITUTION", restitution)
+    monkeypatch.setattr(collision, "PIN_EFFECTIVE_RADIUS_IN", PRODUCTION_PIN_RADIUS_IN)
+    monkeypatch.setattr(collision, "FALL_DISPLACEMENT_THRESHOLD_IN", PRODUCTION_PIN_RADIUS_IN)
+
+    assert _restitution_control_readout() == expected
+
+
+@pytest.mark.parametrize("restitution", RESTITUTION_SWEEP_VALUES, ids=_CONTROL_TABLE_IDS)
+def test_restitution_never_breaks_the_control_ordering(monkeypatch, restitution):
+    """Restitution cannot flatten the corpus. Across the whole USBC range
+    and far beyond it, the pocket still out-carries the thin hit and the
+    corner, the flush headpin hit never beats the pocket, the near-channel
+    ball stays at one pin, and the 3-6-10 still converts.
+
+    Deliberately asserts *only* the ordering predicate, against a freshly
+    measured readout. Re-asserting the exact table here would mean a single
+    drifted count failed this test on the equality line, before the
+    ordering claim in its name was ever evaluated; the exact counts are
+    `test_every_named_control_matches_its_documented_outcome`'s job.
+    """
+    monkeypatch.setattr(collision, "COLLISION_RESTITUTION", restitution)
+    monkeypatch.setattr(collision, "PIN_EFFECTIVE_RADIUS_IN", PRODUCTION_PIN_RADIUS_IN)
+    monkeypatch.setattr(collision, "FALL_DISPLACEMENT_THRESHOLD_IN", PRODUCTION_PIN_RADIUS_IN)
+
+    measured = _restitution_control_readout()
+
+    assert _controls_stay_separated(measured), (restitution, measured)
+
+
+def test_only_an_uncertified_restitution_reaches_nine_and_only_on_the_seeded_line():
+    """The one place restitution *does* reach nine, stated exactly rather
+    than left hidden behind the sweep's aggregate bound.
+
+    The 20-line sweep's max is 8 at every value, but the seeded
+    representative shot is not one of those 20 lines -- it sits at lateral
+    -3.480, heading +1.321, 16.249 mph, none of which are on the sweep's
+    axes. At 0.95 that line reaches nine. This is reported, not buried:
+    0.95 is about 29% above the USBC-published maximum, and even there the
+    thin hit is still 5 and the corner still 7, so it is not a credible
+    deck -- but "restitution never reaches nine anywhere" would be false.
+    """
+    reaching_nine = [
+        (restitution, name)
+        for restitution, expected in RESTITUTION_CONTROL_TABLE
+        for name, count in expected.items()
+        if count >= 9
+    ]
+
+    assert reaching_nine == [(0.95, "seeded")]
+
+    at_uncertified_max = dict(RESTITUTION_CONTROL_TABLE)[0.95]
+    assert 0.95 > USBC_RESTITUTION_HIGH
+    # The "about 29% above the USBC-published maximum" figure the calibration
+    # note quotes, computed here rather than remembered.
+    assert round((0.95 / USBC_RESTITUTION_HIGH - 1) * 100) == 29
+    assert at_uncertified_max["light"] == 5
+    assert at_uncertified_max["corner10"] == 7
+    assert _controls_stay_separated(at_uncertified_max)
+
+
+def test_the_seeded_lines_response_to_restitution_is_not_monotonic():
+    """Evidence that restitution is not a carry *lever* even where it moves
+    the number: raising it does not raise carry, it rearranges the deck.
+    The seeded line goes 7, 7, 7, 7, 8, 8, 7, 9 as restitution climbs --
+    dropping back to seven at 0.90 before reaching nine at 0.95."""
+    seeded = [expected["seeded"] for _, expected in RESTITUTION_CONTROL_TABLE]
+
+    assert seeded == [7, 7, 7, 7, 8, 8, 7, 9]
+    # Explicit indexing rather than zip(..., strict=): the runtime floor is
+    # Python 3.9, matching this file's other pairwise comparisons.
+    assert any(seeded[i + 1] < seeded[i] for i in range(len(seeded) - 1))
+
+
 # --- The restitution x radius grid ----------------------------------------
 #
 # A bounded, explicit, checked-in grid -- never an unbounded search -- with
@@ -753,20 +957,45 @@ def test_no_grid_cell_reaches_the_pocket_threshold_while_staying_discriminating(
     assert len(reaching_nine) > 0, "the grid never even reaches pocket>=9; axes may be too narrow"
     assert reaching_nine[0][2]["pocket"] >= 9
 
+    # The exact count the calibration note publishes. Pinned rather than
+    # bounded, so the note's "13 of the 49" cannot drift away from the code
+    # that produces it.
+    assert len(reaching_nine) == 13, [(r, radius) for r, radius, _ in reaching_nine]
+
     assert discriminating_hits == []
 
 
-def test_the_lowest_radius_that_reaches_nine_still_flattens_the_named_controls(monkeypatch):
-    """Pins one concrete grid cell's full readout, so the "flattens
-    everything" claim has a specific, checkable example rather than only an
-    aggregate zero-count."""
+def test_3_6_is_the_lowest_declared_radius_reaching_nine_at_production_restitution(monkeypatch):
+    """Scoped deliberately to production restitution, and proved rather than
+    asserted.
+
+    An unqualified "the lowest radius that reaches nine" would be false:
+    higher restitution reaches nine at *smaller* radii -- see
+    `test_a_higher_restitution_reaches_nine_at_a_smaller_radius`. What is
+    true is the scoped claim, checked here across every declared radius:
+    holding restitution at the production default, the pocket stays under
+    nine at 2.383 through 3.4, and 3.6 is the first declared radius that
+    reaches it. Its full readout is pinned so the "flattens the controls"
+    claim has a specific, checkable example.
+    """
     monkeypatch.setattr(collision, "COLLISION_RESTITUTION", USBC_RESTITUTION_TARGET)
-    monkeypatch.setattr(collision, "PIN_EFFECTIVE_RADIUS_IN", 3.6)
-    monkeypatch.setattr(collision, "FALL_DISPLACEMENT_THRESHOLD_IN", 3.6)
 
-    outcome = _grid_outcome(USBC_RESTITUTION_TARGET, 3.6)
+    by_radius = {}
+    for radius in GRID_RADIUS_VALUES:
+        monkeypatch.setattr(collision, "PIN_EFFECTIVE_RADIUS_IN", radius)
+        monkeypatch.setattr(collision, "FALL_DISPLACEMENT_THRESHOLD_IN", radius)
+        by_radius[radius] = _grid_outcome(USBC_RESTITUTION_TARGET, radius)
 
-    assert outcome == {
+    # The whole production-restitution radius column, pinned in order.
+    assert [by_radius[radius]["pocket"] for radius in GRID_RADIUS_VALUES] == [7, 7, 7, 7, 7, 8, 9]
+
+    # Stated as the claim itself, not only as a literal list: every declared
+    # radius below 3.6 leaves the pocket short of nine.
+    for radius in GRID_RADIUS_VALUES:
+        if radius < 3.6:
+            assert by_radius[radius]["pocket"] < 9, (radius, by_radius[radius])
+
+    assert by_radius[3.6] == {
         "pocket": 9,
         "light": 8,
         "brooklyn": 9,
@@ -775,7 +1004,80 @@ def test_the_lowest_radius_that_reaches_nine_still_flattens_the_named_controls(m
         "outside": 1,
         "spare_3_6_10": 3,
     }
+    assert not _is_discriminating(by_radius[3.6])
+
+
+def test_a_higher_restitution_reaches_nine_at_a_smaller_radius(monkeypatch):
+    """Why the test above has to be scoped to production restitution: the
+    lowest radius reaching nine is not a global property of the grid. At
+    restitution 0.90 the pocket already reaches nine at radius 3.0, well
+    below the 3.6 that production restitution needs."""
+    monkeypatch.setattr(collision, "COLLISION_RESTITUTION", 0.90)
+    monkeypatch.setattr(collision, "PIN_EFFECTIVE_RADIUS_IN", 3.0)
+    monkeypatch.setattr(collision, "FALL_DISPLACEMENT_THRESHOLD_IN", 3.0)
+
+    outcome = _grid_outcome(0.90, 3.0)
+
+    assert outcome["pocket"] >= 9
+    assert 3.0 < 3.6
     assert not _is_discriminating(outcome)
+
+
+def test_every_cell_that_reaches_nine_lifts_the_corner_control_with_it(monkeypatch):
+    """The grid-wide statement, replacing an overbroad one.
+
+    An earlier version of the calibration note said that at the radii which
+    reach nine, a thin hit and a corner hit *both* knock eight and a flush
+    headpin hit strikes. That describes exactly one cell (0.670 / 3.6), not
+    the grid: at 0.85 / 3.2 the thin hit is 7, at 0.80 / 3.6 the corner is
+    9, and at 0.90 / 3.0 the flush headpin hit is 9 rather than 10.
+
+    What is true of all thirteen cells, and asserted here, is the single
+    universal blocker: the corner control is never three or more behind the
+    pocket. That one fact -- not the thin hit, which does clear the margin
+    in some cells -- is why no cell in the grid is discriminating.
+    """
+    reaching_nine = []
+    for restitution in GRID_RESTITUTION_VALUES:
+        for radius in GRID_RADIUS_VALUES:
+            monkeypatch.setattr(collision, "COLLISION_RESTITUTION", restitution)
+            monkeypatch.setattr(collision, "PIN_EFFECTIVE_RADIUS_IN", radius)
+            monkeypatch.setattr(collision, "FALL_DISPLACEMENT_THRESHOLD_IN", radius)
+            outcome = _grid_outcome(restitution, radius)
+            if outcome["pocket"] >= 9:
+                reaching_nine.append((restitution, radius, outcome))
+
+    assert len(reaching_nine) == 13
+
+    for restitution, radius, outcome in reaching_nine:
+        where = (restitution, radius, outcome)
+        # The universal blocker.
+        assert outcome["corner10"] > outcome["pocket"] - 3, where
+        # The weaker envelope that is genuinely grid-wide.
+        assert outcome["light"] >= 7, where
+        assert outcome["corner10"] >= 8, where
+        assert outcome["head_on"] >= 9, where
+        assert outcome["head_on"] >= outcome["pocket"], where
+        assert outcome["brooklyn"] == 9, where
+        assert outcome["outside"] == 1, where
+        assert outcome["spare_3_6_10"] == 3, where
+
+    # The thin control is *not* universally flattened: in 4 of the 13 it
+    # still clears its own margin. This is why the note names the corner as
+    # the blocker instead of claiming every control collapses.
+    thin_still_separated = [
+        (restitution, radius)
+        for restitution, radius, outcome in reaching_nine
+        if outcome["light"] <= outcome["pocket"] - 2
+    ]
+    assert len(thin_still_separated) == 4, thin_still_separated
+
+    # And the three concrete counterexamples that make the old, stronger
+    # wording false -- pinned so the correction cannot quietly regress.
+    by_cell = {(restitution, radius): o for restitution, radius, o in reaching_nine}
+    assert by_cell[(0.85, 3.2)]["light"] == 7
+    assert by_cell[(0.80, 3.6)]["corner10"] == 9
+    assert by_cell[(0.90, 3.0)]["head_on"] == 9
 
 
 def test_the_grid_restores_production_constants_after_every_cell():
