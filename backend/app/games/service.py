@@ -77,6 +77,30 @@ calls back into a session afterward to "read the result." `current_snapshot()`
 is the only other way to get one — its own dedicated lock acquisition,
 for read-only callers (game creation, the `GET` endpoint) that aren't
 mid-mutation.
+
+## The repository boundary
+
+`GameService` used to own its storage directly: a `dict[str, GameSession]`,
+a lock, and the eviction policy, all as its own private attributes. That
+storage is now behind `GameSessionRepository` — a small interface
+(`get`, `put`, `get_or_put`) — with `InMemoryGameSessionRepository` as the
+only implementation today. `GameService` holds a repository and delegates
+every storage operation to it; it no longer knows *how* or *where*
+sessions are kept, only that a repository can look one up and store one.
+
+The point is what a future persistent store would need to change: a new
+`GameSessionRepository` implementation, nothing upstream of it. `GameSession`,
+`GameStateSnapshot`, every physics/scoring module, every API route, and the
+frontend are all unaware this boundary exists — none of them ever talk to
+a repository, only to `GameService`. This milestone adds the replacement
+point only: games still live in memory, `InMemoryGameSessionRepository`
+is still the only implementation, and process/container restart still
+loses every game exactly as before. `GameService`'s own public methods
+(`create_game`, `get_or_create`, `get_game`) and every observable behavior
+they produce — including the bounded-registry eviction policy below — are
+unchanged; see `GameSessionRepository`'s docstring for why `get_or_create`
+needed a third repository method (`get_or_put`), not just `get`+`put`, to
+preserve its original atomicity.
 """
 
 # Keeps `X | None` usable on this project's Python 3.9 floor — see
@@ -85,6 +109,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -240,60 +265,112 @@ class GameSession:
             return self._initial_condition, snapshot
 
 
-# The production default for `GameService.max_games`. Comfortably above
-# anything the backend's own test suite creates against
-# `default_game_service` in one run (38, measured directly by
-# instrumenting a full `pytest` pass), while still bounding a long-running
-# process instead of letting it grow without limit. Not derived from any
-# measured request-volume or memory target -- a chosen ceiling, the same
-# way `HOUSE_SHOT_SPEC`'s numbers are chosen rather than measured.
+# The production default for `InMemoryGameSessionRepository.max_games` /
+# `GameService.max_games`. Comfortably above anything the backend's own
+# test suite creates against `default_game_service` in one run (38,
+# measured directly by instrumenting a full `pytest` pass), while still
+# bounding a long-running process instead of letting it grow without
+# limit. Not derived from any measured request-volume or memory target --
+# a chosen ceiling, the same way `HOUSE_SHOT_SPEC`'s numbers are chosen
+# rather than measured.
 DEFAULT_MAX_GAMES = 1000
 
 
-class GameService:
-    """Thread-safe mapping from game_id to GameSession, bounded to at most
-    `max_games` retained sessions. The lock here only protects the mapping
-    (create/lookup/evict) — each GameSession's own lock covers the
-    read-simulate-record-update sequence for that game's throws (lane,
-    scorecard, and rack together).
+class GameSessionRepository(ABC):
+    """The storage boundary `GameService` reads and writes through --
+    everything it needs from wherever `GameSession`s actually live.
+    `InMemoryGameSessionRepository` below is the only implementation
+    today; a future persistent store implements these same three methods
+    without `GameService`, `GameSession`, any API route, or the frontend
+    changing at all.
+
+    Three methods, not two: `get`/`put` alone would let `GameService`
+    check for an existing session and then store a new one as two
+    separate calls, which is exactly the race a repository boundary must
+    not introduce. Two concurrent callers racing to create the *same*
+    game_id (`GameService.get_or_create`'s whole reason to exist) could
+    both see nothing from `get`, both build a session, and the second
+    `put` would silently overwrite the first's -- losing whatever the
+    first session had already recorded. `get_or_put` is what the original
+    single-lock implementation actually guaranteed: the existence check
+    and the conditional store happen as one atomic operation with respect
+    to other calls for the same game_id, exactly as it did before this
+    boundary existed. `create_game` never had that race (it never checks
+    for an existing ID first), so it uses plain `put`.
+    """
+
+    @abstractmethod
+    def get(self, game_id: str) -> GameSession | None:
+        """The session stored under `game_id`, or `None` if this
+        repository doesn't hold one. Never raises for a missing ID --
+        translating absence into `UnknownGameError` is `GameService`'s
+        job, not the repository's."""
+        ...
+
+    @abstractmethod
+    def put(self, session: GameSession) -> None:
+        """Stores `session` under its own `game_id`, unconditionally --
+        replacing whatever was already there under that ID, if anything.
+        An implementation that bounds its own capacity (like the
+        in-memory one below) applies its own eviction policy here,
+        atomically with the insert."""
+        ...
+
+    @abstractmethod
+    def get_or_put(self, game_id: str, factory: Callable[[], GameSession]) -> GameSession:
+        """Returns the existing session for `game_id` if this repository
+        holds one; otherwise calls `factory()` exactly once, stores the
+        result (applying this repository's own eviction policy, the same
+        as `put`), and returns it. The whole check-then-store sequence is
+        atomic with respect to other calls for the same `game_id` -- see
+        this class's own docstring for why that matters."""
+        ...
+
+
+class InMemoryGameSessionRepository(GameSessionRepository):
+    """The only concrete `GameSessionRepository` today: a thread-safe
+    dict, bounded to at most `max_games` retained sessions. The lock here
+    protects the mapping itself (get/put/evict) -- each `GameSession`'s
+    own lock still covers that one game's read-simulate-record-update
+    sequence, entirely separately.
 
     ## The eviction policy
 
-    When inserting a new session would put the registry over `max_games`,
+    When storing a new session would put the registry over `max_games`,
     the single oldest retained session -- the one that has been in
     `_games` the longest, by insertion order, never by how recently it
     was read or thrown in -- is evicted first. This is deliberately FIFO,
-    not LRU: an LRU policy would need every read (`get_game`, a throw) to
-    reorder state, which the requirements this class exists to preserve
-    (`get_or_create`, `get_game`, throws, reset, scorecard/rack isolation
-    all behaving exactly as before for any ID that remains retained) don't
+    not LRU: an LRU policy would need every read (`get`, a throw) to
+    reorder state, which the behavior this class exists to preserve
+    (`get_or_put`'s lookups, throws, reset, scorecard/rack isolation all
+    behaving exactly as before for any ID that remains retained) doesn't
     ask for and would make harder to reason about. There are no TTLs,
     wall-clock timers, or background sweeps -- eviction is a synchronous
-    side effect of `create_game`/`get_or_create` creating a new session,
+    side effect of `put`/`get_or_put` storing a genuinely new session,
     nothing else ever removes an entry.
 
     Eviction always happens *before* the new session is inserted, so the
-    session a `create_game`/`get_or_create` call is about to return can
-    never be the one evicted by that same call, for any `max_games >= 1`.
+    session a `put`/`get_or_put` call is about to return can never be the
+    one evicted by that same call, for any `max_games >= 1`.
 
-    An evicted game_id then behaves exactly like a game_id that never
-    existed: `get_game` raises `UnknownGameError`, which the API layer
-    already turns into the same 404 an unknown ID always produced. There
-    is no separate "evicted" state to track or expose.
+    An evicted game_id then behaves exactly like a game_id that was never
+    stored: `get` returns `None`, which `GameService.get_game` turns into
+    `UnknownGameError`, which the API layer already turns into the same
+    404 an unknown ID always produced. There is no separate "evicted"
+    state to track or expose.
     """
 
     def __init__(self, max_games: int | None = DEFAULT_MAX_GAMES):
         """`max_games=None` disables the cap entirely -- unbounded, the
-        registry's original behavior before this class had one at all.
-        That is an explicit, tested opt-out (see
+        registry's original behavior before it had a cap at all. That is
+        an explicit, tested opt-out (see
         `test_a_none_cap_disables_eviction_entirely`), not a silent
-        default; `default_game_service` below always passes a real
-        integer.
+        default; `default_game_service` always passes a real integer.
 
         Any non-`None` `max_games` must be a positive integer. `0` or a
         negative value raises `ValueError` immediately, here at
         construction, rather than silently behaving as unbounded or as
-        "evict everything including whatever was just created" -- see
+        "evict everything including whatever was just stored" -- see
         `test_a_non_positive_cap_is_rejected_at_construction`.
         """
         if max_games is not None and max_games < 1:
@@ -304,17 +381,65 @@ class GameService:
 
     def _evict_oldest_locked(self) -> None:
         """Caller must already hold `self._lock`. Evicts retained sessions
-        oldest-first until inserting one more would not exceed
+        oldest-first until storing one more would not exceed
         `self._max_games`. A `while` rather than a single `if`: `_games`
-        only ever grows by exactly one per `create_game`/`get_or_create`
-        call today, so one eviction always suffices in practice, but a
-        `while` doesn't depend on that staying true to keep its own
-        invariant (never leave the registry over cap)."""
+        only ever grows by exactly one per `put`/`get_or_put` call today,
+        so one eviction always suffices in practice, but a `while` doesn't
+        depend on that staying true to keep its own invariant (never leave
+        the registry over cap)."""
         if self._max_games is None:
             return
         while len(self._games) >= self._max_games:
             oldest_id = next(iter(self._games))
             del self._games[oldest_id]
+
+    def get(self, game_id: str) -> GameSession | None:
+        with self._lock:
+            return self._games.get(game_id)
+
+    def put(self, session: GameSession) -> None:
+        with self._lock:
+            self._evict_oldest_locked()
+            self._games[session.game_id] = session
+
+    def get_or_put(self, game_id: str, factory: Callable[[], GameSession]) -> GameSession:
+        with self._lock:
+            existing = self._games.get(game_id)
+            if existing is not None:
+                return existing
+            session = factory()
+            self._evict_oldest_locked()
+            self._games[game_id] = session
+            return session
+
+
+class GameService:
+    """A thin orchestrator over a `GameSessionRepository`: decides which
+    oil pattern builds which `GameSession` and its initial `LaneCondition`,
+    and translates a missing lookup into `UnknownGameError`. All storage,
+    locking, and eviction live in the repository this class holds -- see
+    "The repository boundary" in this module's own docstring, and
+    `GameSessionRepository` for the storage interface itself.
+    """
+
+    def __init__(
+        self,
+        max_games: int | None = DEFAULT_MAX_GAMES,
+        repository: GameSessionRepository | None = None,
+    ):
+        """`repository` is the storage boundary this service delegates
+        to -- omit it (the common case, including every existing caller
+        and test) and an `InMemoryGameSessionRepository` is built from
+        `max_games`, preserving exactly the constructor signature this
+        class had before the boundary existed. Passing `repository`
+        explicitly is for a future persistent-store implementation, or a
+        test that wants to inject one directly; `max_games` is ignored
+        when `repository` is supplied, since capacity is that repository's
+        own concern.
+        """
+        self._repository = (
+            repository if repository is not None else InMemoryGameSessionRepository(max_games)
+        )
 
     def create_game(self, oil_pattern: str = "house", game_id: str | None = None) -> GameSession:
         build_condition = SUPPORTED_OIL_PATTERNS.get(oil_pattern)
@@ -324,9 +449,7 @@ class GameService:
         session = GameSession(
             game_id=game_id or uuid.uuid4().hex, initial_condition=build_condition()
         )
-        with self._lock:
-            self._evict_oldest_locked()
-            self._games[session.game_id] = session
+        self._repository.put(session)
         return session
 
     def get_or_create(self, game_id: str, oil_pattern: str = "house") -> GameSession:
@@ -337,24 +460,24 @@ class GameService:
 
         A lookup hit never evicts anything and never changes `game_id`'s
         own position in the insertion order -- only creating a genuinely
-        new session can trigger eviction, the same as `create_game`."""
-        with self._lock:
-            session = self._games.get(game_id)
-            if session is not None:
-                return session
+        new session can trigger eviction, the same as `create_game`.
+        `oil_pattern` is validated only inside `factory`, so it's only
+        even read when `get_or_put` actually needs to build a new session --
+        an existing game_id with an unsupported `oil_pattern` argument
+        still returns the existing session without raising, exactly as
+        before this method delegated to a repository.
+        """
 
+        def factory() -> GameSession:
             build_condition = SUPPORTED_OIL_PATTERNS.get(oil_pattern)
             if build_condition is None:
                 raise ValueError(f"Unsupported oil_pattern '{oil_pattern}'")
+            return GameSession(game_id=game_id, initial_condition=build_condition())
 
-            session = GameSession(game_id=game_id, initial_condition=build_condition())
-            self._evict_oldest_locked()
-            self._games[game_id] = session
-            return session
+        return self._repository.get_or_put(game_id, factory)
 
     def get_game(self, game_id: str) -> GameSession:
-        with self._lock:
-            session = self._games.get(game_id)
+        session = self._repository.get(game_id)
         if session is None:
             raise UnknownGameError(game_id)
         return session
@@ -364,6 +487,6 @@ class GameService:
 # independent lane, scorecard, and rack — this is the "hidden global lane"
 # problem's fix, not a repeat of it: nothing simulates against this object
 # directly, only against the one GameSession a request's game_id resolves to.
-# Bounded at `DEFAULT_MAX_GAMES` — see `GameService`'s docstring for the
-# eviction policy this applies to a long-running process.
+# Bounded at `DEFAULT_MAX_GAMES` — see `InMemoryGameSessionRepository`'s
+# docstring for the eviction policy this applies to a long-running process.
 default_game_service = GameService(max_games=DEFAULT_MAX_GAMES)

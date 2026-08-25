@@ -410,7 +410,11 @@ percentages, leave tracking, ball usage stats.
   oldest game by creation order — never by last read or throw, no TTL,
   no background sweep. An evicted `game_id` then behaves exactly like one
   that never existed: a 404 the frontend already treats as a stale saved
-  game.
+  game. Sessions now sit behind a small `GameSessionRepository` boundary
+  so a future persistent store can replace `InMemoryGameSessionRepository`
+  without changing `GameService`'s API — but that in-memory
+  implementation is still the only one, so a process/container restart
+  still loses every game exactly as before.
 - The deprecated `/api/v1/simulations/throws` route shares one game
   across every caller, for backward compatibility, not isolation; once
   that shared game finishes, calls return 409 until someone resets it via

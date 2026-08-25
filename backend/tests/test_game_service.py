@@ -6,8 +6,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from app.games.service import GameService, UnknownGameError
+from app.games.service import (
+    GameService,
+    GameSession,
+    InMemoryGameSessionRepository,
+    UnknownGameError,
+)
 from app.physics.ball import BALL_CATALOG
+from app.physics.lane import LaneCondition
 from app.physics.simulate import simulate_throw
 from app.physics.throw import Throw, sample_release
 
@@ -104,3 +110,86 @@ def test_parallel_throws_in_one_game_preserve_sequential_versions():
     versions = sorted(result.lane_condition_version for result in results)
     assert versions == list(range(1, throw_count + 1))
     assert game.lane.condition.version == throw_count + 1
+
+
+def test_get_or_create_for_an_existing_id_ignores_an_invalid_oil_pattern():
+    """`get_or_create`'s oil_pattern validation only ever runs on the
+    create-a-new-session path -- a lookup hit returns the existing game
+    without even reading the argument. This was true of the original
+    single-lock implementation (the existence check happened before
+    oil_pattern was read at all) and stays true now that get_or_create
+    delegates to a repository: the validating factory closure only runs
+    if the repository actually calls it, which it doesn't for a hit."""
+    service = GameService()
+    existing = service.create_game()
+
+    looked_up = service.get_or_create(existing.game_id, oil_pattern="not-a-real-pattern")
+
+    assert looked_up is existing
+
+
+def test_get_or_create_for_a_new_id_still_validates_the_oil_pattern():
+    """The other half of the same contract: a genuinely new game_id does
+    reach the factory, so an invalid oil_pattern still raises exactly as
+    before -- this isn't validation silently disappearing, only deferred
+    to when it's actually relevant."""
+    service = GameService()
+
+    with pytest.raises(ValueError):
+        service.get_or_create("brand-new-id", oil_pattern="not-a-real-pattern")
+
+
+class _CountingLock:
+    """Wraps a real lock, counting how many times it was used as a
+    context manager. Swapped in for `InMemoryGameSessionRepository`'s own
+    `_lock` in the test below so "does `get_or_put` hold the lock across
+    its whole check-then-store sequence" is a deterministic count rather
+    than something a thread-pool stress test can only hope to observe --
+    see that test's own docstring for why a stress test alone isn't
+    trustworthy here."""
+
+    def __init__(self, real_lock):
+        self._real_lock = real_lock
+        self.enter_count = 0
+
+    def __enter__(self):
+        self.enter_count += 1
+        return self._real_lock.__enter__()
+
+    def __exit__(self, *args):
+        return self._real_lock.__exit__(*args)
+
+
+def test_get_or_put_holds_the_lock_for_its_entire_check_then_store_sequence():
+    """The actual guarantee that prevents two concurrent get_or_create
+    calls for the same game_id from creating two different sessions: the
+    existence check and the conditional store must happen as a single
+    critical section, not as two independent lock acquisitions (which is
+    exactly what get()-then-put() as separate calls would be).
+
+    Proven deterministically by counting lock acquisitions rather than by
+    a thread-pool stress test -- CPython's GIL means a stress test for
+    this exact race is not reliable: a from-scratch two-call
+    get()-then-put() mutation of get_or_put was confirmed, by hand
+    (removed before this commit), to still pass a 40-caller/16-thread
+    stress test on every one of three separate runs, so a stress test
+    alone would not have caught this class of regression.
+    """
+    repository = InMemoryGameSessionRepository()
+    counting_lock = _CountingLock(repository._lock)
+    repository._lock = counting_lock
+
+    repository.get_or_put(
+        "some-id",
+        lambda: GameSession(game_id="some-id", initial_condition=LaneCondition.house_shot()),
+    )
+
+    assert counting_lock.enter_count == 1
+
+    # A lookup hit must also stay a single critical section -- not "one
+    # acquisition to check, a second to decide not to store."
+    repository.get_or_put(
+        "some-id", lambda: pytest.fail("factory must not run for an existing id")
+    )
+
+    assert counting_lock.enter_count == 2
