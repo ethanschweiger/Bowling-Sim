@@ -161,18 +161,20 @@ every push and pull request:
 
 | Check | Runner | What it runs |
 |---|---|---|
-| `backend` | Ubuntu, Python 3.11 | Installs `requirements.txt` plus `requirements-dev.txt`, then `ruff check .` and `python -m pytest -q` in `backend/` |
+| `backend` | Ubuntu, Python 3.11 | Installs `requirements.txt` plus `requirements-dev.txt`, then `ruff check .`, `mypy app`, and `python -m pytest -q` in `backend/` |
 | `frontend` | Ubuntu, Node 20 | `npm ci`, `npm run lint`, `npm run build`, `npm run test -- --run` in `frontend/` |
 
 Use those two names, `backend` and `frontend`, if you turn on branch
 protection under Settings > Branches — Claude does not change repository
 settings, secrets, protections, or external services itself.
 
-`backend/pyproject.toml` also carries a strict mypy configuration, run
-locally only (`cd backend && mypy app`) — not a CI gate. It's pinned to
-the Python 3.9 runtime floor `backend/.venv` runs, while CI pins 3.11 for
-tests and lint; the two differ on purpose. It currently reports zero
-findings (29 source files checked); nothing breaks when that count moves.
+`backend/pyproject.toml`'s strict mypy configuration is a required CI
+step now, not local-only. It still checks against the Python 3.9 runtime
+floor `backend/.venv` runs (`python_version = "3.9"` in that config)
+even though the CI job's own interpreter is 3.11 — mypy's target version
+is a config setting independent of whichever Python actually runs it.
+It currently reports zero findings (29 source files checked); nothing
+breaks when that count moves.
 
 ## Docker
 
