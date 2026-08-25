@@ -124,7 +124,7 @@ with it (`LaneCondition.friction_at` / `_temperature_friction_multiplier`
 in `lane.py`). The direction (warmer -> slightly higher friction) is a
 stated modeling choice, not derived from thermodynamics.
 
-### Games own their lane — state lifecycle
+### Games own their lane with state lifecycle
 
 `LaneSession` is a primitive, not a place to put multiple players' state.
 `app/games/service.py` owns that: a `GameSession` pairs one game's
@@ -143,7 +143,7 @@ touches `OilPatternSpec`/`LaneCondition.house_shot()`, the reusable pattern
 definition every game is built from; reset only ever affects the one game
 whose ID you call it on.
 
-### Pin deck, impact, and pinfall — separate concerns, on purpose
+### Pin deck, impact, and pinfall remain compartmentalized
 
 Four things that will eventually combine into real pin-collision physics
 are kept deliberately separate, each in its own module, so a future
@@ -214,7 +214,7 @@ unchanged from treating the raw weights as mass directly; only the units
 become honest, and "kinetic energy" in this model means real energy
 (lbf·in), not a same-named but dimensionally hollow number.
 
-What's calibrated — stated explicitly, never silently guessed:
+What's calibrated (stated explicitly)
 
 - **Effective pin radius** (`PIN_EFFECTIVE_RADIUS_IN`, ~2.38 in): half the
   pin's widest diameter (its "belly," 4.5 in above the base — not the base
@@ -246,7 +246,7 @@ tips over an axis, this one just displaces), loft off the foul line,
 kickbacks, string-pinsetter interaction, and pinsetter placement variance
 (real pin spots drift slightly, tested to their own ±1/16 in tolerance).
 
-### Scoring — a separate, pure domain model
+### Scoring — pure domain model
 
 `app/scoring/scorecard.py` turns a sequence of pinfall counts into frame
 states and a score, per standard USBC ten-pin rules. It's deliberately
