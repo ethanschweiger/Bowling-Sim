@@ -8,6 +8,40 @@
  * is meant to need the matching edit and nothing else.
  */
 
+/** The numeric inputs the simulator uses for one ball.
+ *
+ * Model parameters, not a manufacturer's spec sheet. See
+ * `backend/app/models/schemas.py`'s `BallSpecResponse` for which of them
+ * the trajectory code currently reads. */
+export interface BallSpecResponse {
+  mass_lbs: number;
+  radius_in: number;
+  rg_in: number;
+  differential: number;
+  hook_potential: number;
+}
+
+/** One selectable ball, exactly as `GET /api/v1/balls` publishes it.
+ *
+ * `coverstock` is the plain declared value, never an enum repr.
+ * `description` is display text the server owns, so the UI can render
+ * help for a ball id it has never seen. */
+export interface BallResponse {
+  id: string;
+  name: string;
+  coverstock: string;
+  surface: string;
+  description: string;
+  spec: BallSpecResponse;
+}
+
+/** `GET /api/v1/balls` — the server's whole selectable catalog, in the
+ * order the backend declares it. This is the authority on which
+ * `ball_id` values a throw will accept. */
+export interface BallCatalogResponse {
+  balls: BallResponse[];
+}
+
 export interface ThrowRequest {
   ball_id: string;
   /** Reuse a seed to reproduce a throw's release exactly. Omit for a random one. */

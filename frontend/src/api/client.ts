@@ -12,6 +12,7 @@
  */
 
 import type {
+  BallCatalogResponse,
   CreateGameRequest,
   CreateGameResponse,
   GameResetResponse,
@@ -79,6 +80,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+/** The server's ball catalog. Read-only, and the only source of legal
+ * `ball_id` values the UI is allowed to offer. */
+export function getBalls(): Promise<BallCatalogResponse> {
+  return request<BallCatalogResponse>('/api/v1/balls');
 }
 
 export function createGame(body: CreateGameRequest = {}): Promise<CreateGameResponse> {

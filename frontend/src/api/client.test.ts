@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, createGame, getGame, resetGame, throwBall } from './client';
+import { ApiError, createGame, getBalls, getGame, resetGame, throwBall } from './client';
 
 function jsonResponse(body: unknown, init: { status?: number; ok?: boolean } = {}) {
   const status = init.status ?? 200;
@@ -12,6 +12,21 @@ function jsonResponse(body: unknown, init: { status?: number; ok?: boolean } = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('getBalls', () => {
+  it('GETs /api/v1/balls', async () => {
+    const body = { balls: [{ id: 'house_ball', name: 'House Ball' }] };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getBalls();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/balls');
+    expect(init?.method ?? undefined).toBeUndefined(); // GET is fetch's default method
+    expect(result.balls[0].id).toBe('house_ball');
+  });
 });
 
 describe('createGame', () => {

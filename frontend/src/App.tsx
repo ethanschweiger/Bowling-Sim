@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, resetGame, throwBall } from './api/client';
-import type { GameStateResponse, GameThrowResponse, ThrowRequest } from './api/types';
+import type { BallResponse, GameStateResponse, GameThrowResponse, ThrowRequest } from './api/types';
 import styles from './App.module.css';
 import { BallSelect } from './components/BallSelect';
 import { LaneCanvas } from './components/LaneCanvas';
@@ -9,7 +9,7 @@ import { ReleaseSeedControl } from './components/ReleaseSeedControl';
 import { ScoreboardPanel } from './components/ScoreboardPanel';
 import { StaleGameNotice } from './components/StaleGameNotice';
 import { ThrowControls, type ThrowStatus } from './components/ThrowControls';
-import { DEFAULT_BALL_ID } from './domain/ballCatalog';
+import { fetchBallCatalog, isSelectable, pickDefaultBallId } from './domain/ballCatalog';
 import { bootstrapGame, classifyThrowFailure, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
 import { defaultReleaseValues, type ReleaseFieldId } from './domain/releaseFields';
 import { parseReleaseSeed } from './domain/releaseSeed';
@@ -38,7 +38,13 @@ function App() {
   const [lastThrowRanAgainstVersion, setLastThrowRanAgainstVersion] = useState<number | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const [staleGameMessage, setStaleGameMessage] = useState<string | null>(null);
-  const [ballId, setBallId] = useState(DEFAULT_BALL_ID);
+  // The server owns the ball list, so both of these start empty and are
+  // only ever filled from a catalog response. `ballId` stays null until
+  // then: there is no local default to fall back on, because a hardcoded
+  // id could disagree with the server and 404 on the throw.
+  const [ballCatalog, setBallCatalog] = useState<BallResponse[] | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [ballId, setBallId] = useState<string | null>(null);
   const [releaseValues, setReleaseValues] = useState(defaultReleaseValues());
   const [releaseSeed, setReleaseSeed] = useState('');
   const [latestThrow, setLatestThrow] = useState<GameThrowResponse | null>(null);
@@ -119,12 +125,50 @@ function App() {
     runBootstrap();
   }, [runBootstrap]);
 
+  const runCatalogLoad = useCallback(() => {
+    setCatalogError(null);
+    // fetchBallCatalog() is memoized at module scope (see
+    // domain/ballCatalog.ts), so StrictMode's double mount and any later
+    // re-render share one request rather than issuing another.
+    fetchBallCatalog().then(
+      (balls) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        setBallCatalog(balls);
+        // Only ever select an id the server actually returned.
+        setBallId((current) => (isSelectable(balls, current) ? current : pickDefaultBallId(balls)));
+      },
+      (error: unknown) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        // Named explicitly: the game bootstrap can fail at the same
+        // moment for the same reason, and two identical alerts would not
+        // tell the player which Retry does what.
+        setCatalogError(`Could not load the ball catalog. ${messageFor(error, 'Please try again.')}`);
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    // Same sanctioned case as the bootstrap effect above.
+    // oxlint-disable-next-line react/set-state-in-effect
+    runCatalogLoad();
+  }, [runCatalogLoad]);
+
   const handleReleaseChange = useCallback((id: ReleaseFieldId, value: number) => {
     setReleaseValues((previous) => ({ ...previous, [id]: value }));
   }, []);
 
   async function handleThrow() {
     if (!game || presentationLockRef.current || status.kind === 'loading') {
+      return;
+    }
+    // Never submit a ball the server did not publish. `ballId` is only
+    // ever set from a catalog response, so this is a guard against a
+    // catalog that failed to load rather than an expected branch.
+    if (!ballCatalog || ballId === null || !isSelectable(ballCatalog, ballId)) {
       return;
     }
     const requestedRelease: ThrowRequest = { ball_id: ballId, ...releaseValues };
@@ -242,6 +286,8 @@ function App() {
 
   const isBusy = status.kind === 'loading';
   const isStale = staleGameMessage !== null;
+  // The controls need both the game and the server's ball list.
+  const isReady = game !== null && ballCatalog !== null;
 
   return (
     <div className={styles.page}>
@@ -258,20 +304,33 @@ function App() {
           </button>
         </div>
       )}
-      {!game && !initError && (
+      {catalogError && (
+        <div role="alert" className={styles.initError}>
+          <p>{catalogError}</p>
+          <button type="button" className={styles.retryButton} onClick={runCatalogLoad}>
+            Retry
+          </button>
+        </div>
+      )}
+      {!isReady && !initError && !catalogError && (
         <p aria-live="polite" className={styles.loadingText}>
           Loading your game…
         </p>
       )}
 
-      {game && (
+      {isReady && game && ballCatalog && (
         <main className={styles.main}>
           <section aria-labelledby="controls-heading" className={styles.controlsPanel}>
             <h2 id="controls-heading" className={styles.panelHeading}>
               Set up your throw
             </h2>
             <div className={styles.controlsStack}>
-              <BallSelect value={ballId} onChange={setBallId} disabled={isBusy || isStale || presentationLocked} />
+              <BallSelect
+                options={ballCatalog}
+                value={ballId ?? ''}
+                onChange={setBallId}
+                disabled={isBusy || isStale || presentationLocked}
+              />
               <ReleaseControls
                 values={releaseValues}
                 onChange={handleReleaseChange}

@@ -269,3 +269,50 @@ class GameStatusResponse(BaseModel):
     game_id: str
     lane_condition_version: int
     game_state: GameStateResponse
+
+
+class BallSpecResponse(BaseModel):
+    """The numeric inputs this simulator uses for one ball.
+
+    These are *model* parameters, not a manufacturer's spec sheet. They
+    describe what the trajectory code reads, and two of them are recorded
+    rather than used: `mass_lbs` cancels out of the Coulomb-friction
+    deceleration this milestone models, and `radius_in` is the same
+    regulation value for every catalog ball. See
+    `app.physics.ball`'s module docstring for both. `hook_potential` is a
+    derived scalar this project computes, not a published rating.
+    """
+
+    mass_lbs: float
+    radius_in: float
+    rg_in: float
+    differential: float
+    hook_potential: float
+
+
+class BallResponse(BaseModel):
+    """One selectable ball, as `GET /api/v1/balls` publishes it.
+
+    `coverstock` is the plain declared value (`plastic`, `urethane`,
+    `reactive`, `particle`), never an enum repr, so a client can compare
+    it as a string. `description` is display text the server owns, so a
+    client can render help for a ball whose id it has never seen.
+    """
+
+    id: str
+    name: str
+    coverstock: Literal["plastic", "urethane", "reactive", "particle"]
+    surface: str
+    description: str
+    spec: BallSpecResponse
+
+
+class BallCatalogResponse(BaseModel):
+    """`GET /api/v1/balls` — the server's whole selectable ball catalog,
+    in the order `app.physics.ball.BALL_CATALOG` declares.
+
+    A small starter catalog, and the authority on which `ball_id` values a
+    throw will accept. Clients read this instead of hardcoding ids.
+    """
+
+    balls: list[BallResponse]

@@ -685,11 +685,16 @@ current number (from create/reset/GET) is what shows the rest of the time.
 
 The six release inputs share `RELEASE_BOUNDS` and `ThrowRequest`'s field
 defaults with the backend (`frontend/src/domain/releaseFields.ts`), so the
-UI can't offer a value the API would reject. The ball catalog
-(`frontend/src/domain/ballCatalog.ts`) is a small hardcoded list of today's
-four ball IDs — there's no `GET /api/v1/balls` yet — and only the `house`
-oil pattern is shown as available, matching what `POST /api/v1/games`
-actually accepts. The lane `<canvas>` draws the documented 39-board/60 ft
+UI can't offer a value the API would reject. The ball selector is filled
+from `GET /api/v1/balls` (`frontend/src/domain/ballCatalog.ts` fetches it
+once and memoizes it, the way the game bootstrap does), so the frontend
+holds no ball ids of its own and cannot offer one a throw would reject.
+There is no local fallback catalog on purpose: a stale copy could
+disagree with the server, so a failed load shows a retry instead of a
+guess. `reactive_pearl` stays the preferred starting selection when the
+server publishes it, otherwise the first ball it returns is selected.
+Only the `house` oil pattern is shown as available, matching what
+`POST /api/v1/games` actually accepts. The lane `<canvas>` draws the documented 39-board/60 ft
 lane, the foul line, and the standard pin deck (filled = standing,
 outlined and faded with an "×" = fallen — never color alone, sourced from
 `game_state.standing_pin_ids` in its final, already-server-confirmed
@@ -782,6 +787,26 @@ npm run test    # vitest — request mapping and game-state display logic
 
 ## API
 
+### List the balls
+
+```bash
+curl http://localhost:8000/api/v1/balls
+# {"balls": [ {"id": "house_ball", "name": "House Ball",
+#    "coverstock": "plastic", "surface": "polished",
+#    "description": "Plastic coverstock, polished. Near-zero hook, …",
+#    "spec": {"mass_lbs": 15.0, "radius_in": 4.29, "rg_in": 2.75,
+#             "differential": 0.02, "hook_potential": 0.0078}}, … ] }
+```
+
+Read-only, and the authority on which `ball_id` values a throw accepts:
+it serves `backend/app/physics/ball.py`'s `BALL_CATALOG`, the same dict
+the throw routes validate against, in its declared order. `coverstock` is
+the plain value (`plastic`, `urethane`, `reactive`, `particle`), never an
+enum repr. `spec` holds this simulator's model inputs rather than a
+manufacturer's spec sheet, and two of its fields are recorded but unused
+this milestone (see `backend/app/physics/ball.py`'s module docstring).
+An unknown `ball_id` on a throw is still a 404.
+
 ### Create a game
 
 ```bash
@@ -859,7 +884,7 @@ state — nothing here is persisted, and there's no multiplayer sync; a
 second server process, or this one restarting, would not see it.
 
 Ball catalog: `house_ball`, `urethane_smooth`, `reactive_pearl`, `particle_beast`
-(see `backend/app/physics/ball.py`).
+(see `backend/app/physics/ball.py`, or fetch `GET /api/v1/balls`).
 
 ### Deprecated: `POST /api/v1/simulations/throws`
 
@@ -952,9 +977,11 @@ percentages, leave tracking, ball usage stats.
   throw animates over the same fixed, eased duration regardless of how
   fast or slow that ball actually traveled. See
   `frontend/src/domain/trajectoryAnimation.ts`.
-- The ball catalog and "only house is available" pattern notice are
-  hardcoded in the frontend (`frontend/src/domain/ballCatalog.ts`), not
-  fetched from the API — there's no `GET /api/v1/balls` yet.
+- The ball catalog is a small starter catalog of four balls, served from
+  `GET /api/v1/balls`. It is fixed at startup: there is no way to add,
+  edit, or persist a ball, and no endpoint publishes oil patterns, so the
+  "only house is available" pattern notice is still frontend text rather
+  than a fetched list.
 - The frontend only detects a stale saved `game_id` (the backend
   restarted, dropping all in-memory games, per the limitation above)
   reactively — when a reset against it 404s directly, or a throw's 404 is
