@@ -1,0 +1,29 @@
+# Local development only -- runs the existing FastAPI backend and Vite
+# frontend exactly as documented in README.md's "Run" and "Run it
+# locally" sections, as two containers instead of two manually-started
+# host processes. No database service: nothing in this app connects to
+# one yet (see backend/app/core/config.py). See README.md's "Docker"
+# section for start/stop/rebuild commands and troubleshooting.
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      # Overrides vite.config.ts's proxy target (which defaults to
+      # 127.0.0.1:8000 for host-machine development) to this Compose
+      # network's backend service name -- containers can't reach each
+      # other over 127.0.0.1. No source file changes; the override
+      # variable already existed for exactly this kind of case.
+      VITE_BACKEND_ORIGIN: http://backend:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend

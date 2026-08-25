@@ -642,6 +642,68 @@ environments, or external services. Once the `backend` and `frontend` checks
 look stable on GitHub, you can require them on `main` under Settings >
 Branches.
 
+## Docker
+
+A local-development alternative to the native `Setup`/`Run` steps above —
+runs the same backend and frontend, unmodified, as two containers instead
+of two manually-started host processes. Not a production/deployment setup:
+no database container, no persistence, no reverse proxy, no image
+publishing. See [`docker-compose.yml`](docker-compose.yml),
+[`backend/Dockerfile`](backend/Dockerfile), and
+[`frontend/Dockerfile`](frontend/Dockerfile).
+
+**Prerequisites:** Docker Desktop (or an equivalent Docker Engine +
+Compose v2 install) with the daemon running.
+
+**Start**, from the repository root:
+
+```bash
+docker compose up --build
+```
+
+Builds both images on first run (or after a dependency/source change) and
+starts both containers in the foreground; add `-d` to run detached.
+
+**Exposed URLs**, identical to native local development:
+
+- Backend API: `http://localhost:8000` (docs at `http://localhost:8000/docs`)
+- Frontend: `http://localhost:5173`
+
+**Rebuild** after *any* source change — this minimal setup copies
+`backend/app` and `frontend/src` into the image at build time rather than
+mounting them as live volumes, so an edit on the host has no effect on a
+running or restarted container until the image is rebuilt:
+
+```bash
+docker compose up --build
+```
+
+`docker compose build` alone (without `up`) is enough if you only want to
+rebuild without starting anything. There is no uvicorn `--reload` or Vite
+HMR reaching outside the container — a genuinely live-editing dev loop
+would need bind-mounted source volumes, which this narrow milestone
+doesn't add.
+
+**Stop:**
+
+```bash
+docker compose down
+```
+
+Removes the containers and the network Compose created; image layers stay
+cached for the next build.
+
+**Troubleshooting — port 8000 or 5173 already in use:** most often a
+native (non-Docker) `uvicorn`/`vite` process is still running from the
+`Setup`/`Run` steps above. Stop that process first, or check
+`lsof -i :8000` / `lsof -i :5173` for whatever else is bound to the port.
+
+**What Docker does not change:** games are still in-memory only inside the
+backend container — stopping or rebuilding that container loses every
+game, exactly like restarting the process natively, and the bounded
+in-memory registry from `fa2b8a7` (see "Known limitations") still governs
+how many games it retains while running.
+
 ## Frontend
 
 `frontend/` (Vite + React + TypeScript, the official `react-ts` template)
