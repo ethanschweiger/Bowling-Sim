@@ -418,7 +418,9 @@ percentages, leave tracking, ball usage stats.
   `from_record()` add a pure dump/rehydrate boundary for one game's
   complete state — still just an in-process serialization/rehydration
   shape a future repository could store, not a persistence mechanism
-  itself.
+  itself. `app/games/record_payload.py` converts that same state to and
+  from plain JSON-compatible primitives, for whatever a real storage
+  boundary would actually write — no database or file writes it yet.
 - The deprecated `/api/v1/simulations/throws` route shares one game
   across every caller, for backward compatibility, not isolation; once
   that shared game finishes, calls return 409 until someone resets it via
