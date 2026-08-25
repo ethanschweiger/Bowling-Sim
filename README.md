@@ -1,6 +1,6 @@
 # Bowling-Sim
 
-A bowling simulator built around a physics model, not a random-number generator.
+A bowling simulator built around a simplified physics model.
 You pick a ball, an oil pattern, and throw parameters. The backend simulates
 the ball's path down the lane and reports what happens at the pins.
 
@@ -78,7 +78,7 @@ conventions" at the top of `simulate.py` for the full sign/direction
 reference (downlane distance, lateral direction, board numbering, release
 angle, entry angle).
 
-### Ball properties, what they do
+### Ball properties
 
 - **Coverstock** and **surface** (grit) set how much the ball grips a dry
   board — plastic barely hooks, particle on a 500-grit surface hooks hard.
@@ -92,7 +92,7 @@ angle, entry angle).
   regulation diameter — it can't differentiate behavior until custom or
   undersized balls exist.
 
-### Lane state is stateful, not a fixed pattern
+### Lane state is dynamic
 
 The house shot starts as a lateral/longitudinal oil grid, normalized so it
 sums to exactly 22 mL — a documented, reasoned assumption (not a certified
