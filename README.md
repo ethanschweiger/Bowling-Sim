@@ -240,9 +240,12 @@ npm run dev
 
 Starts the Vite dev server at `http://localhost:5173`. Its dev-server
 proxy (`frontend/vite.config.ts`) forwards relative `/api/...` requests to
-`http://127.0.0.1:8000`, so start the backend first — this is the only
-supported local setup; the backend has no CORS configuration for a
-different origin yet.
+`http://127.0.0.1:8000`, so start the backend first — this is the
+supported local setup, and needs no CORS configuration at all since the
+browser only ever talks to the Vite server. A frontend hosted on its own
+origin instead needs the backend's `BACKEND_CORS_ORIGINS` allowlist set
+to that origin (see `backend/.env.example`); CORS is off by default, and
+this project still has no non-local deployment.
 
 ## API
 
