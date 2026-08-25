@@ -426,6 +426,10 @@ percentages, leave tracking, ball usage stats.
   schema-only: nothing runs it against a real database, nothing in
   `GameService` reads or writes through it, and `default_game_service`
   still uses `InMemoryGameSessionRepository` exactly as before.
+  `app/db/row_store.py` adds row-value and SQL-statement helpers
+  (a `SELECT` and a PostgreSQL upsert) for that same table — still no
+  `Engine`, connection, or runtime repository anywhere; storage is still
+  in-memory only.
 - The deprecated `/api/v1/simulations/throws` route shares one game
   across every caller, for backward compatibility, not isolation; once
   that shared game finishes, calls return 409 until someone resets it via
