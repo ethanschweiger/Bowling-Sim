@@ -36,7 +36,7 @@ def test_a_none_cap_disables_eviction_entirely():
 
     created = [service.create_game() for _ in range(50)]
 
-    assert len(service._games) == 50
+    assert len(service._repository._games) == 50
     for session in created:
         assert service.get_game(session.game_id) is session
 
@@ -49,7 +49,7 @@ def test_the_production_registry_is_bounded_by_default():
     anything this cheaper check doesn't already prove."""
     assert isinstance(DEFAULT_MAX_GAMES, int)
     assert DEFAULT_MAX_GAMES > 0
-    assert default_game_service._max_games == DEFAULT_MAX_GAMES
+    assert default_game_service._repository._max_games == DEFAULT_MAX_GAMES
 
 
 def test_oldest_game_is_evicted_when_creating_beyond_the_cap():
@@ -59,7 +59,7 @@ def test_oldest_game_is_evicted_when_creating_beyond_the_cap():
 
     c = service.create_game()
 
-    assert list(service._games) == [b.game_id, c.game_id]
+    assert list(service._repository._games) == [b.game_id, c.game_id]
     with pytest.raises(UnknownGameError):
         service.get_game(a.game_id)
 
@@ -96,7 +96,7 @@ def test_get_or_create_for_an_existing_id_never_evicts():
         assert looked_up is b
 
     # Neither game was touched by five repeated lookups of b.
-    assert list(service._games) == [a.game_id, b.game_id]
+    assert list(service._repository._games) == [a.game_id, b.game_id]
     assert service.get_game(a.game_id) is a
 
 
@@ -109,7 +109,7 @@ def test_get_or_create_creating_a_new_id_respects_the_cap():
     created = service.get_or_create("brand-new-id")
 
     assert created.game_id == "brand-new-id"
-    assert list(service._games) == ["brand-new-id"]
+    assert list(service._repository._games) == ["brand-new-id"]
     with pytest.raises(UnknownGameError):
         service.get_game(a.game_id)
 
@@ -124,7 +124,7 @@ def test_retained_games_keep_independent_lane_and_score_state_after_a_sibling_is
 
     # Evicts the first game; must not touch `b` at all.
     c = service.create_game()
-    assert list(service._games) == [b.game_id, c.game_id]
+    assert list(service._repository._games) == [b.game_id, c.game_id]
     with pytest.raises(UnknownGameError):
         service.get_game(evicted_id)
 

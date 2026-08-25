@@ -240,9 +240,12 @@ npm run dev
 
 Starts the Vite dev server at `http://localhost:5173`. Its dev-server
 proxy (`frontend/vite.config.ts`) forwards relative `/api/...` requests to
-`http://127.0.0.1:8000`, so start the backend first — this is the only
-supported local setup; the backend has no CORS configuration for a
-different origin yet.
+`http://127.0.0.1:8000`, so start the backend first — this is the
+supported local setup, and needs no CORS configuration at all since the
+browser only ever talks to the Vite server. A frontend hosted on its own
+origin instead needs the backend's `BACKEND_CORS_ORIGINS` allowlist set
+to that origin (see `backend/.env.example`); CORS is off by default, and
+this project still has no non-local deployment.
 
 ## API
 
@@ -407,7 +410,11 @@ percentages, leave tracking, ball usage stats.
   oldest game by creation order — never by last read or throw, no TTL,
   no background sweep. An evicted `game_id` then behaves exactly like one
   that never existed: a 404 the frontend already treats as a stale saved
-  game.
+  game. Sessions now sit behind a small `GameSessionRepository` boundary
+  so a future persistent store can replace `InMemoryGameSessionRepository`
+  without changing `GameService`'s API — but that in-memory
+  implementation is still the only one, so a process/container restart
+  still loses every game exactly as before.
 - The deprecated `/api/v1/simulations/throws` route shares one game
   across every caller, for backward compatibility, not isolation; once
   that shared game finishes, calls return 409 until someone resets it via
