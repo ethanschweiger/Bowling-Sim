@@ -693,8 +693,13 @@ There is no local fallback catalog on purpose: a stale copy could
 disagree with the server, so a failed load shows a retry instead of a
 guess. `reactive_pearl` stays the preferred starting selection when the
 server publishes it, otherwise the first ball it returns is selected.
-Only the `house` oil pattern is shown as available, matching what
-`POST /api/v1/games` actually accepts. The lane `<canvas>` draws the documented 39-board/60 ft
+The oil-pattern notice is filled from `GET /api/v1/oil-patterns`
+(`frontend/src/domain/oilPatternCatalog.ts`, fetched and memoized the
+same way), so its name and description are server-owned text rather than
+a hardcoded string. Only one pattern exists today, `house`, so the notice
+stays a fixed fact rather than a selector — but that fact is exactly what
+`POST /api/v1/games` accepts, and would stay in sync if a second pattern
+were ever added to the registry. The lane `<canvas>` draws the documented 39-board/60 ft
 lane, the foul line, and the standard pin deck (filled = standing,
 outlined and faded with an "×" = fallen — never color alone, sourced from
 `game_state.standing_pin_ids` in its final, already-server-confirmed
@@ -806,6 +811,25 @@ enum repr. `spec` holds this simulator's model inputs rather than a
 manufacturer's spec sheet, and two of its fields are recorded but unused
 this milestone (see `backend/app/physics/ball.py`'s module docstring).
 An unknown `ball_id` on a throw is still a 404.
+
+### List the oil patterns
+
+```bash
+curl http://localhost:8000/api/v1/oil-patterns
+# {"patterns": [ {"id": "house", "name": "House Shot",
+#    "description": "Forgiving, with the oil concentrated in the middle …",
+#    "spec": {"length_ft": 40.0, "taper_ft": 6.0, "center_boards": [8, 32],
+#             "total_boards": [3, 37], "pattern_ratio": 3.0,
+#             "total_volume_ml": 22.0}} ] }
+```
+
+Read-only, and the authority on which `oil_pattern` values
+`POST /api/v1/games` accepts: it serves the same `SUPPORTED_OIL_PATTERNS`
+registry the create-game route validates against, in declared order.
+`spec` reads directly off `app.physics.lane`'s `OilPatternSpec` for that
+pattern — modeling assumptions this simulator chose, not a certified
+USBC pattern. Only `house` exists today; an unsupported `oil_pattern` on
+create is still a 422.
 
 ### Create a game
 
@@ -978,10 +1002,11 @@ percentages, leave tracking, ball usage stats.
   fast or slow that ball actually traveled. See
   `frontend/src/domain/trajectoryAnimation.ts`.
 - The ball catalog is a small starter catalog of four balls, served from
-  `GET /api/v1/balls`. It is fixed at startup: there is no way to add,
-  edit, or persist a ball, and no endpoint publishes oil patterns, so the
-  "only house is available" pattern notice is still frontend text rather
-  than a fetched list.
+  `GET /api/v1/balls`. The oil-pattern catalog, `GET /api/v1/oil-patterns`,
+  publishes the same single `house` pattern `POST /api/v1/games` accepts.
+  Both are fixed at startup: there is no way to add, edit, or persist a
+  ball or a pattern, and named-pattern selection remains deferred — only
+  the house shot is modeled.
 - The frontend only detects a stale saved `game_id` (the backend
   restarted, dropping all in-memory games, per the limitation above)
   reactively — when a reset against it 404s directly, or a throw's 404 is

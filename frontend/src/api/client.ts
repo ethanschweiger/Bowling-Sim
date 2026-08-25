@@ -14,6 +14,7 @@
 import type {
   BallCatalogResponse,
   CreateGameRequest,
+  OilPatternCatalogResponse,
   CreateGameResponse,
   GameResetResponse,
   GameStatusResponse,
@@ -86,6 +87,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
  * `ball_id` values the UI is allowed to offer. */
 export function getBalls(): Promise<BallCatalogResponse> {
   return request<BallCatalogResponse>('/api/v1/balls');
+}
+
+/** The server's oil-pattern catalog. Read-only, and the only source of
+ * legal `oil_pattern` values `POST /api/v1/games` accepts. */
+export function getOilPatterns(): Promise<OilPatternCatalogResponse> {
+  return request<OilPatternCatalogResponse>('/api/v1/oil-patterns');
 }
 
 export function createGame(body: CreateGameRequest = {}): Promise<CreateGameResponse> {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, createGame, getBalls, getGame, resetGame, throwBall } from './client';
+import { ApiError, createGame, getBalls, getGame, getOilPatterns, resetGame, throwBall } from './client';
 
 function jsonResponse(body: unknown, init: { status?: number; ok?: boolean } = {}) {
   const status = init.status ?? 200;
@@ -26,6 +26,21 @@ describe('getBalls', () => {
     expect(url).toBe('/api/v1/balls');
     expect(init?.method ?? undefined).toBeUndefined(); // GET is fetch's default method
     expect(result.balls[0].id).toBe('house_ball');
+  });
+});
+
+describe('getOilPatterns', () => {
+  it('GETs /api/v1/oil-patterns', async () => {
+    const body = { patterns: [{ id: 'house', name: 'House Shot' }] };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getOilPatterns();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/oil-patterns');
+    expect(init?.method ?? undefined).toBeUndefined(); // GET is fetch's default method
+    expect(result.patterns[0].id).toBe('house');
   });
 });
 

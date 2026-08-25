@@ -34,10 +34,17 @@
   padding: 0.625rem 0.75rem;
   border-radius: 0.5rem;
   background: var(--color-surface-inset);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.patternInfoName {
+  margin: 0;
   font-size: 0.85rem;
   color: var(--color-text-muted);
 }
 
-.patternInfo strong {
+.patternInfoName strong {
   color: var(--color-text);
 }

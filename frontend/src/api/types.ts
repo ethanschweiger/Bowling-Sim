@@ -42,6 +42,37 @@ export interface BallCatalogResponse {
   balls: BallResponse[];
 }
 
+/** The stated shape of one oil pattern, as this simulator models it.
+ *
+ * Pattern inputs and modeling assumptions, not a certified USBC pattern.
+ * Board ranges are inclusive `[low, high]` pairs on the 1-39 board scale. */
+export interface OilPatternSpecResponse {
+  length_ft: number;
+  taper_ft: number;
+  center_boards: [number, number];
+  total_boards: [number, number];
+  pattern_ratio: number;
+  total_volume_ml: number;
+}
+
+/** One selectable oil pattern, exactly as `GET /api/v1/oil-patterns`
+ * publishes it. `id` is the value `POST /api/v1/games` accepts for
+ * `oil_pattern`; `name` and `description` are display text the server
+ * owns. */
+export interface OilPatternResponse {
+  id: string;
+  name: string;
+  description: string;
+  spec: OilPatternSpecResponse;
+}
+
+/** `GET /api/v1/oil-patterns` — every pattern a game can be created
+ * with, in the order the backend declares it. The same registry
+ * `POST /api/v1/games` validates `oil_pattern` against. */
+export interface OilPatternCatalogResponse {
+  patterns: OilPatternResponse[];
+}
+
 export interface ThrowRequest {
   ball_id: string;
   /** Reuse a seed to reproduce a throw's release exactly. Omit for a random one. */

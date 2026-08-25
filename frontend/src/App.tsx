@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, resetGame, throwBall } from './api/client';
-import type { BallResponse, GameStateResponse, GameThrowResponse, ThrowRequest } from './api/types';
+import type { BallResponse, GameStateResponse, GameThrowResponse, OilPatternResponse, ThrowRequest } from './api/types';
 import styles from './App.module.css';
 import { BallSelect } from './components/BallSelect';
 import { LaneCanvas } from './components/LaneCanvas';
@@ -10,6 +10,7 @@ import { ScoreboardPanel } from './components/ScoreboardPanel';
 import { StaleGameNotice } from './components/StaleGameNotice';
 import { ThrowControls, type ThrowStatus } from './components/ThrowControls';
 import { fetchBallCatalog, isSelectable, pickDefaultBallId } from './domain/ballCatalog';
+import { fetchOilPatternCatalog, primaryOilPattern } from './domain/oilPatternCatalog';
 import { bootstrapGame, classifyThrowFailure, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
 import { defaultReleaseValues, type ReleaseFieldId } from './domain/releaseFields';
 import { parseReleaseSeed } from './domain/releaseSeed';
@@ -45,6 +46,10 @@ function App() {
   const [ballCatalog, setBallCatalog] = useState<BallResponse[] | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [ballId, setBallId] = useState<string | null>(null);
+  // Same reasoning as the ball catalog above: server-owned, no local
+  // fallback, starts empty until a catalog response fills it.
+  const [oilPatternCatalog, setOilPatternCatalog] = useState<OilPatternResponse[] | null>(null);
+  const [oilPatternError, setOilPatternError] = useState<string | null>(null);
   const [releaseValues, setReleaseValues] = useState(defaultReleaseValues());
   const [releaseSeed, setReleaseSeed] = useState('');
   const [latestThrow, setLatestThrow] = useState<GameThrowResponse | null>(null);
@@ -156,6 +161,35 @@ function App() {
     // oxlint-disable-next-line react/set-state-in-effect
     runCatalogLoad();
   }, [runCatalogLoad]);
+
+  const runOilPatternLoad = useCallback(() => {
+    setOilPatternError(null);
+    // fetchOilPatternCatalog() is memoized at module scope (see
+    // domain/oilPatternCatalog.ts), for the same StrictMode reason as the
+    // ball catalog and game bootstrap above.
+    fetchOilPatternCatalog().then(
+      (patterns) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        setOilPatternCatalog(patterns);
+      },
+      (error: unknown) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        // Named for the same reason the ball-catalog error is: two
+        // identical alerts would not tell the player which Retry does what.
+        setOilPatternError(`Could not load the oil pattern catalog. ${messageFor(error, 'Please try again.')}`);
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    // Same sanctioned case as the bootstrap effect above.
+    // oxlint-disable-next-line react/set-state-in-effect
+    runOilPatternLoad();
+  }, [runOilPatternLoad]);
 
   const handleReleaseChange = useCallback((id: ReleaseFieldId, value: number) => {
     setReleaseValues((previous) => ({ ...previous, [id]: value }));
@@ -286,8 +320,9 @@ function App() {
 
   const isBusy = status.kind === 'loading';
   const isStale = staleGameMessage !== null;
-  // The controls need both the game and the server's ball list.
-  const isReady = game !== null && ballCatalog !== null;
+  // The controls need the game, the server's ball list, and the
+  // server's oil-pattern catalog.
+  const isReady = game !== null && ballCatalog !== null && oilPatternCatalog !== null;
 
   return (
     <div className={styles.page}>
@@ -312,7 +347,15 @@ function App() {
           </button>
         </div>
       )}
-      {!isReady && !initError && !catalogError && (
+      {oilPatternError && (
+        <div role="alert" className={styles.initError}>
+          <p>{oilPatternError}</p>
+          <button type="button" className={styles.retryButton} onClick={runOilPatternLoad}>
+            Retry
+          </button>
+        </div>
+      )}
+      {!isReady && !initError && !catalogError && !oilPatternError && (
         <p aria-live="polite" className={styles.loadingText}>
           Loading your game…
         </p>
@@ -329,6 +372,7 @@ function App() {
                 options={ballCatalog}
                 value={ballId ?? ''}
                 onChange={setBallId}
+                pattern={primaryOilPattern(oilPatternCatalog)}
                 disabled={isBusy || isStale || presentationLocked}
               />
               <ReleaseControls

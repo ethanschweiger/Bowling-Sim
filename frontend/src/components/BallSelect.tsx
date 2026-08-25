@@ -1,5 +1,5 @@
 import type { ChangeEvent } from 'react';
-import type { BallResponse } from '../api/types';
+import type { BallResponse, OilPatternResponse } from '../api/types';
 import styles from './BallSelect.module.css';
 
 interface BallSelectProps {
@@ -8,16 +8,23 @@ interface BallSelectProps {
   options: readonly BallResponse[];
   value: string;
   onChange: (ballId: string) => void;
+  /** The pattern the non-interactive oil-pattern notice describes,
+   * server-owned. Null while it hasn't loaded yet — the notice renders
+   * nothing rather than a stale or invented pattern in that case. */
+  pattern: OilPatternResponse | null;
   disabled?: boolean;
 }
 
-/** Ball choice, plus a fixed, non-interactive readout of the oil pattern —
- * "house" is the only pattern this milestone supports, so it's presented
- * as a fact, not a selector implying there's anything else to pick.
+/** Ball choice, plus a fixed, non-interactive readout of the oil pattern.
+ * Only one pattern is selectable this milestone, so it's presented as a
+ * fact rather than a selector implying there's anything else to pick —
+ * but its name and description are exactly what `pattern` carries, never
+ * a locally hardcoded copy.
  *
- * Help text comes from the server's `description` for the selected ball,
- * so a ball this build has never heard of still renders correctly. */
-export function BallSelect({ options, value, onChange, disabled = false }: BallSelectProps) {
+ * Help text for the ball comes from the server's `description` for the
+ * selected ball, so a ball this build has never heard of still renders
+ * correctly. */
+export function BallSelect({ options, value, onChange, pattern, disabled = false }: BallSelectProps) {
   const selected = options.find((ball) => ball.id === value) ?? options[0];
 
   function handleChange(event: ChangeEvent<HTMLSelectElement>) {
@@ -41,9 +48,14 @@ export function BallSelect({ options, value, onChange, disabled = false }: BallS
           {selected?.description ?? ''}
         </p>
       </div>
-      <p className={styles.patternInfo}>
-        <strong>Oil pattern:</strong> House Shot — the only pattern available this milestone.
-      </p>
+      {pattern && (
+        <div className={styles.patternInfo}>
+          <p className={styles.patternInfoName}>
+            <strong>Oil pattern:</strong> {pattern.name} — the only pattern available this milestone.
+          </p>
+          <p className={styles.help}>{pattern.description}</p>
+        </div>
+      )}
     </div>
   );
 }

@@ -316,3 +316,48 @@ class BallCatalogResponse(BaseModel):
     """
 
     balls: list[BallResponse]
+
+
+class OilPatternSpecResponse(BaseModel):
+    """The stated shape of one oil pattern, as this simulator models it.
+
+    Pattern inputs and modeling assumptions, not a certified USBC pattern.
+    `app.physics.lane`'s `HOUSE_SHOT_SPEC` records which of these numbers
+    were chosen to sit in a typical range rather than measured. Board
+    ranges are inclusive `[low, high]` pairs on the 1-39 board scale.
+    """
+
+    length_ft: float
+    taper_ft: float
+    center_boards: tuple[int, int]
+    total_boards: tuple[int, int]
+    pattern_ratio: float
+    total_volume_ml: float
+
+
+class OilPatternResponse(BaseModel):
+    """One selectable oil pattern, as `GET /api/v1/oil-patterns` publishes
+    it.
+
+    `id` is the value `POST /api/v1/games` accepts for `oil_pattern`.
+    `name` and `description` are display text the server owns, so a client
+    can render the pattern notice without knowing the legal id up front.
+    """
+
+    id: str
+    name: str
+    description: str
+    spec: OilPatternSpecResponse
+
+
+class OilPatternCatalogResponse(BaseModel):
+    """`GET /api/v1/oil-patterns` — every pattern a game can be created
+    with, in the order the supported-pattern registry declares.
+
+    The same registry `POST /api/v1/games` validates `oil_pattern`
+    against, so anything listed here is creatable and anything absent is
+    a 422 on create. Only the house shot is modeled today; named-pattern
+    selection stays deferred.
+    """
+
+    patterns: list[OilPatternResponse]
