@@ -434,8 +434,11 @@ percentages, leave tracking, ball usage stats.
   across every caller, for backward compatibility, not isolation; once
   that shared game finishes, calls return 409 until someone resets it via
   `POST /api/v1/games/legacy-default/reset`.
-- `database_url` exists in config for the v3 milestone; nothing reads or
-  writes to Postgres yet, and no migrations exist.
+- `database_url` exists in config for the v3 milestone. A SQLAlchemy
+  table schema, an Alembic migration, and row-value/SQL-statement
+  helpers exist for it now, but nothing opens a database engine or
+  connection at runtime, there is still no database-backed
+  `GameSessionRepository`, and games still live in memory only.
 - The frontend has no chart suite, accounts, or persistence. Its ball and
   oil-pattern catalogs are fixed at startup — no adding, editing, or
   persisting either. A saved `game_id` is proactively checked once, at
