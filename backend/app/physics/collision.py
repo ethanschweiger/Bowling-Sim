@@ -96,7 +96,16 @@ either way.
 `simulate_collision` steps forward at `COLLISION_DT_S` seconds per step,
 for at most `MAX_COLLISION_STEPS` steps, or until every body's speed drops
 below `SETTLE_SPEED_IN_S` — whichever comes first. It always terminates in
-one of those two ways. Each step: bodies move by velocity * dt, velocities
+one of those two ways, and a recorded replay reports which one as its
+`termination_reason` (`step_cap` or `settled`). Neither is a statement
+about real pins coming to rest; see `replay.py`'s "How a run ends".
+
+For a fixed set of reference impacts and what this model currently produces
+for them — plus which of the constants below are USBC specifications and
+which are stated 2D assumptions — see
+`backend/docs/planar-collision-calibration.md`. It is a measured baseline
+for comparing future changes against, not a claim of real pin carry.
+Each step: bodies move by velocity * dt, velocities
 decay by the (< 1) damping factor, and any pair of circles found
 overlapping is resolved by a standard elastic/inelastic impulse along
 their contact normal (restitution <= 1, so a collision never adds kinetic
@@ -105,9 +114,13 @@ that same normal so overlaps don't persist step to step. Nothing here
 calls a random-number generator.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
 from app.physics.impact import ImpactState
 from app.physics.pin_deck import (
@@ -121,12 +134,26 @@ from app.physics.pin_deck import (
 )
 from app.physics.pinfall import PinfallModel, PinfallResult
 from app.physics.rack import validate_pin_ids
+from app.physics.replay import (
+    MAX_REPLAY_FRAMES,
+    REPLAY_SAMPLE_EVERY_STEPS,
+    TERMINATION_SETTLED,
+    TERMINATION_STEP_CAP,
+    CollisionReplay,
+    TerminationReason,
+    _ReplayRecorder,
+)
 from app.physics.units import IN_PER_FT, mph_to_in_per_s, weight_lbf_to_mass_blob
 
 COLLISION_DT_S = 0.0005
 MAX_COLLISION_SECONDS = 2.0
 MAX_COLLISION_STEPS = int(MAX_COLLISION_SECONDS / COLLISION_DT_S)  # 4000
-SETTLE_SPEED_IN_S = 0.5  # every body below this speed counts as "settled"
+# The planar velocity threshold below which this model stops stepping.
+# A purely numerical criterion on sliding circles: it does not observe a
+# pin standing, lying down, or coming to physical rest, because nothing in
+# this 2D model represents any of those. `replay.TERMINATION_SETTLED` names
+# a run that ended this way, and is documented in exactly those terms.
+SETTLE_SPEED_IN_S = 0.5
 LINEAR_DAMPING_PER_S = 1.2
 
 OZ_PER_LB = 16.0
@@ -211,7 +238,24 @@ def _resolve_pair(a: _Body, b: _Body) -> None:
     b.y_in += ny * penetration * (a.mass_blob / total_mass)
 
 
-def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]] = None):
+@dataclass(frozen=True)
+class _CollisionRun:
+    """Everything one internal run produced. A detail of this module, not a
+    public return type — `simulate_collision` still returns its original
+    plain tuple, and `PlanarCollisionPinfallModel` reaches for the replay
+    through `_simulate_collision_detail` instead of changing that."""
+
+    fallen_pin_ids: tuple[int, ...]
+    steps_taken: int
+    # None exactly when no run happened (non-positive speed, or an empty
+    # validated rack). A replay of a run that never occurred would be an
+    # invented collision; absence says so honestly.
+    replay: CollisionReplay | None
+
+
+def simulate_collision(
+    impact: ImpactState, standing_ids: Iterable[int] | None = None
+) -> tuple[tuple[int, ...], int]:
     """Runs the fixed-timestep collision simulation for one impact.
 
     `standing_ids` restricts which pins exist in the simulation at all —
@@ -233,6 +277,28 @@ def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]
     overlapping. Validation of `standing_ids` happens first, before that
     (or any other) short circuit — an invalid selection raises regardless
     of whether the ball could physically have hit anything.
+
+    This is the stable public entry point and its tuple return shape is
+    unchanged. Callers that also want replay frames use
+    `_simulate_collision_detail`, which runs the identical solver.
+    """
+    run = _simulate_collision_detail(impact, standing_ids=standing_ids, record_replay=False)
+    return run.fallen_pin_ids, run.steps_taken
+
+
+def _simulate_collision_detail(
+    impact: ImpactState,
+    standing_ids: Iterable[int] | None = None,
+    *,
+    record_replay: bool = False,
+) -> _CollisionRun:
+    """The actual solver, plus optional passive replay recording.
+
+    `record_replay=False` reproduces `simulate_collision`'s behavior
+    exactly. Recording only reads body positions at a fixed step cadence
+    and appends immutable frames — it never touches timestep, damping,
+    impulse, restitution, the fall threshold, or termination, so both
+    modes compute byte-identical fallen IDs and step counts.
     """
     # None keeps the pre-selection default (every pin); anything else is
     # routed through the same validation Rack itself uses, raising the
@@ -244,10 +310,15 @@ def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]
     # whether the ball could physically hit anything.
     standing_set = ALL_PIN_IDS if standing_ids is None else validate_pin_ids(standing_ids)
 
+    # Both no-run cases return `replay=None` rather than a single-frame
+    # replay: no collision happened, and fabricating bodies for one would
+    # be inventing a scene the solver never simulated. Validation above
+    # still runs first, so an invalid rack raises before either.
     if impact.speed_mph <= 0.0:
-        return (), 0
+        return _CollisionRun(fallen_pin_ids=(), steps_taken=0, replay=None)
     if not standing_set:
-        return (), 0  # nothing to fall — a valid no-op, not an error
+        # nothing to fall — a valid no-op, not an error
+        return _CollisionRun(fallen_pin_ids=(), steps_taken=0, replay=None)
 
     speed_in_s = mph_to_in_per_s(impact.speed_mph)
     heading_rad = math.radians(impact.heading_deg)
@@ -282,6 +353,38 @@ def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]
     bodies = [ball] + pins
     damping_factor = max(0.0, 1.0 - LINEAR_DAMPING_PER_S * COLLISION_DT_S)
 
+    recorder = (
+        _ReplayRecorder(
+            dt_s=COLLISION_DT_S,
+            sample_every_steps=REPLAY_SAMPLE_EVERY_STEPS,
+            max_frames=MAX_REPLAY_FRAMES,
+        )
+        if record_replay
+        else None
+    )
+    if recorder is not None:
+        # The initial frame: bodies as placed, before any stepping.
+        recorder.capture(0, bodies)
+
+    # Set at the exit that actually fires. Initialized to the step cap
+    # because that is what running the loop to exhaustion means: reaching
+    # the last iteration without the settle condition ever holding. The
+    # only way this stays `step_cap` is for `break` never to be taken.
+    #
+    # Note this is genuinely about the *predicate*, not the step count. The
+    # settle check below runs after every step including the last permitted
+    # one, so a run that crosses the threshold exactly on step
+    # MAX_COLLISION_STEPS records `settled` even though it used every
+    # iteration. `steps_taken == MAX_COLLISION_STEPS` therefore does not
+    # imply `step_cap` — see "The reason is not a function of steps_taken"
+    # in replay.py.
+    #
+    # Deliberately not derived afterwards from `steps_taken`, frame count,
+    # or terminal positions — those are consequences of the exit, not the
+    # exit itself, and inferring backwards from them is exactly the kind of
+    # plausible-but-unfounded claim this field exists to remove.
+    termination_reason: TerminationReason = TERMINATION_STEP_CAP
+
     steps_taken = 0
     for step in range(MAX_COLLISION_STEPS):
         steps_taken = step + 1
@@ -299,12 +402,29 @@ def simulate_collision(impact: ImpactState, standing_ids: Optional[Iterable[int]
         for pin in pins:
             if not pin.fell and pin.displacement_in() >= FALL_DISPLACEMENT_THRESHOLD_IN:
                 pin.fell = True
+                # The same decision, timestamped. Recording is observation
+                # only: this appends to the recorder and touches no body,
+                # impulse, damping, termination, score, or rack, so a
+                # recorded and an unrecorded run stay byte-identical in
+                # everything except the presence of the replay itself.
+                if recorder is not None:
+                    recorder.record_threshold_crossing(pin.pin_id, steps_taken)
+
+        # Read-only sampling, after this step's physics has fully resolved
+        # (moves, impulses, and positional corrections all applied).
+        # Nothing below influences the loop's own state or termination.
+        if recorder is not None and recorder.should_capture(steps_taken):
+            recorder.capture(steps_taken, bodies)
 
         if all(body.speed_in_s() < SETTLE_SPEED_IN_S for body in bodies):
+            termination_reason = TERMINATION_SETTLED
             break
 
     fallen_ids = tuple(sorted(pin.pin_id for pin in pins if pin.fell))
-    return fallen_ids, steps_taken
+    replay = (
+        recorder.finish(steps_taken, bodies, termination_reason) if recorder is not None else None
+    )
+    return _CollisionRun(fallen_pin_ids=fallen_ids, steps_taken=steps_taken, replay=replay)
 
 
 class PlanarCollisionPinfallModel(PinfallModel):
@@ -321,25 +441,39 @@ class PlanarCollisionPinfallModel(PinfallModel):
         "entry-angle heuristic, not a claim to real pin-deck fidelity."
     )
 
-    def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult:
+    def resolve(
+        self, impact: ImpactState, *, standing_ids: Iterable[int] | None = None
+    ) -> PinfallResult:
         # Validated before the gutter check (or any other short circuit)
         # below: an invalid selection must raise even for an impact that
         # never could have hit a pin anyway. `simulate_collision` also
         # validates independently, since it can be called directly without
         # going through resolve() at all — this isn't relying on that.
-        validated_standing_ids = ALL_PIN_IDS if standing_ids is None else validate_pin_ids(standing_ids)
+        validated_standing_ids = (
+            ALL_PIN_IDS if standing_ids is None else validate_pin_ids(standing_ids)
+        )
 
         if abs(impact.lateral_position_in) >= GUTTER_ABS_LATERAL_IN:
+            # A gutter ball never reaches the deck, so no run happens and
+            # there is nothing to replay — `replay=None`, not an empty or
+            # fabricated one.
             return PinfallResult(
-                pins_knocked=0, model_id=self.model_id, limitations=self.LIMITATIONS, fallen_pin_ids=()
+                pins_knocked=0,
+                model_id=self.model_id,
+                limitations=self.LIMITATIONS,
+                fallen_pin_ids=(),
+                replay=None,
             )
 
-        fallen_ids, _steps_taken = simulate_collision(impact, standing_ids=validated_standing_ids)
+        run = _simulate_collision_detail(
+            impact, standing_ids=validated_standing_ids, record_replay=True
+        )
         return PinfallResult(
-            pins_knocked=len(fallen_ids),
+            pins_knocked=len(run.fallen_pin_ids),
             model_id=self.model_id,
             limitations=self.LIMITATIONS,
-            fallen_pin_ids=fallen_ids,
+            fallen_pin_ids=run.fallen_pin_ids,
+            replay=run.replay,
         )
 
 

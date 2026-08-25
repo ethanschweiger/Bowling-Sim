@@ -14,7 +14,22 @@ definition of a pattern's shape; `LaneCondition` is what that shape looks
 like right now, after however many throws have crossed it.
 """
 
+# Deferred annotation evaluation: `apply_wear`'s `path` parameter names the
+# real `TrajectoryPoint` type below, but `simulate.py` (where it's defined)
+# already imports from *this* module (`LaneCondition`), so a normal
+# top-level import back here would be circular. With this import,
+# annotations are stored as plain strings and never evaluated at
+# function-definition time, so the `TYPE_CHECKING`-only import further
+# down is enough for the type checker without ever running at import time.
+from __future__ import annotations
+
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.physics.simulate import TrajectoryPoint
 
 BOARD_COUNT = 39
 LANE_LENGTH_FT = 60.0
@@ -157,16 +172,21 @@ class LaneCondition:
         return BOARD_COUNT
 
     @staticmethod
-    def house_shot(temperature_f: float = REFERENCE_TEMPERATURE_F) -> "LaneCondition":
+    def house_shot(temperature_f: float = REFERENCE_TEMPERATURE_F) -> LaneCondition:
         return LaneCondition._build(HOUSE_SHOT_SPEC, temperature_f=temperature_f)
 
     @staticmethod
-    def _build(spec: OilPatternSpec, temperature_f: float = REFERENCE_TEMPERATURE_F) -> "LaneCondition":
+    def _build(
+        spec: OilPatternSpec, temperature_f: float = REFERENCE_TEMPERATURE_F
+    ) -> LaneCondition:
         shape: list[list[float]] = []
         for board in range(1, BOARD_COUNT + 1):
             lateral = _lateral_factor(board, spec)
             shape.append(
-                [lateral * _longitudinal_factor(i * GRID_RESOLUTION_FT, spec) for i in range(GRID_LENGTH_CELLS)]
+                [
+                    lateral * _longitudinal_factor(i * GRID_RESOLUTION_FT, spec)
+                    for i in range(GRID_LENGTH_CELLS)
+                ]
             )
 
         shape_sum = sum(sum(row) for row in shape)
@@ -176,7 +196,9 @@ class LaneCondition:
         unit_scale = spec.total_volume_ml / shape_sum if shape_sum > 0 else 0.0
 
         grid = tuple(tuple(v * unit_scale for v in row) for row in shape)
-        return LaneCondition(spec=spec, oil_grid=grid, peak_oil_ml=unit_scale, temperature_f=temperature_f, version=1)
+        return LaneCondition(
+            spec=spec, oil_grid=grid, peak_oil_ml=unit_scale, temperature_f=temperature_f, version=1
+        )
 
     def _cell_index(self, distance_ft: float, board: float) -> tuple[int, int]:
         board_idx = int(_clamp(round(board) - 1, 0, BOARD_COUNT - 1))
@@ -184,8 +206,47 @@ class LaneCondition:
         return board_idx, dist_idx
 
     def oil_at(self, distance_ft: float, board: float) -> float:
+        """Oil in the single grid cell containing this point.
+
+        Cell-resolution, deliberately: this is the quantity `apply_wear`
+        adds to and subtracts from, and wear is bookkeeping over discrete
+        cells. For reading a *force* along a trajectory, use
+        `oil_at_interpolated`, which doesn't step at cell boundaries.
+        """
         board_idx, dist_idx = self._cell_index(distance_ft, board)
         return self.oil_grid[board_idx][dist_idx]
+
+    def oil_at_interpolated(self, distance_ft: float, board: float) -> float:
+        """Oil at a point, bilinearly interpolated between the four
+        surrounding grid cells.
+
+        The grid stores one value per (board, foot). Reading it by nearest
+        cell makes oil — and therefore friction, and therefore the lateral
+        force — a staircase: constant for a foot, then a step. Integrating
+        a trajectory through that produces small direction changes at cell
+        boundaries that are artifacts of the lookup, not of the physics,
+        and they show up as kinks in the drawn path. Interpolating makes
+        the field continuous, so a smooth path stays smooth.
+
+        The stored grid is unchanged; this only changes how it is sampled.
+        Cell centres sit at integer boards and whole feet, so interpolating
+        at a cell centre returns exactly that cell's value.
+        """
+        # Continuous cell coordinates: board N sits at index N-1, distance
+        # D ft at index D / GRID_RESOLUTION_FT.
+        board_pos = _clamp(board - 1.0, 0.0, BOARD_COUNT - 1)
+        dist_pos = _clamp(distance_ft / GRID_RESOLUTION_FT, 0.0, GRID_LENGTH_CELLS - 1)
+
+        b0 = int(math.floor(board_pos))
+        d0 = int(math.floor(dist_pos))
+        b1 = min(b0 + 1, BOARD_COUNT - 1)
+        d1 = min(d0 + 1, GRID_LENGTH_CELLS - 1)
+        bf = board_pos - b0
+        df = dist_pos - d0
+
+        top = self.oil_grid[b0][d0] * (1.0 - df) + self.oil_grid[b0][d1] * df
+        bottom = self.oil_grid[b1][d0] * (1.0 - df) + self.oil_grid[b1][d1] * df
+        return top * (1.0 - bf) + bottom * bf
 
     def friction_at(self, distance_ft: float, board: float) -> float:
         """Friction coefficient at a point on the lane, derived from the oil
@@ -193,18 +254,24 @@ class LaneCondition:
         by temperature. Always within [OILED_FRICTION, DRY_FRICTION],
         regardless of how far out of bounds distance/board/temperature are
         pushed.
+
+        Samples the oil field continuously (`oil_at_interpolated`), so
+        friction varies smoothly along a path instead of stepping at every
+        grid boundary.
         """
         if self.peak_oil_ml <= 0:
             base = DRY_FRICTION
         else:
-            oil_ratio = _clamp(self.oil_at(distance_ft, board) / self.peak_oil_ml, 0.0, 1.0)
+            oil_ratio = _clamp(
+                self.oil_at_interpolated(distance_ft, board) / self.peak_oil_ml, 0.0, 1.0
+            )
             base = DRY_FRICTION - oil_ratio * (DRY_FRICTION - OILED_FRICTION)
 
         adjusted = base * _temperature_friction_multiplier(self.temperature_f)
         return _clamp(adjusted, OILED_FRICTION, DRY_FRICTION)
 
 
-def apply_wear(condition: LaneCondition, path) -> LaneCondition:
+def apply_wear(condition: LaneCondition, path: Iterable[TrajectoryPoint]) -> LaneCondition:
     """Pure function: a completed throw's path picks up oil along the boards
     it touched and carries a small amount of it further down those same
     boards. Returns a new, incremented LaneCondition — never mutates the one

@@ -13,12 +13,17 @@ below is a pure function of its input; `PlanarCollisionPinfallModel`
 applying a formula.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
 from app.physics.impact import ImpactState
 from app.physics.pin_deck import GUTTER_ABS_LATERAL_IN, LANE_CENTER_BOARD
+from app.physics.replay import CollisionReplay
 from app.physics.units import BOARD_WIDTH_IN
 
 
@@ -32,7 +37,20 @@ class PinfallResult:
     # populate this, so it isn't guaranteed to satisfy
     # pins_knocked == len(fallen_pin_ids) across every implementation, only
     # ones that actually resolve individual pins.
-    fallen_pin_ids: tuple = ()
+    fallen_pin_ids: tuple[int, ...] = ()
+    # Bounded frame-by-frame playback of a run that actually happened, for
+    # a client to animate (see app/physics/replay.py). Additive and
+    # optional: `None` means no replay is available, which is the honest
+    # answer for a model that doesn't simulate bodies at all (the
+    # heuristic) and for a planar case where no run occurred — a gutter
+    # miss, a non-positive impact speed, or an empty validated rack.
+    # Absence is never a failure; it says no collision was simulated.
+    # `pins_knocked`/`fallen_pin_ids` are unaffected either way.
+    #
+    # Importing the concrete type is safe in this direction: `replay` has no
+    # imports of its own from this package, and `collision` imports both of
+    # us — so this states the real type instead of a bare `object`.
+    replay: CollisionReplay | None = None
 
 
 class PinfallModel(ABC):
@@ -55,7 +73,9 @@ class PinfallModel(ABC):
     model_id: str
 
     @abstractmethod
-    def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult: ...
+    def resolve(
+        self, impact: ImpactState, *, standing_ids: Iterable[int] | None = None
+    ) -> PinfallResult: ...
 
 
 # The pocket (board 17.5, the 1-3 pocket for a right-handed bowler),
@@ -89,7 +109,9 @@ class EntryAngleHeuristicPinfallModel(PinfallModel):
         "the formula has no notion of which specific pins remain."
     )
 
-    def resolve(self, impact: ImpactState, *, standing_ids: Optional[Iterable[int]] = None) -> PinfallResult:
+    def resolve(
+        self, impact: ImpactState, *, standing_ids: Iterable[int] | None = None
+    ) -> PinfallResult:
         return PinfallResult(
             pins_knocked=self._pins_knocked(impact),
             model_id=self.model_id,

@@ -21,7 +21,24 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-class Coverstock(str, Enum):
+# Ruff's UP042 (target py311) suggests `enum.StrEnum` here. Deliberately
+# not used: StrEnum needs Python 3.11 — one minor version above this
+# project's Python 3.9 floor — and it isn't a drop-in swap even where the
+# interpreter allows it: StrEnum overrides __str__ to always return the
+# plain value ("reactive"), while this str+Enum mixin keeps Enum's default
+# __str__ ("Coverstock.REACTIVE") on every Python version this project
+# supports. Switching would be a silent, real behavior change, not a
+# spelling update. No behavior-preserving, 3.9-safe rewrite satisfies
+# UP042 for this declaration — see test_physics.py's regression pinning
+# the exact str() behavior (deliberately not format()/f-strings, which a
+# plain str+Enum mixin spells differently on 3.9 vs. 3.11 regardless of
+# anything here; nothing in this codebase formats a Coverstock value).
+# This is the only noqa exception on the whole baseline. The analogous
+# conflict on app/models/schemas.py's nullable Pydantic int fields (Ruff
+# preferring `X | None`/`Union[X, None]` where Pydantic's eager Python 3.9
+# evaluation needs `Optional[int]`) is resolved there without a
+# suppression — see that module's `NullableInt` alias.
+class Coverstock(str, Enum):  # noqa: UP042
     PLASTIC = "plastic"       # spares balls — near-zero hook
     URETHANE = "urethane"     # smooth, predictable arc
     REACTIVE = "reactive"     # strong, sudden backend motion
@@ -63,7 +80,8 @@ class Ball:
     id: str
     name: str
     mass_lbs: float = 15.0
-    radius_in: float = 4.29           # regulation radius, ~8.6" diameter — unused this milestone, see module docstring
+    # regulation radius, ~8.6" diameter — unused this milestone, see module docstring
+    radius_in: float = 4.29
     rg_in: float = 2.54               # radius of gyration — lower flares earlier
     differential: float = 0.045       # RG differential — higher flares more
     surface: str = "1500-grit"        # finish on the coverstock

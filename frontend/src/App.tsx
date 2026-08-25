@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, resetGame, throwBall } from './api/client';
-import type { GameStateResponse, GameThrowResponse } from './api/types';
+import type { BallResponse, GameStateResponse, GameThrowResponse, OilPatternResponse, ThrowRequest } from './api/types';
 import styles from './App.module.css';
 import { BallSelect } from './components/BallSelect';
 import { LaneCanvas } from './components/LaneCanvas';
 import { ReleaseControls } from './components/ReleaseControls';
+import { ReleaseSeedControl } from './components/ReleaseSeedControl';
 import { ScoreboardPanel } from './components/ScoreboardPanel';
 import { StaleGameNotice } from './components/StaleGameNotice';
 import { ThrowControls, type ThrowStatus } from './components/ThrowControls';
-import { DEFAULT_BALL_ID } from './domain/ballCatalog';
+import { fetchBallCatalog, isSelectable, pickDefaultBallId } from './domain/ballCatalog';
+import { fetchOilPatternCatalog, primaryOilPattern } from './domain/oilPatternCatalog';
 import { bootstrapGame, classifyThrowFailure, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
 import { defaultReleaseValues, type ReleaseFieldId } from './domain/releaseFields';
+import { parseReleaseSeed } from './domain/releaseSeed';
 import { canReplay } from './domain/trajectoryAnimation';
 
 interface GameSnapshot {
@@ -36,10 +39,37 @@ function App() {
   const [lastThrowRanAgainstVersion, setLastThrowRanAgainstVersion] = useState<number | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const [staleGameMessage, setStaleGameMessage] = useState<string | null>(null);
-  const [ballId, setBallId] = useState(DEFAULT_BALL_ID);
+  // The server owns the ball list, so both of these start empty and are
+  // only ever filled from a catalog response. `ballId` stays null until
+  // then: there is no local default to fall back on, because a hardcoded
+  // id could disagree with the server and 404 on the throw.
+  const [ballCatalog, setBallCatalog] = useState<BallResponse[] | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [ballId, setBallId] = useState<string | null>(null);
+  // Same reasoning as the ball catalog above: server-owned, no local
+  // fallback, starts empty until a catalog response fills it.
+  const [oilPatternCatalog, setOilPatternCatalog] = useState<OilPatternResponse[] | null>(null);
+  const [oilPatternError, setOilPatternError] = useState<string | null>(null);
   const [releaseValues, setReleaseValues] = useState(defaultReleaseValues());
+  const [releaseSeed, setReleaseSeed] = useState('');
   const [latestThrow, setLatestThrow] = useState<GameThrowResponse | null>(null);
+  const [latestRequestedRelease, setLatestRequestedRelease] = useState<ThrowRequest | null>(null);
   const [status, setStatus] = useState<ThrowStatus>({ kind: 'idle' });
+  // A request completing only means the server scored it; it does not mean
+  // the player has finished seeing that ball travel and reach the deck.
+  // Keep submission locked through the entire authoritative presentation.
+  // The ref closes the tiny interval before React re-renders after a click,
+  // so two rapid click events still produce at most one HTTP throw request.
+  const [presentationLocked, setPresentationLocked] = useState(false);
+  const presentationLockRef = useRef(false);
+  // True from the moment an ordinary throw rejection lands (e.g. a 503
+  // truncated-trajectory response) until an actual successful state
+  // transition supersedes it — a new successful throw, a reset, or a new
+  // game. Exists solely to keep "Replay last shot" disabled on the still-
+  // displayed prior throw for that whole span; `status` alone can't do
+  // this because it moves from 'loading' back to 'error' the instant the
+  // request settles, which would otherwise re-enable replay immediately.
+  const [throwRejected, setThrowRejected] = useState(false);
 
   // Guards every async setState below against firing after a real unmount.
   // Re-armed (not just initialized) inside the effect below because
@@ -54,6 +84,19 @@ function App() {
       mountedRef.current = false;
     };
   }, []);
+
+  const setPresentationLock = useCallback((locked: boolean) => {
+    presentationLockRef.current = locked;
+    setPresentationLocked(locked);
+  }, []);
+
+  const handlePlaybackStarted = useCallback(() => {
+    setPresentationLock(true);
+  }, [setPresentationLock]);
+
+  const handlePlaybackCompleted = useCallback(() => {
+    setPresentationLock(false);
+  }, [setPresentationLock]);
 
   const runBootstrap = useCallback(() => {
     setInitError(null);
@@ -87,23 +130,102 @@ function App() {
     runBootstrap();
   }, [runBootstrap]);
 
+  const runCatalogLoad = useCallback(() => {
+    setCatalogError(null);
+    // fetchBallCatalog() is memoized at module scope (see
+    // domain/ballCatalog.ts), so StrictMode's double mount and any later
+    // re-render share one request rather than issuing another.
+    fetchBallCatalog().then(
+      (balls) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        setBallCatalog(balls);
+        // Only ever select an id the server actually returned.
+        setBallId((current) => (isSelectable(balls, current) ? current : pickDefaultBallId(balls)));
+      },
+      (error: unknown) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        // Named explicitly: the game bootstrap can fail at the same
+        // moment for the same reason, and two identical alerts would not
+        // tell the player which Retry does what.
+        setCatalogError(`Could not load the ball catalog. ${messageFor(error, 'Please try again.')}`);
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    // Same sanctioned case as the bootstrap effect above.
+    // oxlint-disable-next-line react/set-state-in-effect
+    runCatalogLoad();
+  }, [runCatalogLoad]);
+
+  const runOilPatternLoad = useCallback(() => {
+    setOilPatternError(null);
+    // fetchOilPatternCatalog() is memoized at module scope (see
+    // domain/oilPatternCatalog.ts), for the same StrictMode reason as the
+    // ball catalog and game bootstrap above.
+    fetchOilPatternCatalog().then(
+      (patterns) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        setOilPatternCatalog(patterns);
+      },
+      (error: unknown) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        // Named for the same reason the ball-catalog error is: two
+        // identical alerts would not tell the player which Retry does what.
+        setOilPatternError(`Could not load the oil pattern catalog. ${messageFor(error, 'Please try again.')}`);
+      },
+    );
+  }, []);
+
+  useEffect(() => {
+    // Same sanctioned case as the bootstrap effect above.
+    // oxlint-disable-next-line react/set-state-in-effect
+    runOilPatternLoad();
+  }, [runOilPatternLoad]);
+
   const handleReleaseChange = useCallback((id: ReleaseFieldId, value: number) => {
     setReleaseValues((previous) => ({ ...previous, [id]: value }));
   }, []);
 
   async function handleThrow() {
-    if (!game) {
+    if (!game || presentationLockRef.current || status.kind === 'loading') {
       return;
     }
+    // Never submit a ball the server did not publish. `ballId` is only
+    // ever set from a catalog response, so this is a guard against a
+    // catalog that failed to load rather than an expected branch.
+    if (!ballCatalog || ballId === null || !isSelectable(ballCatalog, ballId)) {
+      return;
+    }
+    const requestedRelease: ThrowRequest = { ball_id: ballId, ...releaseValues };
+    const parsedSeed = parseReleaseSeed(releaseSeed);
+    if (parsedSeed.kind === 'invalid') {
+      setStatus({ kind: 'error', message: parsedSeed.message });
+      return;
+    }
+    if (parsedSeed.kind === 'valid') {
+      requestedRelease.seed = parsedSeed.seed;
+    }
+    setPresentationLock(true);
     setStatus({ kind: 'loading', label: 'Throwing' });
     try {
-      const response = await throwBall(game.gameId, { ball_id: ballId, ...releaseValues });
+      const response = await throwBall(game.gameId, requestedRelease);
       if (!mountedRef.current) {
         return;
       }
       setLatestThrow(response);
+      setLatestRequestedRelease(requestedRelease);
       setGame({ gameId: response.game_id, gameState: response.game_state });
       setLastThrowRanAgainstVersion(response.lane_condition_version);
+      setThrowRejected(false);
       const pinWord = response.pins_knocked === 1 ? 'pin' : 'pins';
       setStatus({ kind: 'success', message: `Threw it — ${response.pins_knocked} ${pinWord} down.` });
     } catch (error) {
@@ -119,9 +241,16 @@ function App() {
         return;
       }
       if (classification.kind === 'confirmed-missing-game') {
+        setPresentationLock(false);
         setStatus({ kind: 'idle' });
         setStaleGameMessage('This game no longer exists on the server (it may have restarted).');
       } else {
+        // An ordinary rejection (e.g. the solver's 503): the previously
+        // completed throw stays exactly as displayed, but it must not
+        // look replayable again the instant this status becomes 'error'
+        // — see canReplay's docstring for why isBusy alone can't gate this.
+        setThrowRejected(true);
+        setPresentationLock(false);
         setStatus({ kind: 'error', message: messageFor(classification.error, 'The throw did not go through.') });
       }
     }
@@ -131,6 +260,7 @@ function App() {
     if (!game) {
       return;
     }
+    setPresentationLock(true);
     setStatus({ kind: 'loading', label: 'Resetting' });
     try {
       const response = await resetGame(game.gameId);
@@ -141,21 +271,27 @@ function App() {
       setCurrentLaneVersion(response.lane_condition_version);
       setLastThrowRanAgainstVersion(null);
       setLatestThrow(null);
+      setLatestRequestedRelease(null);
+      setThrowRejected(false);
+      setPresentationLock(false);
       setStatus({ kind: 'success', message: 'Game reset — fresh rack, blank scorecard.' });
     } catch (error) {
       if (!mountedRef.current) {
         return;
       }
       if (isStaleGameError(error)) {
+        setPresentationLock(false);
         setStatus({ kind: 'idle' });
         setStaleGameMessage('This game no longer exists on the server (it may have restarted).');
       } else {
+        setPresentationLock(false);
         setStatus({ kind: 'error', message: messageFor(error, 'The reset did not go through.') });
       }
     }
   }
 
   async function handleStartNewGame() {
+    setPresentationLock(true);
     setStatus({ kind: 'loading', label: 'Starting a new game' });
     try {
       const result = await startNewGame();
@@ -166,7 +302,10 @@ function App() {
       setCurrentLaneVersion(result.laneConditionVersion);
       setLastThrowRanAgainstVersion(null);
       setLatestThrow(null);
+      setLatestRequestedRelease(null);
       setStaleGameMessage(null);
+      setThrowRejected(false);
+      setPresentationLock(false);
       setStatus({ kind: 'success', message: 'Started a new game.' });
     } catch (error) {
       if (!mountedRef.current) {
@@ -174,12 +313,16 @@ function App() {
       }
       // Stay in the stale state — the recovery control stays visible and
       // retryable rather than silently discarding the (already-gone) game.
+      setPresentationLock(false);
       setStatus({ kind: 'error', message: messageFor(error, 'Could not start a new game.') });
     }
   }
 
   const isBusy = status.kind === 'loading';
   const isStale = staleGameMessage !== null;
+  // The controls need the game, the server's ball list, and the
+  // server's oil-pattern catalog.
+  const isReady = game !== null && ballCatalog !== null && oilPatternCatalog !== null;
 
   return (
     <div className={styles.page}>
@@ -196,21 +339,54 @@ function App() {
           </button>
         </div>
       )}
-      {!game && !initError && (
+      {catalogError && (
+        <div role="alert" className={styles.initError}>
+          <p>{catalogError}</p>
+          <button type="button" className={styles.retryButton} onClick={runCatalogLoad}>
+            Retry
+          </button>
+        </div>
+      )}
+      {oilPatternError && (
+        <div role="alert" className={styles.initError}>
+          <p>{oilPatternError}</p>
+          <button type="button" className={styles.retryButton} onClick={runOilPatternLoad}>
+            Retry
+          </button>
+        </div>
+      )}
+      {!isReady && !initError && !catalogError && !oilPatternError && (
         <p aria-live="polite" className={styles.loadingText}>
           Loading your game…
         </p>
       )}
 
-      {game && (
+      {isReady && game && ballCatalog && (
         <main className={styles.main}>
           <section aria-labelledby="controls-heading" className={styles.controlsPanel}>
             <h2 id="controls-heading" className={styles.panelHeading}>
               Set up your throw
             </h2>
             <div className={styles.controlsStack}>
-              <BallSelect value={ballId} onChange={setBallId} disabled={isBusy || isStale} />
-              <ReleaseControls values={releaseValues} onChange={handleReleaseChange} disabled={isBusy || isStale} />
+              <BallSelect
+                options={ballCatalog}
+                value={ballId ?? ''}
+                onChange={setBallId}
+                pattern={primaryOilPattern(oilPatternCatalog)}
+                disabled={isBusy || isStale || presentationLocked}
+              />
+              <ReleaseControls
+                values={releaseValues}
+                onChange={handleReleaseChange}
+                disabled={isBusy || isStale || presentationLocked}
+              />
+              <ReleaseSeedControl
+                value={releaseSeed}
+                onChange={setReleaseSeed}
+                lastSeed={latestThrow?.seed ?? null}
+                onUseLastSeed={() => setReleaseSeed(String(latestThrow?.seed ?? ''))}
+                disabled={isBusy || isStale || presentationLocked}
+              />
               {staleGameMessage && (
                 <StaleGameNotice message={staleGameMessage} onStartNewGame={() => void handleStartNewGame()} disabled={isBusy} />
               )}
@@ -219,6 +395,7 @@ function App() {
                 onReset={() => void handleReset()}
                 isGameComplete={game.gameState.is_game_complete}
                 status={status}
+                cooldown={presentationLocked}
                 disabled={isStale}
               />
             </div>
@@ -231,7 +408,10 @@ function App() {
             <LaneCanvas
               standingPinIds={game.gameState.standing_pin_ids}
               latestThrow={latestThrow}
-              replayEnabled={canReplay(latestThrow, isBusy, isStale)}
+              latestRequestedRelease={latestRequestedRelease}
+              replayEnabled={canReplay(latestThrow, isBusy || presentationLocked, isStale, throwRejected)}
+              onPlaybackStarted={handlePlaybackStarted}
+              onPlaybackCompleted={handlePlaybackCompleted}
               requestPending={isBusy}
             />
           </section>

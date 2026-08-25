@@ -23,9 +23,30 @@ def test_board_and_feet_conversions_round_trip():
 
 
 REPRESENTATIVE_THROWS = [
-    Throw(speed_mph=15.0, rev_rate=280.0, axis_rotation=35.0, axis_tilt=20.0, launch_angle=0.2, launch_position=25.0),
-    Throw(speed_mph=17.0, rev_rate=350.0, axis_rotation=45.0, axis_tilt=15.0, launch_angle=0.5, launch_position=22.0),
-    Throw(speed_mph=19.0, rev_rate=420.0, axis_rotation=55.0, axis_tilt=10.0, launch_angle=0.8, launch_position=20.0),
+    Throw(
+        speed_mph=15.0,
+        rev_rate=280.0,
+        axis_rotation=35.0,
+        axis_tilt=20.0,
+        launch_angle=0.2,
+        launch_position=25.0,
+    ),
+    Throw(
+        speed_mph=17.0,
+        rev_rate=350.0,
+        axis_rotation=45.0,
+        axis_tilt=15.0,
+        launch_angle=0.5,
+        launch_position=22.0,
+    ),
+    Throw(
+        speed_mph=19.0,
+        rev_rate=420.0,
+        axis_rotation=55.0,
+        axis_tilt=10.0,
+        launch_angle=0.8,
+        launch_position=20.0,
+    ),
 ]
 
 
@@ -48,10 +69,13 @@ def test_representative_throws_stay_in_bounds_without_artificial_clipping():
 def test_release_angle_moves_the_path_in_the_documented_lateral_direction():
     ball = BALL_CATALOG["house_ball"]
     lane = LaneCondition.house_shot()
-    # axis_rotation=0 => hook_direction is exactly zero (see simulate.py),
-    # isolating lateral motion to the release angle alone.
-    straight = Throw(speed_mph=17.0, rev_rate=350.0, axis_rotation=0.0, axis_tilt=15.0, launch_angle=0.0, launch_position=20.0)
-    angled = Throw(speed_mph=17.0, rev_rate=350.0, axis_rotation=0.0, axis_tilt=15.0, launch_angle=5.0, launch_position=20.0)
+    # Zero rotation leaves only the small documented flare residual. It stays
+    # far too small to reverse the requested launch-angle direction here.
+    common = dict(
+        speed_mph=17.0, rev_rate=350.0, axis_rotation=0.0, axis_tilt=15.0, launch_position=20.0
+    )
+    straight = Throw(launch_angle=0.0, **common)
+    angled = Throw(launch_angle=5.0, **common)
 
     straight_result = simulate_throw(ball, straight, lane)
     angled_result = simulate_throw(ball, angled, lane)

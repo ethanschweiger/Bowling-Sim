@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, createGame, getGame, resetGame, throwBall } from './client';
+import { ApiError, createGame, getBalls, getGame, getOilPatterns, resetGame, throwBall } from './client';
 
 function jsonResponse(body: unknown, init: { status?: number; ok?: boolean } = {}) {
   const status = init.status ?? 200;
@@ -12,6 +12,36 @@ function jsonResponse(body: unknown, init: { status?: number; ok?: boolean } = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('getBalls', () => {
+  it('GETs /api/v1/balls', async () => {
+    const body = { balls: [{ id: 'house_ball', name: 'House Ball' }] };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getBalls();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/balls');
+    expect(init?.method ?? undefined).toBeUndefined(); // GET is fetch's default method
+    expect(result.balls[0].id).toBe('house_ball');
+  });
+});
+
+describe('getOilPatterns', () => {
+  it('GETs /api/v1/oil-patterns', async () => {
+    const body = { patterns: [{ id: 'house', name: 'House Shot' }] };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(body));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await getOilPatterns();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/v1/oil-patterns');
+    expect(init?.method ?? undefined).toBeUndefined(); // GET is fetch's default method
+    expect(result.patterns[0].id).toBe('house');
+  });
 });
 
 describe('createGame', () => {
@@ -92,6 +122,21 @@ describe('throwBall', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(throwBall('g1', {} as never)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('surfaces a 503 for a rejected (truncated-trajectory) solver throw', async () => {
+    // Deliberately arbitrary fixture text, not a copy of the backend's own
+    // TRUNCATED_TRAJECTORY_DETAIL constant (app/api/routes/games.py): the
+    // client must relay whatever `detail` string the server actually
+    // sends, generically, not one it happens to recognize or duplicate.
+    const detail = 'server-fixture-only: throw rejected, nothing was saved, try again';
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ detail }, { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const error = await throwBall('g1', {} as never).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(503);
+    expect((error as ApiError).message).toBe(detail);
   });
 
   it('wraps a network failure in a distinct, recognizable ApiError', async () => {

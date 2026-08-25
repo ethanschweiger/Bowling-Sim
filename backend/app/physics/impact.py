@@ -33,22 +33,64 @@ class ImpactState:
     lane_condition_version: int
 
 
+class TruncatedTrajectoryError(Exception):
+    """Raised when a trajectory that never reached the headpin plane is
+    handed to impact construction.
+
+    A run can stop short of the lane's stated length by exhausting the
+    integration-step cap or by decelerating below the simulator's minimum
+    forward speed. Either way the ball is not at 60 ft, so its final
+    lateral position is not an *entry* position, and letting the collision
+    model start from it would silently score a throw that never arrived.
+    Every legal release reaches the pin deck today; this exists so a
+    future change to integration precision or drag can't quietly
+    reintroduce a truncated route (see `simulate.step_cap_for`).
+    """
+
+
+def require_reached_pin_deck(result: SimulationResult) -> SimulationResult:
+    """Raise `TruncatedTrajectoryError` unless this run reached the pin deck.
+
+    Separated from `impact_state_from_result` so the check can be made
+    *before* a throw mutates anything. `LaneSession.run_throw` applies
+    lane wear as soon as the simulation returns, which is earlier than
+    pinfall resolution — so a truncated route caught only at impact
+    construction would already have worn the lane. Callers that own a
+    game transaction run this inside their simulate step, where raising
+    still leaves the lane, rack, and scorecard untouched.
+
+    Returns the result unchanged so it can wrap a simulate call directly.
+    """
+    if not result.terminal.reached_pin_deck:
+        raise TruncatedTrajectoryError(
+            f"trajectory stopped at {result.terminal.distance_ft:.3f} ft, short of the headpin "
+            "plane; it has no entry state and must not be resolved as pinfall"
+        )
+    return result
+
+
 def impact_state_from_result(result: SimulationResult, ball: Ball) -> ImpactState:
     """Build the headpin-plane impact state a completed throw produced.
 
-    `result.entry_board`/`entry_angle_deg`/`speed_at_pins_mph` already
-    describe the ball at (approximately) the headpin plane — the
-    simulation loop runs until it reaches the lane's length, which is the
-    same 60 ft the No. 1 pin sits at (see pin_deck.py). This function just
-    re-expresses that state in the units/coordinate system a pinfall model
-    consumes, and folds in the ball properties a collision model will need
-    that a bare trajectory doesn't carry.
+    Derived from `result.terminal` — the one unrounded endpoint the
+    simulation finished in — not from the rounded `entry_board`/
+    `entry_angle_deg`/`speed_at_pins_mph` presentation fields. Those are
+    rounded views of this same state; reading them here would make the
+    collision model start from a slightly different place than the path
+    the bowler was shown ends at. This function runs no new physics: it
+    re-expresses that endpoint in the units/coordinate system a pinfall
+    model consumes, and folds in the ball properties a bare trajectory
+    doesn't carry.
+
+    Raises `TruncatedTrajectoryError` if the trajectory never reached the
+    headpin plane.
     """
-    lateral_position_in = boards_to_in(result.entry_board - LANE_CENTER_BOARD)
+    terminal = require_reached_pin_deck(result).terminal
+    lateral_position_in = boards_to_in(terminal.board - LANE_CENTER_BOARD)
     return ImpactState(
         lateral_position_in=lateral_position_in,
-        heading_deg=result.entry_angle_deg,
-        speed_mph=result.speed_at_pins_mph,
+        heading_deg=terminal.heading_deg,
+        speed_mph=terminal.speed_mph,
         ball_mass_lbs=ball.mass_lbs,
         ball_radius_in=ball.radius_in,
         lane_condition_version=result.lane_condition_version,

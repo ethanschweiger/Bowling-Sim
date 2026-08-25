@@ -2,9 +2,18 @@
 error that shows up even when a bowler is trying to repeat a shot exactly.
 """
 
+# Keeps the modern `X | None` annotation spelling usable on this project's
+# Python 3.9 runtime floor: with this import, annotations are never
+# evaluated at class/function-definition time, only read as strings (by
+# a human, or by an explicit `typing.get_type_hints` call this codebase
+# never makes) — so the `|` operator here doesn't need Python 3.10's
+# support for it on plain types. Pydantic models are the one exception:
+# they resolve annotations eagerly regardless of this import, so
+# app/models/schemas.py still spells optional fields with typing.Optional.
+from __future__ import annotations
+
 import random
 from dataclasses import dataclass, replace
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -13,20 +22,25 @@ class Throw:
     rev_rate: float = 350.0        # revolutions per minute
     axis_rotation: float = 45.0    # degrees; 0 = full roll, 90 = full spinner
     axis_tilt: float = 15.0        # degrees; higher tilt = more skid, later hook
-    launch_angle: float = 2.0      # degrees off the lane's centerline at release
-    launch_position: float = 28.0  # starting board, 1-39 (right-handers start ~28-30)
+    launch_angle: float = -1.5     # right-handed starter line: aimed toward lower/right boards
+    # the ball's laydown board at the foul line, 1-39 — NOT the bowler's stance board
+    launch_position: float = 28.0
 
 
 # One standard deviation of release error per field, in the field's own
-# units. These approximate what a consistent amateur/league bowler varies
-# shot to shot — not a beginner's spread, not a pro's.
+# units. These are deliberately a *narrow*, repeatable house-shot profile,
+# not measured bowler data. In particular, this planar model holds the launch
+# heading for the full 60 ft, so even a modest angle error accumulates into
+# several boards downlane. Keep angle and laydown variance tight enough that
+# a repeated requested release stays recognizably the same line while seeds
+# still produce a visible, bounded difference.
 _RELEASE_NOISE_STD = {
-    "speed_mph": 0.25,
-    "rev_rate": 12.0,
-    "axis_rotation": 2.0,
-    "axis_tilt": 2.0,
-    "launch_angle": 0.3,
-    "launch_position": 0.4,
+    "speed_mph": 0.10,
+    "rev_rate": 5.0,
+    "axis_rotation": 0.75,
+    "axis_tilt": 0.75,
+    "launch_angle": 0.05,
+    "launch_position": 0.15,
 }
 
 # Hard clip on the sampled noise so a rare draw can't wander outside what a
@@ -55,7 +69,7 @@ RELEASE_BOUNDS = {
 }
 
 
-def sample_release(requested: Throw, seed: Optional[int] = None) -> tuple[Throw, int]:
+def sample_release(requested: Throw, seed: int | None = None) -> tuple[Throw, int]:
     """Sample a small, bounded release error around the requested throw.
 
     The same seed always reproduces the same sampled throw. If no seed is

@@ -16,7 +16,14 @@ from app.physics.units import BOARD_WIDTH_IN
 
 def test_impact_state_is_finite_and_carries_the_lane_condition_version():
     ball = BALL_CATALOG["reactive_pearl"]
-    throw = Throw(speed_mph=17.0, rev_rate=350.0, axis_rotation=45.0, axis_tilt=15.0, launch_angle=0.5, launch_position=28.0)
+    throw = Throw(
+        speed_mph=17.0,
+        rev_rate=350.0,
+        axis_rotation=45.0,
+        axis_tilt=15.0,
+        launch_angle=0.5,
+        launch_position=28.0,
+    )
     lane = LaneCondition.house_shot()
 
     result = simulate_throw(ball, throw, lane)
@@ -31,16 +38,31 @@ def test_impact_state_is_finite_and_carries_the_lane_condition_version():
     assert impact.ball_radius_in == ball.radius_in
 
 
-def test_impact_state_lateral_position_is_correctly_oriented_from_entry_board():
-    ball = BALL_CATALOG["house_ball"]
-    throw = Throw(launch_position=28.0)  # right of center
+def test_impact_state_lateral_position_is_correctly_oriented_from_the_terminal_state():
+    ball = BALL_CATALOG["reactive_pearl"]
+    # Board 28 is *left* of center: board 1 is the bowler's right gutter and
+    # board 39 the bowler's left, so center is board 20 and higher numbers
+    # run left. (This comment previously said "right of center", which
+    # inverted the documented convention.)
+    # Aimed toward lower boards, the conventional right-handed direction.
+    # A positive launch angle here aims the same way the hook already
+    # goes and runs this release to the left lane edge, where the board
+    # clamps to an exact 40 and every rounding route trivially agrees
+    # (see the final assertion).
+    throw = Throw(launch_position=28.0, launch_angle=-1.0)
     lane = LaneCondition.house_shot()
 
     result = simulate_throw(ball, throw, lane)
     impact = impact_state_from_result(result, ball)
 
-    # entry_board > LANE_CENTER_BOARD (28 > 20) must read as a positive
-    # lateral_position_in, and the magnitude must match the declared board width.
-    expected_in = (result.entry_board - LANE_CENTER_BOARD) * BOARD_WIDTH_IN
+    # A terminal board above center must read as a positive
+    # lateral_position_in, with the magnitude matching the declared board
+    # width — and it must be derived from the exact terminal state, not
+    # from the rounded `entry_board` presentation field.
+    expected_in = (result.terminal.board - LANE_CENTER_BOARD) * BOARD_WIDTH_IN
     assert impact.lateral_position_in == expected_in
     assert impact.lateral_position_in > 0
+    # The earlier version of this test used a fixture that clamped at the
+    # lane edge (board 40), where the board is an exact integer and every
+    # rounding route agrees — so it passed without testing anything.
+    assert result.terminal.board != int(result.terminal.board)

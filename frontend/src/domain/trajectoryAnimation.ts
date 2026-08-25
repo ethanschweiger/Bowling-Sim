@@ -51,6 +51,24 @@ export function interpolatePathPosition(path: readonly TrajectoryPointResponse[]
   };
 }
 
+/**
+ * The path's own final sample — what the canvas draws as the entry
+ * marker. Returns the exact element from `path`, never a copy or a
+ * recomputed value, so the marker provably sits on the end of the
+ * polyline rather than beside it.
+ *
+ * The response also carries an `entry_board` field. The backend derives
+ * both it and this final sample from one unrounded terminal state, so
+ * they agree today; drawing *this* keeps them from being able to
+ * disagree tomorrow. See `backend/app/physics/simulate.py`'s
+ * `TerminalState`.
+ */
+export function trajectoryEndpoint(
+  path: readonly TrajectoryPointResponse[],
+): TrajectoryPointResponse | null {
+  return path.length > 0 ? path[path.length - 1] : null;
+}
+
 /** Ease-out cubic: fast start, gentle finish. A purely visual timing
  * curve applied to elapsed-time fraction — the ball's real deceleration
  * is already baked into `path`'s own point spacing; this only shapes how
@@ -69,19 +87,30 @@ export function initialAnimationProgress(reducedMotion: boolean): number {
 }
 
 /** Whether "Replay last shot" should be enabled right now: a completed
- * throw with a real path exists, no request is in flight, and the saved
- * game isn't in the confirmed-stale state. A pure predicate — it never
- * reads game state beyond its own three arguments and never calls the
- * API client (this module imports nothing from `api/client`), so
- * replaying can't mutate score, pins, lane condition, game id, or
- * release values; it only restarts the canvas's own local animation over
- * the exact path already stored from that throw. */
+ * throw with a real path exists, no request is in flight, the saved game
+ * isn't in the confirmed-stale state, and the most recent throw attempt
+ * didn't end in a rejected/failed request. A pure predicate — it never
+ * reads game state beyond its own four arguments and never calls the API
+ * client (this module imports nothing from `api/client`), so replaying
+ * can't mutate score, pins, lane condition, game id, or release values;
+ * it only restarts the canvas's own local animation over the exact path
+ * already stored from that throw.
+ *
+ * `throwRejected` exists so a request that fails after `isBusy` returns
+ * to `false` (e.g. a 503 truncated-trajectory rejection) can't re-enable
+ * replay on the *previous* completed throw's path — the display is
+ * meant to stay settled and inert until an actual successful state
+ * transition (a new successful throw, a reset, or a new game) supersedes
+ * it, not a bare status change from loading to error. This never
+ * discards or mutates `latestThrow` itself; it only withholds the
+ * ability to restart its animation while the failure is unresolved. */
 export function canReplay(
   latestThrow: Pick<GameThrowResponse, 'path'> | null,
   isBusy: boolean,
   isStale: boolean,
+  throwRejected: boolean,
 ): boolean {
-  return latestThrow !== null && latestThrow.path.length > 0 && !isBusy && !isStale;
+  return latestThrow !== null && latestThrow.path.length > 0 && !isBusy && !isStale && !throwRejected;
 }
 
 /** The two signals a playback decision depends on, snapshotted once per
@@ -137,4 +166,52 @@ export function decidePlaybackAction(previous: PlaybackState, next: PlaybackStat
   }
 
   return { kind: 'none' };
+}
+
+/** The state a canvas compares against before it has seen anything: no
+ * completed throw, idle, and no replay presses yet. Exported so a remount
+ * can reset to exactly the same starting point the first mount used. */
+export const INITIAL_PLAYBACK_STATE: PlaybackState = {
+  latestThrowPath: null,
+  isBusy: false,
+  replayCount: 0,
+};
+
+export interface PlaybackTransition {
+  action: PlaybackAction;
+  /** The snapshot to compare against next time. */
+  snapshot: PlaybackState;
+}
+
+/**
+ * `decidePlaybackAction` plus the rule for when that decision may be
+ * recorded as *made*.
+ *
+ * The distinction matters because the decision is a transition, not a
+ * property of the current state: it is derived by comparing against the
+ * previous snapshot, so advancing that snapshot consumes the decision. If
+ * the caller advances it while unable to act, the action is gone — every
+ * later comparison sees no change and answers `none`.
+ *
+ * That is exactly the defect this exists to prevent. A canvas mounting with
+ * a completed throw already in hand decides `start` in its layout pass; if
+ * its player is created by a *passive* effect, that player does not exist
+ * yet, and recording the snapshot anyway means the throw never animates at
+ * all. Passing `canAct: false` keeps the old snapshot, so the identical
+ * comparison happens again on the next pass and the decision survives.
+ *
+ * The ordering fix (create the player in an earlier layout effect) is what
+ * makes `canAct` true in practice; this is the guarantee that a future
+ * reordering cannot silently lose a throw again.
+ */
+export function planPlaybackTransition(
+  previous: PlaybackState,
+  next: PlaybackState,
+  canAct: boolean,
+): PlaybackTransition {
+  const action = decidePlaybackAction(previous, next);
+  if (!canAct) {
+    return { action: { kind: 'none' }, snapshot: previous };
+  }
+  return { action, snapshot: next };
 }

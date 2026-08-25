@@ -19,7 +19,12 @@ function throwResponse(overrides: Partial<GameThrowResponse>): GameThrowResponse
     entry_angle_deg: 3.2,
     speed_at_pins_mph: 14.1,
     pins_knocked: 3,
-    pinfall: { model_id: 'planar-collision-2d-v1', limitations: '', fallen_pin_ids: [1, 2, 4] },
+    pinfall: {
+      model_id: 'planar-collision-2d-v1',
+      limitations: '',
+      fallen_pin_ids: [1, 2, 4],
+      replay: null,
+    },
     lane_condition_version: 1,
     game_state: {
       standing_pin_ids: [3, 5, 6, 7, 8, 9, 10],
@@ -55,7 +60,12 @@ describe('describeLatestThrow', () => {
   });
 
   it('uses singular "pin" for exactly one pin knocked down', () => {
-    const text = describeLatestThrow(throwResponse({ pins_knocked: 1, pinfall: { model_id: 'm', limitations: '', fallen_pin_ids: [7] } }));
+    const text = describeLatestThrow(
+      throwResponse({
+        pins_knocked: 1,
+        pinfall: { model_id: 'm', limitations: '', fallen_pin_ids: [7], replay: null },
+      }),
+    );
     expect(text).toContain('1 pin ');
   });
 });

@@ -75,18 +75,18 @@ export const RELEASE_FIELDS: readonly ReleaseFieldConfig[] = [
     min: -2,
     max: 2,
     step: 0.1,
-    defaultValue: 0.5,
-    help: "Aim off the lane's centerline; positive points toward higher board numbers.",
+    defaultValue: -1.5,
+    help: 'Negative aims toward lower/right boards. Positive aims toward higher/left boards.',
   },
   {
     id: 'launch_position',
-    label: 'Launch position',
+    label: 'Ball laydown board',
     unit: 'board',
     min: 1,
     max: 39,
     step: 0.5,
     defaultValue: 28,
-    help: 'Starting board, 1–39 (right-handers often start around 28–30).',
+    help: 'The board where the ball enters at the foul line. This is not the bowler’s standing board.',
   },
 ];
 

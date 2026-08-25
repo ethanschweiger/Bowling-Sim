@@ -21,6 +21,7 @@ from app.games.service import (
     default_game_service,
 )
 from app.models.schemas import (
+    CollisionReplayResponse,
     CreateGameRequest,
     CreateGameResponse,
     FrameStateResponse,
@@ -30,16 +31,100 @@ from app.models.schemas import (
     GameThrowResponse,
     PinfallInfo,
     ReleaseValues,
+    ReplayBodyResponse,
+    ReplayFrameResponse,
+    ThresholdCrossingResponse,
     ThrowRequest,
     TrajectoryPointResponse,
 )
 from app.physics.ball import BALL_CATALOG
 from app.physics.collision import DEFAULT_PINFALL_MODEL
-from app.physics.impact import impact_state_from_result
+from app.physics.impact import TruncatedTrajectoryError, impact_state_from_result
+from app.physics.pinfall import PinfallResult
 from app.physics.simulate import simulate_throw
 from app.physics.throw import Throw, sample_release
 
 router = APIRouter(prefix="/games", tags=["games"])
+
+# Stable, internals-free text for a throw whose simulated trajectory never
+# reached the pin deck (see `app.physics.impact.TruncatedTrajectoryError`).
+# `GameSession.throw` guarantees this is raised before lane wear, rack
+# change, or scorecard update — see its own docstring — so the response
+# can honestly promise nothing was recorded. Never include the exception's
+# own message here: that carries a raw distance/stride value, which is a
+# solver internal, not API surface.
+TRUNCATED_TRAJECTORY_DETAIL = (
+    "the simulated trajectory did not reach the pin deck; this throw was "
+    "not recorded and game state is unchanged. Retrying is expected to work."
+)
+
+
+def truncated_trajectory_http_error() -> HTTPException:
+    """The one response both throw routes give for `TruncatedTrajectoryError`.
+
+    503, not 4xx: the release itself was valid input (it already passed
+    the same `ThrowRequest`/`RELEASE_BOUNDS` validation as any other
+    throw) — this is the server's simplified solver failing to complete a
+    physical computation, not a malformed request. A 4xx would incorrectly
+    tell the caller their input was the problem and retrying with the same
+    release won't help; a 503 correctly says the *server* couldn't
+    complete this attempt and a retry is reasonable.
+    """
+    return HTTPException(status_code=503, detail=TRUNCATED_TRAJECTORY_DETAIL)
+
+
+def pinfall_to_response(pinfall: PinfallResult) -> PinfallInfo:
+    """The one place a domain `PinfallResult` turns into the API's
+    `PinfallInfo` shape — used by both throw routes (game-scoped and the
+    deprecated legacy one), so the serialized contract can't drift between
+    them. Pure mapping over already-immutable data.
+
+    A `replay` of `None` stays `None`: no collision was simulated (the
+    heuristic model, a gutter miss, a non-positive speed, or an empty
+    rack), and inventing frames for one would describe a scene the solver
+    never produced.
+    """
+    replay = getattr(pinfall, "replay", None)
+    return PinfallInfo(
+        model_id=pinfall.model_id,
+        limitations=pinfall.limitations,
+        fallen_pin_ids=list(pinfall.fallen_pin_ids),
+        replay=(
+            None
+            if replay is None
+            else CollisionReplayResponse(
+                model_version=replay.model_version,
+                dt_s=replay.dt_s,
+                sample_every_steps=replay.sample_every_steps,
+                steps_taken=replay.steps_taken,
+                frames=[
+                    ReplayFrameResponse(
+                        t_s=frame.t_s,
+                        bodies=[
+                            ReplayBodyResponse(body_id=b.body_id, x_in=b.x_in, y_in=b.y_in)
+                            for b in frame.bodies
+                        ],
+                    )
+                    for frame in replay.frames
+                ],
+                # Carried straight through from the solver's own recorded
+                # exit. This mapping never re-derives it — if the domain
+                # ever failed to set one, the Literal above must reject the
+                # response rather than let this layer invent a plausible
+                # value.
+                termination_reason=replay.termination_reason,
+                # Likewise the threshold crossings: copied in recorded order,
+                # never re-sorted, re-derived from positions, or filtered
+                # against the fallen set. If the two ever disagreed, that is
+                # a fact the client should see and reject on, not something
+                # this layer should quietly reconcile.
+                threshold_crossings=[
+                    ThresholdCrossingResponse(pin_id=c.pin_id, step_index=c.step_index)
+                    for c in replay.threshold_crossings
+                ],
+            )
+        ),
+    )
 
 
 def snapshot_to_game_state(snapshot: GameStateSnapshot) -> GameStateResponse:
@@ -84,7 +169,7 @@ def get_game(game_id: str) -> GameStatusResponse:
     try:
         session = default_game_service.get_game(game_id)
     except UnknownGameError:
-        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'")
+        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
     snapshot = session.current_snapshot()
     return GameStatusResponse(
@@ -99,7 +184,7 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
     try:
         session = default_game_service.get_game(game_id)
     except UnknownGameError:
-        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'")
+        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
     ball = BALL_CATALOG.get(request.ball_id)
     if ball is None:
@@ -129,22 +214,24 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
             ),
         )
     except GameCompleteError:
-        raise HTTPException(status_code=409, detail=f"game '{game_id}' is already complete")
+        raise HTTPException(
+            status_code=409, detail=f"game '{game_id}' is already complete"
+        ) from None
+    except TruncatedTrajectoryError:
+        raise truncated_trajectory_http_error() from None
 
     return GameThrowResponse(
         game_id=game_id,
         seed=seed,
         actual_release=ReleaseValues(**asdict(actual_throw)),
-        path=[TrajectoryPointResponse(distance_ft=p.distance_ft, board=p.board) for p in result.path],
+        path=[
+            TrajectoryPointResponse(distance_ft=p.distance_ft, board=p.board) for p in result.path
+        ],
         entry_board=result.entry_board,
         entry_angle_deg=result.entry_angle_deg,
         speed_at_pins_mph=result.speed_at_pins_mph,
         pins_knocked=pinfall.pins_knocked,
-        pinfall=PinfallInfo(
-            model_id=pinfall.model_id,
-            limitations=pinfall.limitations,
-            fallen_pin_ids=list(pinfall.fallen_pin_ids),
-        ),
+        pinfall=pinfall_to_response(pinfall),
         lane_condition_version=result.lane_condition_version,
         game_state=snapshot_to_game_state(snapshot),
     )
@@ -155,7 +242,7 @@ def reset_game(game_id: str) -> GameResetResponse:
     try:
         session = default_game_service.get_game(game_id)
     except UnknownGameError:
-        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'")
+        raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
     condition, snapshot = session.reset()
     return GameResetResponse(

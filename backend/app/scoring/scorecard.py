@@ -39,8 +39,11 @@ unresolved, every later frame's cumulative score is `None` too — a
 running total can't skip past a gap.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 FRAME_COUNT = 10
 MAX_PINS = 10
@@ -54,11 +57,11 @@ class ScorecardError(Exception):
 @dataclass(frozen=True)
 class Frame:
     number: int              # 1-10
-    rolls: tuple             # the pinfall values thrown in this frame (1-3 ints)
+    rolls: tuple[int, ...]    # the pinfall values thrown in this frame (1-3 ints)
     is_strike: bool
     is_spare: bool
     is_complete: bool        # this frame has thrown every roll it owns (not necessarily scored yet)
-    score: Optional[int]     # cumulative total through this frame, or None if unresolved
+    score: int | None     # cumulative total through this frame, or None if unresolved
 
 
 @dataclass(frozen=True)
@@ -66,14 +69,14 @@ class _RawFrame:
     """Internal: a frame's layout in the flat roll sequence, before scoring."""
 
     number: int
-    rolls: tuple
+    rolls: tuple[int, ...]
     end_index: int  # index into the flat roll list right after this frame's own rolls
     is_strike: bool
     is_spare: bool
     is_complete: bool
 
 
-def _layout_tenth_frame(rolls: list, i: int) -> tuple:
+def _layout_tenth_frame(rolls: list[int], i: int) -> tuple[_RawFrame, int]:
     """Lays out frame 10 starting at index i. Returns (_RawFrame, next_index).
     Raises ScorecardError for any illegal tenth-frame sequence."""
     n = len(rolls)
@@ -92,12 +95,15 @@ def _layout_tenth_frame(rolls: list, i: int) -> tuple:
         third = rolls[i + 2]
         if second < MAX_PINS and second + third > MAX_PINS:
             raise ScorecardError(
-                f"frame 10: ball 2 ({second}) + ball 3 ({third}) exceed the {MAX_PINS} pins on that rack"
+                f"frame 10: ball 2 ({second}) + ball 3 ({third}) exceed the {MAX_PINS} pins on "
+                "that rack"
             )
         return _RawFrame(10, (first, second, third), i + 3, True, False, True), i + 3
 
     if first + second > MAX_PINS:
-        raise ScorecardError(f"frame 10: ball 1 ({first}) + ball 2 ({second}) exceed {MAX_PINS} pins")
+        raise ScorecardError(
+            f"frame 10: ball 1 ({first}) + ball 2 ({second}) exceed {MAX_PINS} pins"
+        )
 
     if first + second < MAX_PINS:
         # Open tenth frame: exactly two balls, no bonus roll.
@@ -114,7 +120,7 @@ def _layout_tenth_frame(rolls: list, i: int) -> tuple:
     return _RawFrame(10, (first, second, third), i + 3, False, True, True), i + 3
 
 
-def _layout(rolls: list) -> list:
+def _layout(rolls: list[int]) -> list[_RawFrame]:
     """Walks the flat roll list into up to 10 _RawFrames. Raises
     ScorecardError for any illegal roll — out of range, exceeding the pins
     available in that frame/ball, an illegal tenth-frame sequence, or a
@@ -145,7 +151,8 @@ def _layout(rolls: list) -> list:
             second = rolls[i + 1]
             if first + second > MAX_PINS:
                 raise ScorecardError(
-                    f"frame {frame_number}: ball 1 ({first}) + ball 2 ({second}) exceed {MAX_PINS} pins"
+                    f"frame {frame_number}: ball 1 ({first}) + ball 2 ({second}) exceed "
+                    f"{MAX_PINS} pins"
                 )
             is_spare = first + second == MAX_PINS
             frames.append(_RawFrame(frame_number, (first, second), i + 2, False, is_spare, True))
@@ -160,7 +167,7 @@ def _layout(rolls: list) -> list:
     return frames
 
 
-def _own_points(raw: "_RawFrame", rolls: list, is_last_frame: bool) -> Optional[int]:
+def _own_points(raw: _RawFrame, rolls: list[int], is_last_frame: bool) -> int | None:
     """This frame's own point contribution (not cumulative), or None if a
     strike/spare bonus it needs hasn't been thrown yet. Frame 10 is
     self-contained — its bonus balls are already inside raw.rolls, so it
@@ -181,7 +188,7 @@ def _own_points(raw: "_RawFrame", rolls: list, is_last_frame: bool) -> Optional[
     return base
 
 
-def _build_frames(rolls: list) -> tuple:
+def _build_frames(rolls: list[int]) -> tuple[Frame, ...]:
     raw_frames = _layout(rolls)  # raises ScorecardError; no partial frames list escapes on failure
 
     frames = []
@@ -211,8 +218,8 @@ class Scorecard:
     """One ten-pin game. Deterministic, no random input, no external state."""
 
     def __init__(self) -> None:
-        self._rolls: list = []
-        self._frames: tuple = ()
+        self._rolls: list[int] = []
+        self._frames: tuple[Frame, ...] = ()
 
     def add_roll(self, pins: int) -> None:
         """Records one ball's pinfall count (0-10). Raises ScorecardError,
@@ -231,7 +238,7 @@ class Scorecard:
         self._frames = candidate_frames
 
     @property
-    def frames(self) -> tuple:
+    def frames(self) -> tuple[Frame, ...]:
         """Every frame started so far (0-10 of them), each a `Frame`."""
         return self._frames
 
@@ -240,7 +247,7 @@ class Scorecard:
         return len(self._frames) == FRAME_COUNT and self._frames[-1].is_complete
 
     @property
-    def total_score(self) -> Optional[int]:
+    def total_score(self) -> int | None:
         """The cumulative score through the most recent *resolved* frame —
         what a scorekeeper could currently state as "the score so far,"
         the same way a real scorecard reads even while the next frame is
@@ -294,7 +301,7 @@ class Scorecard:
             return True
         return last.rolls[1] == MAX_PINS
 
-    def next_roll_position(self) -> Tuple[Optional[int], Optional[int]]:
+    def next_roll_position(self) -> tuple[int | None, int | None]:
         """(frame_number, ball_number) the next legal roll would belong
         to — both 1-based — or (None, None) if the game is already
         complete. Another pure read of the existing `frames`; no rule

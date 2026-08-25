@@ -76,7 +76,8 @@ def test_tenth_frame_strike_permits_exactly_two_bonus_rolls():
     _roll_all(card, [0] * 18)
     card.add_roll(10)  # strike in frame 10
     card.add_roll(5)
-    card.add_roll(5)  # legal: ball 2 didn't clear the fresh rack by itself, but this is ball 3 not exceeding it
+    # legal: ball 2 didn't clear the fresh rack by itself, but this is ball 3 not exceeding it
+    card.add_roll(5)
 
     assert card.is_game_complete
     tenth = card.frames[9]

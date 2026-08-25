@@ -1,0 +1,35 @@
+# Applies to every service's build context in docker-compose.yml (all of
+# them use the repository root as context, so one file here covers both).
+# Keeps host-specific and rebuildable directories out of the build
+# context entirely -- smaller, faster, more reproducible builds, and no
+# risk of a host virtualenv or node_modules leaking into an image.
+
+.git/
+
+# Python (backend)
+backend/.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node (frontend)
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+
+# Env files -- never copied into an image; Compose injects real values
+# as container environment variables instead (see docker-compose.yml).
+.env
+*.env.local
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local agent skill instructions -- see root .gitignore for why these
+# are excluded from the repository itself, same reasoning applies here.
+SKILL.md
+.claude/

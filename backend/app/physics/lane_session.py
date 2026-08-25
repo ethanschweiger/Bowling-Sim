@@ -22,14 +22,19 @@ from. See `app.games.service` for the game-scoped owner of one `LaneSession`
 per game, including reset back to that game's own starting condition.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from app.physics.lane import LaneCondition, apply_wear
+from app.physics.simulate import SimulationResult
 
 
 class LaneSession:
-    def __init__(self, condition: Optional[LaneCondition] = None):
+    def __init__(self, condition: LaneCondition | None = None):
         self._condition = condition or LaneCondition.house_shot()
         self._lock = threading.Lock()
 
@@ -38,11 +43,11 @@ class LaneSession:
         with self._lock:
             return self._condition
 
-    def run_throw(self, simulate: Callable[[LaneCondition], object]):
+    def run_throw(self, simulate: Callable[[LaneCondition], SimulationResult]) -> SimulationResult:
         """Atomically read the current condition, simulate against it, and
-        record the resulting wear. `simulate(condition)` must return an
-        object with a `.path` of TrajectoryPoints (a SimulationResult).
-        Held under the lock end to end, so no other call can read the same
+        record the resulting wear. `simulate(condition)` must return a
+        `SimulationResult` (its `.path` is what wears the lane in). Held
+        under the lock end to end, so no other call can read the same
         condition before this one's wear is recorded.
         """
         with self._lock:

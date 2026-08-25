@@ -1,43 +1,69 @@
 /**
- * The four ball IDs `backend/app/physics/ball.py`'s `BALL_CATALOG` defines
- * today, with a short, honest description of each (paraphrased from that
- * module's own coverstock comments — not a new claim about ball behavior).
+ * Where the selectable ball list comes from, and which ball starts
+ * selected.
  *
- * This is a deliberately isolated, hardcoded UI catalog, not a guess at
- * future ones: there is no `GET /api/v1/balls` yet, so the frontend has no
- * way to ask the server what balls exist. When that endpoint arrives, this
- * file is the one place that needs to change — swap this constant for a
- * fetched list — and nothing else in the UI should need to know the
- * difference, since every component here only depends on `BallOption`.
+ * The backend owns the catalog. `GET /api/v1/balls` publishes
+ * `backend/app/physics/ball.py`'s `BALL_CATALOG`, which is the same dict
+ * the throw routes validate `ball_id` against, so anything this module
+ * hands the UI is throwable by construction. Nothing here hardcodes a
+ * ball id except the *preference* below, and that preference is checked
+ * against the fetched list before it is used.
+ *
+ * There is deliberately no local copy of the catalog to fall back on. A
+ * stale hardcoded list is worse than no list: it can disagree with the
+ * server and offer an id a throw would reject with a 404.
  */
 
-export interface BallOption {
-  id: string;
-  name: string;
-  description: string;
+import { getBalls } from '../api/client';
+import type { BallResponse } from '../api/types';
+
+/** The ball the starter release is tuned around: a reactive ball makes
+ * the displayed skid-to-hook shape legible. Only a preference. If the
+ * server stops publishing it, `pickDefaultBallId` falls back rather than
+ * selecting an id the server does not offer. */
+export const DEFAULT_BALL_ID = 'reactive_pearl';
+
+// Module-level, matching `gameLifecycle.ts`'s bootstrap memo and for the
+// same reason: React StrictMode invokes a mount effect twice in dev, and
+// both passes should share one in-flight request instead of firing two.
+// It also means a re-render never re-requests the catalog.
+let catalogPromise: Promise<BallResponse[]> | null = null;
+
+/** The server's catalog, fetched once per module lifetime. A failed
+ * attempt clears the memo before rejecting, so a later call (StrictMode's
+ * second pass, or the user pressing Retry) genuinely tries again instead
+ * of replaying the same stale rejection. */
+export function fetchBallCatalog(): Promise<BallResponse[]> {
+  if (!catalogPromise) {
+    catalogPromise = getBalls()
+      .then((response) => response.balls)
+      .catch((error: unknown) => {
+        catalogPromise = null;
+        throw error;
+      });
+  }
+  return catalogPromise;
 }
 
-export const BALL_CATALOG: readonly BallOption[] = [
-  {
-    id: 'house_ball',
-    name: 'House Ball',
-    description: 'Plastic coverstock, polished. Near-zero hook — predictable and straight.',
-  },
-  {
-    id: 'urethane_smooth',
-    name: 'Smooth Urethane',
-    description: 'Urethane coverstock. A smooth, predictable arc with moderate hook.',
-  },
-  {
-    id: 'reactive_pearl',
-    name: 'Reactive Pearl',
-    description: 'Reactive coverstock. Strong, sudden backend motion.',
-  },
-  {
-    id: 'particle_beast',
-    name: 'Particle Beast',
-    description: 'Particle coverstock — reactive plus grit. Built for heavy oil.',
-  },
-];
+/** Test-only seam: forget any in-flight or completed fetch so one test
+ * does not inherit another's memo. */
+export function resetBallCatalogForTests(): void {
+  catalogPromise = null;
+}
 
-export const DEFAULT_BALL_ID: string = BALL_CATALOG[0].id;
+/** Which ball to select when the catalog arrives: the preferred one when
+ * the server actually returned it, otherwise the first ball it did
+ * return. Returns null for an empty catalog, which leaves the UI with
+ * nothing selectable rather than inventing an id. */
+export function pickDefaultBallId(balls: readonly BallResponse[]): string | null {
+  if (balls.some((ball) => ball.id === DEFAULT_BALL_ID)) {
+    return DEFAULT_BALL_ID;
+  }
+  return balls[0]?.id ?? null;
+}
+
+/** True when `ballId` is one the server published. The throw path checks
+ * this before submitting, so a stale selection can never be sent. */
+export function isSelectable(balls: readonly BallResponse[], ballId: string | null): boolean {
+  return ballId !== null && balls.some((ball) => ball.id === ballId);
+}

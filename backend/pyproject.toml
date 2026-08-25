@@ -1,0 +1,40 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+# Checks against this project's actual runtime floor (backend/.venv is
+# Python 3.9.6), not CI's Python 3.11 runner -- that pin is for running
+# tests/lint on a currently-supported interpreter, not a statement that
+# 3.11-only typing behavior is part of the supported runtime contract.
+python_version = "3.9"
+strict = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# Two installed third-party packages fail to type-check under
+# python_version = "3.9" above -- neither finding is about this
+# project's own code under app/, confirmed by reproducing both against a
+# real, freshly `pip install`-ed Python 3.11 venv (matching CI exactly)
+# before adding this override, and confirming a genuine app/ type error
+# still gets caught with it in place:
+#   - anyio (a transitive fastapi/httpx dependency) ships source using
+#     match-statement syntax, which only parses on Python 3.10+. mypy
+#     parses installed packages it follows imports into directly against
+#     the configured python_version, so it fails outright on that syntax
+#     under 3.9 -- regardless of whether anyio itself only executes that
+#     code path on newer interpreters at runtime.
+#   - tomli is a real runtime dependency of pydantic-settings, but only
+#     on Python < 3.11 (3.11+ has tomllib in the stdlib). A fresh install
+#     under CI's Python 3.11 runner never installs it, so mypy can't
+#     resolve pydantic_settings' own conditional `import tomli`.
+# follow_imports = "skip" stops mypy from parsing/checking either
+# package's source at all -- both are treated as untyped external
+# boundaries, the same as any dependency with no type information,
+# rather than having their internals re-typechecked as part of this
+# project's own strict pass.
+module = ["anyio.*", "tomli"]
+follow_imports = "skip"

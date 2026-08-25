@@ -1,3 +1,8 @@
+.catalogSummary {
+  display: grid;
+  gap: 0.75rem;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -26,18 +31,41 @@
 .help {
   margin: 0;
   font-size: 0.85rem;
+  line-height: 1.4;
   color: var(--color-text-muted);
 }
 
 .patternInfo {
-  margin-top: 0.75rem;
   padding: 0.625rem 0.75rem;
   border-radius: 0.5rem;
   background: var(--color-surface-inset);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.patternInfoName {
+  margin: 0;
   font-size: 0.85rem;
   color: var(--color-text-muted);
 }
 
-.patternInfo strong {
+.patternInfoName strong {
   color: var(--color-text);
+}
+
+@media (min-width: 860px) {
+  .catalogSummary {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    align-items: start;
+  }
+
+  .help {
+    font-size: 0.78rem;
+    line-height: 1.35;
+  }
+
+  .patternInfo {
+    padding: 0.5rem 0.625rem;
+  }
 }

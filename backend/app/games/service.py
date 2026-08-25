@@ -79,14 +79,21 @@ for read-only callers (game creation, the `GET` endpoint) that aren't
 mid-mutation.
 """
 
+# Keeps `X | None` usable on this project's Python 3.9 floor — see
+# app/physics/throw.py's module docstring for the full explanation.
+from __future__ import annotations
+
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Dict, FrozenSet, Optional, Tuple
 
+from app.physics.impact import require_reached_pin_deck
 from app.physics.lane import LaneCondition
 from app.physics.lane_session import LaneSession
+from app.physics.pinfall import PinfallResult
 from app.physics.rack import Rack
+from app.physics.simulate import SimulationResult
 from app.scoring.scorecard import Frame, Scorecard
 
 # The only pattern selectable this milestone. A future named-pattern
@@ -118,12 +125,13 @@ class GameStateSnapshot:
     """
 
     lane_condition_version: int
-    standing_pin_ids: FrozenSet[int]
-    frames: Tuple[Frame, ...]  # Frame is itself an immutable frozen dataclass — safe to hold indefinitely
-    total_score: Optional[int]
+    standing_pin_ids: frozenset[int]
+    # Frame is itself an immutable frozen dataclass — safe to hold indefinitely.
+    frames: tuple[Frame, ...]
+    total_score: int | None
     is_game_complete: bool
-    next_frame_number: Optional[int]
-    next_ball_number: Optional[int]
+    next_frame_number: int | None
+    next_ball_number: int | None
 
 
 class GameSession:
@@ -167,9 +175,9 @@ class GameSession:
 
     def throw(
         self,
-        simulate: Callable[[LaneCondition], object],
-        resolve_pinfall: Callable[[object, frozenset], object],
-    ) -> Tuple[object, object, GameStateSnapshot]:
+        simulate: Callable[[LaneCondition], SimulationResult],
+        resolve_pinfall: Callable[[SimulationResult, frozenset[int]], PinfallResult],
+    ) -> tuple[SimulationResult, PinfallResult, GameStateSnapshot]:
         """The one throw transaction. `simulate(lane_condition)` must
         return a `SimulationResult` (the same contract `LaneSession.run_throw`
         already uses); `resolve_pinfall(simulation_result, standing_ids)`
@@ -192,7 +200,16 @@ class GameSession:
                 raise GameCompleteError(f"game {self.game_id} is already complete")
 
             standing_ids = self._rack.standing_ids
-            simulation_result = self.lane.run_throw(simulate)
+            # The validity check runs *inside* the simulate step, not after
+            # it. `LaneSession.run_throw` applies lane wear the moment the
+            # simulation returns — before pinfall resolution — so a route
+            # that never reached the pin deck has to be refused here or it
+            # would already have worn the lane on its way to failing. From
+            # this position the raise leaves lane, rack, and scorecard all
+            # untouched, exactly like the game-complete rejection above.
+            simulation_result = self.lane.run_throw(
+                lambda condition: require_reached_pin_deck(simulate(condition))
+            )
             pinfall_result = resolve_pinfall(simulation_result, standing_ids)
 
             self._scorecard.add_roll(pinfall_result.pins_knocked)
@@ -204,7 +221,7 @@ class GameSession:
             snapshot = self._build_snapshot()
             return simulation_result, pinfall_result, snapshot
 
-    def reset(self) -> Tuple[LaneCondition, GameStateSnapshot]:
+    def reset(self) -> tuple[LaneCondition, GameStateSnapshot]:
         """Restore this game's lane to its own original starting condition
         (same grid, same temperature, version back to 1), and start a
         fresh `Scorecard` and a full `Rack` — atomically, under the same
@@ -223,24 +240,92 @@ class GameSession:
             return self._initial_condition, snapshot
 
 
+# The production default for `GameService.max_games`. Comfortably above
+# anything the backend's own test suite creates against
+# `default_game_service` in one run (38, measured directly by
+# instrumenting a full `pytest` pass), while still bounding a long-running
+# process instead of letting it grow without limit. Not derived from any
+# measured request-volume or memory target -- a chosen ceiling, the same
+# way `HOUSE_SHOT_SPEC`'s numbers are chosen rather than measured.
+DEFAULT_MAX_GAMES = 1000
+
+
 class GameService:
-    """Thread-safe mapping from game_id to GameSession. The lock here only
-    protects the mapping (create/lookup) — each GameSession's own lock
-    covers the read-simulate-record-update sequence for that game's
-    throws (lane, scorecard, and rack together).
+    """Thread-safe mapping from game_id to GameSession, bounded to at most
+    `max_games` retained sessions. The lock here only protects the mapping
+    (create/lookup/evict) — each GameSession's own lock covers the
+    read-simulate-record-update sequence for that game's throws (lane,
+    scorecard, and rack together).
+
+    ## The eviction policy
+
+    When inserting a new session would put the registry over `max_games`,
+    the single oldest retained session -- the one that has been in
+    `_games` the longest, by insertion order, never by how recently it
+    was read or thrown in -- is evicted first. This is deliberately FIFO,
+    not LRU: an LRU policy would need every read (`get_game`, a throw) to
+    reorder state, which the requirements this class exists to preserve
+    (`get_or_create`, `get_game`, throws, reset, scorecard/rack isolation
+    all behaving exactly as before for any ID that remains retained) don't
+    ask for and would make harder to reason about. There are no TTLs,
+    wall-clock timers, or background sweeps -- eviction is a synchronous
+    side effect of `create_game`/`get_or_create` creating a new session,
+    nothing else ever removes an entry.
+
+    Eviction always happens *before* the new session is inserted, so the
+    session a `create_game`/`get_or_create` call is about to return can
+    never be the one evicted by that same call, for any `max_games >= 1`.
+
+    An evicted game_id then behaves exactly like a game_id that never
+    existed: `get_game` raises `UnknownGameError`, which the API layer
+    already turns into the same 404 an unknown ID always produced. There
+    is no separate "evicted" state to track or expose.
     """
 
-    def __init__(self):
-        self._games: Dict[str, GameSession] = {}
-        self._lock = threading.Lock()
+    def __init__(self, max_games: int | None = DEFAULT_MAX_GAMES):
+        """`max_games=None` disables the cap entirely -- unbounded, the
+        registry's original behavior before this class had one at all.
+        That is an explicit, tested opt-out (see
+        `test_a_none_cap_disables_eviction_entirely`), not a silent
+        default; `default_game_service` below always passes a real
+        integer.
 
-    def create_game(self, oil_pattern: str = "house", game_id: Optional[str] = None) -> GameSession:
+        Any non-`None` `max_games` must be a positive integer. `0` or a
+        negative value raises `ValueError` immediately, here at
+        construction, rather than silently behaving as unbounded or as
+        "evict everything including whatever was just created" -- see
+        `test_a_non_positive_cap_is_rejected_at_construction`.
+        """
+        if max_games is not None and max_games < 1:
+            raise ValueError(f"max_games must be a positive integer or None, got {max_games!r}")
+        self._games: dict[str, GameSession] = {}
+        self._lock = threading.Lock()
+        self._max_games = max_games
+
+    def _evict_oldest_locked(self) -> None:
+        """Caller must already hold `self._lock`. Evicts retained sessions
+        oldest-first until inserting one more would not exceed
+        `self._max_games`. A `while` rather than a single `if`: `_games`
+        only ever grows by exactly one per `create_game`/`get_or_create`
+        call today, so one eviction always suffices in practice, but a
+        `while` doesn't depend on that staying true to keep its own
+        invariant (never leave the registry over cap)."""
+        if self._max_games is None:
+            return
+        while len(self._games) >= self._max_games:
+            oldest_id = next(iter(self._games))
+            del self._games[oldest_id]
+
+    def create_game(self, oil_pattern: str = "house", game_id: str | None = None) -> GameSession:
         build_condition = SUPPORTED_OIL_PATTERNS.get(oil_pattern)
         if build_condition is None:
             raise ValueError(f"Unsupported oil_pattern '{oil_pattern}'")
 
-        session = GameSession(game_id=game_id or uuid.uuid4().hex, initial_condition=build_condition())
+        session = GameSession(
+            game_id=game_id or uuid.uuid4().hex, initial_condition=build_condition()
+        )
         with self._lock:
+            self._evict_oldest_locked()
             self._games[session.game_id] = session
         return session
 
@@ -248,7 +333,11 @@ class GameService:
         """Idempotent create: returns the existing session for `game_id` if
         one exists, otherwise creates it. Used by the legacy, non-game-scoped
         throw route to get one well-known, lazily-created game rather than
-        owning a separate hidden lane of its own."""
+        owning a separate hidden lane of its own.
+
+        A lookup hit never evicts anything and never changes `game_id`'s
+        own position in the insertion order -- only creating a genuinely
+        new session can trigger eviction, the same as `create_game`."""
         with self._lock:
             session = self._games.get(game_id)
             if session is not None:
@@ -259,6 +348,7 @@ class GameService:
                 raise ValueError(f"Unsupported oil_pattern '{oil_pattern}'")
 
             session = GameSession(game_id=game_id, initial_condition=build_condition())
+            self._evict_oldest_locked()
             self._games[game_id] = session
             return session
 
@@ -274,4 +364,6 @@ class GameService:
 # independent lane, scorecard, and rack — this is the "hidden global lane"
 # problem's fix, not a repeat of it: nothing simulates against this object
 # directly, only against the one GameSession a request's game_id resolves to.
-default_game_service = GameService()
+# Bounded at `DEFAULT_MAX_GAMES` — see `GameService`'s docstring for the
+# eviction policy this applies to a long-running process.
+default_game_service = GameService(max_games=DEFAULT_MAX_GAMES)

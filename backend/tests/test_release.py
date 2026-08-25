@@ -1,5 +1,6 @@
 from dataclasses import fields
 
+from app.models.schemas import ThrowRequest
 from app.physics.throw import _NOISE_CLAMP_STD, _RELEASE_NOISE_STD, Throw, sample_release
 
 REQUESTED = Throw(
@@ -12,12 +13,32 @@ REQUESTED = Throw(
 )
 
 
+EXPECTED_NARROW_RELEASE_NOISE_STD = {
+    "speed_mph": 0.10,
+    "rev_rate": 5.0,
+    "axis_rotation": 0.75,
+    "axis_tilt": 0.75,
+    "launch_angle": 0.05,
+    "launch_position": 0.15,
+}
+
+
+def test_api_and_simulation_defaults_share_the_right_handed_starter_line():
+    assert Throw().launch_angle == -1.5
+    assert ThrowRequest(ball_id="reactive_pearl").launch_angle == Throw().launch_angle
+
+
 def test_seeded_throws_repeat_exactly():
     first, seed_a = sample_release(REQUESTED, seed=42)
     second, seed_b = sample_release(REQUESTED, seed=42)
 
     assert seed_a == seed_b == 42
     assert first == second
+
+
+def test_default_release_variance_is_the_documented_narrow_profile():
+    """Keep the repeatable default from drifting back to a wide line spread."""
+    assert _RELEASE_NOISE_STD == EXPECTED_NARROW_RELEASE_NOISE_STD
 
 
 def test_different_seeds_produce_bounded_variation():

@@ -1,10 +1,11 @@
 from fastapi.testclient import TestClient
 
+from app.api.routes.games import TRUNCATED_TRAJECTORY_DETAIL
 from app.games.service import default_game_service
 from app.main import app
 from app.physics.ball import BALL_CATALOG
 from app.physics.pinfall import PinfallResult
-from app.physics.simulate import simulate_throw
+from app.physics.simulate import SimulationResult, TerminalState, TrajectoryPoint, simulate_throw
 from app.physics.throw import Throw
 
 client = TestClient(app)
@@ -45,15 +46,78 @@ def test_unknown_game_id_returns_404_for_throws_and_reset():
     assert reset_response.status_code == 404
 
 
+def _truncated_simulate_throw(ball, throw, lane_condition, step_ft=None):
+    """A `simulate_throw`-shaped stand-in whose result never reaches the pin
+    deck — deterministic, no monkeypatched global stride, no need to hunt
+    for a real release that happens to fail."""
+    return SimulationResult(
+        path=[TrajectoryPoint(distance_ft=0.0, board=throw.launch_position)],
+        entry_board=throw.launch_position,
+        entry_angle_deg=0.0,
+        speed_at_pins_mph=10.0,
+        lane_condition_version=lane_condition.version,
+        terminal=TerminalState(
+            distance_ft=10.0,
+            board=throw.launch_position,
+            heading_deg=0.0,
+            speed_mph=10.0,
+            reached_pin_deck=False,
+        ),
+    )
+
+
+def test_truncated_trajectory_returns_503_and_leaves_game_state_unchanged(monkeypatch):
+    game = _create_game()
+    game_id = game["game_id"]
+    before = client.get(f"/api/v1/games/{game_id}").json()
+
+    # Patch the name the route actually calls, not the module it's defined
+    # in — `create_game_throw` resolves `simulate_throw` from
+    # `app.api.routes.games`'s own globals at call time.
+    monkeypatch.setattr("app.api.routes.games.simulate_throw", _truncated_simulate_throw)
+
+    response = client.post(f"/api/v1/games/{game_id}/throws", json=THROW_PAYLOAD)
+
+    assert response.status_code == 503
+    body = response.json()
+    # Exact match, not a substring check: proves nothing else — no stack
+    # trace, no raw distance/stride figure from the domain exception's own
+    # message — was appended to the stable text.
+    assert body["detail"] == TRUNCATED_TRAJECTORY_DETAIL
+
+    after = client.get(f"/api/v1/games/{game_id}").json()
+    assert after == before, "a rejected throw must not change lane version, rack, or scorecard"
+
+
+def test_truncated_trajectory_does_not_advance_the_scorecard_across_repeated_calls(monkeypatch):
+    """Two rejected throws in a row must both be no-ops, not merely the first."""
+    game = _create_game()
+    game_id = game["game_id"]
+    monkeypatch.setattr("app.api.routes.games.simulate_throw", _truncated_simulate_throw)
+
+    first = client.post(f"/api/v1/games/{game_id}/throws", json=THROW_PAYLOAD)
+    second = client.post(f"/api/v1/games/{game_id}/throws", json=THROW_PAYLOAD)
+    assert first.status_code == second.status_code == 503
+
+    status = client.get(f"/api/v1/games/{game_id}").json()
+    assert status["lane_condition_version"] == 1
+    assert status["game_state"]["frames"] == []
+    assert status["game_state"]["total_score"] is None
+
+
 def test_two_games_wear_independently_through_the_api():
     game_a = _create_game()
     game_b = _create_game()
 
-    first = client.post(f"/api/v1/games/{game_a['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 1}).json()
+    first = client.post(
+        f"/api/v1/games/{game_a['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 1}
+    ).json()
     assert first["game_id"] == game_a["game_id"]
     assert first["lane_condition_version"] == 1
 
-    second_a = client.post(f"/api/v1/games/{game_a['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 2}).json()
+    second_a = client.post(
+        f"/api/v1/games/{game_a['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 2}
+    ).json()
     assert second_a["lane_condition_version"] == 2
 
     # game_b never had a throw — still at its initial version.
@@ -70,13 +134,17 @@ def test_reset_returns_game_to_version_1():
     assert reset_body["game_id"] == game["game_id"]
     assert reset_body["lane_condition_version"] == 1
 
-    after_reset = client.post(f"/api/v1/games/{game['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 1}).json()
+    after_reset = client.post(
+        f"/api/v1/games/{game['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 1}
+    ).json()
     assert after_reset["lane_condition_version"] == 1
 
 
 def test_game_throw_response_uses_the_planar_collision_model():
     game = _create_game()
-    body = client.post(f"/api/v1/games/{game['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 7}).json()
+    body = client.post(
+        f"/api/v1/games/{game['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 7}
+    ).json()
 
     assert body["pinfall"]["model_id"] == "planar-collision-2d-v1"
     assert isinstance(body["pinfall"]["fallen_pin_ids"], list)
@@ -98,7 +166,9 @@ def test_create_game_state_is_a_fresh_blank_scorecard_and_full_rack():
 
 def test_throw_response_game_state_is_internally_consistent():
     game = _create_game()
-    body = client.post(f"/api/v1/games/{game['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 3}).json()
+    body = client.post(
+        f"/api/v1/games/{game['game_id']}/throws", json={**THROW_PAYLOAD, "seed": 3}
+    ).json()
     gs = body["game_state"]
 
     assert len(gs["frames"]) >= 1
@@ -137,7 +207,12 @@ def test_throw_after_game_completion_returns_409_and_reset_recovers():
         return simulate_throw(ball, throw, condition)
 
     def resolve_strike(sim_result, standing_ids):
-        return PinfallResult(pins_knocked=10, model_id="t", limitations="", fallen_pin_ids=tuple(sorted(standing_ids)))
+        return PinfallResult(
+            pins_knocked=10,
+            model_id="t",
+            limitations="",
+            fallen_pin_ids=tuple(sorted(standing_ids)),
+        )
 
     for _ in range(12):
         session.throw(simulate=strike_everything, resolve_pinfall=resolve_strike)
@@ -178,7 +253,9 @@ def test_get_after_a_throw_matches_the_throws_own_game_state():
     game = _create_game()
     game_id = game["game_id"]
 
-    throw_body = client.post(f"/api/v1/games/{game_id}/throws", json={**THROW_PAYLOAD, "seed": 5}).json()
+    throw_body = client.post(
+        f"/api/v1/games/{game_id}/throws", json={**THROW_PAYLOAD, "seed": 5}
+    ).json()
     status = client.get(f"/api/v1/games/{game_id}").json()
 
     # The throw response's lane_condition_version is (unchanged, documented

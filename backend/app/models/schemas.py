@@ -6,17 +6,62 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.physics.throw import RELEASE_BOUNDS
 
+# Pydantic resolves a field's annotation at class-creation time regardless
+# of `from __future__ import annotations`, so a nullable int field here
+# needs `typing.Optional`, not the newer `X | None` spelling -- that needs
+# Python 3.10+ to evaluate, and this project's runtime floor is 3.9 (see
+# the plain dataclasses elsewhere in this codebase for where the newer
+# spelling stays safe once deferred). The accepted Ruff config targets
+# py311 though, and keeps preferring `X | None` for literal `Optional[X]`/
+# `Union[X, None]` usage regardless of runtime version -- both spellings
+# are flagged (UP045/UP007) the same way.
+#
+# `NullableInt` used to dodge that by calling the exact same method the
+# `[]` subscript syntax calls (`Optional.__getitem__(int)`), just not
+# spelled as a subscript -- runtime-identical to `Optional[int]`, but
+# invisible to *mypy* too: mypy only recognizes a bare module-level
+# assignment as an implicit type alias when the right-hand side is
+# literally the `Optional[...]`/`Union[...]` subscript syntax it
+# pattern-matches for that purpose, the same shape Ruff's pyupgrade rule
+# pattern-matches to flag. Sidestepping Ruff's syntax check this way
+# meant sidestepping mypy's alias recognition too, which no `.__getitem__`
+# variant fixes -- there is no runtime-identical spelling that satisfies
+# both checkers.
+#
+# So this line keeps the literal `Optional[int]` subscript -- what mypy
+# needs to accept it as a real type alias -- and silences the one Ruff
+# rule that would otherwise rewrite it (pyupgrade's UP045, "use X | None"),
+# with the narrowest suppression available: a line-level noqa comment on
+# just that assignment, not a file- or config-level ignore. Used only in
+# this module, only for the five Pydantic fields that need it; every
+# other Optional-typed annotation in the codebase still spells it as
+# plain `Optional[X]` or (where deferred annotations
+# apply) `X | None`.
+NullableInt = Optional[int]  # noqa: UP045
+
 
 class ThrowRequest(BaseModel):
     ball_id: str = Field(..., description="Key into the ball catalog, e.g. 'reactive_pearl'")
-    seed: Optional[int] = Field(
-        None, description="Reuse a seed to reproduce a throw's release exactly. Omit to get a random one back."
+    seed: NullableInt = Field(
+        None,
+        description="Reuse a seed to reproduce a throw's release exactly. Omit to get a random one "
+        "back.",
     )
-    speed_mph: float = Field(17.0, ge=RELEASE_BOUNDS["speed_mph"][0], le=RELEASE_BOUNDS["speed_mph"][1])
-    rev_rate: float = Field(350.0, ge=RELEASE_BOUNDS["rev_rate"][0], le=RELEASE_BOUNDS["rev_rate"][1])
-    axis_rotation: float = Field(45.0, ge=RELEASE_BOUNDS["axis_rotation"][0], le=RELEASE_BOUNDS["axis_rotation"][1])
-    axis_tilt: float = Field(15.0, ge=RELEASE_BOUNDS["axis_tilt"][0], le=RELEASE_BOUNDS["axis_tilt"][1])
-    launch_angle: float = Field(0.5, ge=RELEASE_BOUNDS["launch_angle"][0], le=RELEASE_BOUNDS["launch_angle"][1])
+    speed_mph: float = Field(
+        17.0, ge=RELEASE_BOUNDS["speed_mph"][0], le=RELEASE_BOUNDS["speed_mph"][1]
+    )
+    rev_rate: float = Field(
+        350.0, ge=RELEASE_BOUNDS["rev_rate"][0], le=RELEASE_BOUNDS["rev_rate"][1]
+    )
+    axis_rotation: float = Field(
+        45.0, ge=RELEASE_BOUNDS["axis_rotation"][0], le=RELEASE_BOUNDS["axis_rotation"][1]
+    )
+    axis_tilt: float = Field(
+        15.0, ge=RELEASE_BOUNDS["axis_tilt"][0], le=RELEASE_BOUNDS["axis_tilt"][1]
+    )
+    launch_angle: float = Field(
+        -1.5, ge=RELEASE_BOUNDS["launch_angle"][0], le=RELEASE_BOUNDS["launch_angle"][1]
+    )
     launch_position: float = Field(
         28.0, ge=RELEASE_BOUNDS["launch_position"][0], le=RELEASE_BOUNDS["launch_position"][1]
     )
@@ -39,6 +84,102 @@ class TrajectoryPointResponse(BaseModel):
     board: float
 
 
+class ReplayBodyResponse(BaseModel):
+    """One body's position at one instant of a collision replay.
+
+    Coordinates are inches in the same frame `app/physics/pin_deck.py`
+    uses: `x_in` lateral from lane center, positive toward higher board
+    numbers (the bowler's left); `y_in` downlane from the headpin plane,
+    which is y=0, increasing toward the back of the deck.
+    """
+
+    body_id: int  # 0 = ball; otherwise the pin's own 1-10 id
+    x_in: float
+    y_in: float
+
+
+class ReplayFrameResponse(BaseModel):
+    """All participating bodies at one simulation timestamp.
+
+    `t_s` is seconds of *simulation* time since impact — solver steps times
+    the fixed timestep, not wall-clock and not tied to browser paint rate.
+    It increases strictly across a replay's frames.
+    """
+
+    t_s: float
+    bodies: list[ReplayBodyResponse] = Field(default_factory=list)
+
+
+class ThresholdCrossingResponse(BaseModel):
+    """When one pin first met the planar fall threshold.
+
+    `step_index` is a solver step, not a time. A client multiplies by the
+    replay's own `dt_s` if it wants seconds; publishing the integer keeps the
+    event exact and stops a consumer inventing a wall-clock moment the solver
+    never had.
+
+    This is *not* a topple, a rotation, or a fall duration. It says the
+    sliding circle had moved `FALL_DISPLACEMENT_THRESHOLD_IN` from its spot,
+    which is the same criterion that produces `PinfallInfo.fallen_pin_ids` —
+    the two come from one decision, so they can be checked against each
+    other.
+    """
+
+    pin_id: int  # always a real 1-10 pin, never the ball
+    step_index: int
+
+
+class CollisionReplayResponse(BaseModel):
+    """Bounded, deterministic playback of a planar collision run.
+
+    Present only when a run actually happened. See `PinfallInfo.replay`
+    for when it's absent, and `app/physics/replay.py` for the recording
+    cadence, frame bound, and coordinate/time conventions.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    # Names the replay *shape/semantics*, distinct from `PinfallInfo.model_id`
+    # which names the model that resolved the pins. Stamped so a future
+    # solver can't silently reinterpret data recorded by this one.
+    model_version: str
+    dt_s: float
+    sample_every_steps: int
+    steps_taken: int
+    frames: list[ReplayFrameResponse] = Field(default_factory=list)
+    # When each fallen pin first crossed the displacement threshold, ordered
+    # by step then pin id, and empty when nothing fell. Its pin ids are
+    # exactly `PinfallInfo.fallen_pin_ids` by construction; a client should
+    # verify that rather than trusting either list alone.
+    threshold_crossings: list[ThresholdCrossingResponse] = Field(default_factory=list)
+    # Which of the solver's two loop exits produced the final frame, so a
+    # client never has to guess whether playback ended because motion
+    # stopped or because the run was cut off.
+    #
+    # Spelled as the same two-value Literal as the domain's
+    # `physics.replay.TerminationReason` (a test pins the two sets equal),
+    # so Pydantic rejects any other string at the boundary rather than
+    # letting an unknown reason reach a consumer. Required, not defaulted:
+    # a replay whose termination is unknown is precisely what the v1 -> v2
+    # version bump exists to make un-representable.
+    termination_reason: Literal["settled", "step_cap"] = Field(
+        description=(
+            "How the planar collision loop ended. 'settled': every body's "
+            "speed fell below the model's velocity threshold — a numerical "
+            "criterion on sliding circles, NOT an observation that real "
+            "pins came to rest. 'step_cap': the solver hit its fixed "
+            "2-second step limit with bodies still moving — a safety stop "
+            "with no physical meaning. Neither value describes pin state; "
+            "use `fallen_pin_ids` for that."
+        ),
+    )
+
+
+# Same Pydantic/Python-3.9/mypy/Ruff constraint as `NullableInt` above,
+# for an optional nested model rather than an int -- see that comment.
+NullableReplay = Optional[CollisionReplayResponse]  # noqa: UP045
+
+
 class PinfallInfo(BaseModel):
     """Which pinfall model produced `pins_knocked`, and its honest
     limitations — added so swapping in a different pinfall model later is
@@ -56,6 +197,12 @@ class PinfallInfo(BaseModel):
     # default needs default_factory, not a bare `[]`, so every response
     # gets its own list rather than one shared across instances.
     fallen_pin_ids: list[int] = Field(default_factory=list)
+    # Null whenever no collision run was simulated: the heuristic model
+    # (which has no bodies at all), a gutter miss, a non-positive impact
+    # speed, or an empty validated rack. Never a fabricated single-frame
+    # scene for a collision that didn't happen. Additive — `pins_knocked`
+    # and `fallen_pin_ids` are unchanged whether this is present or not.
+    replay: NullableReplay = None
 
 
 class FrameStateResponse(BaseModel):
@@ -66,7 +213,7 @@ class FrameStateResponse(BaseModel):
     is_strike: bool
     is_spare: bool
     is_complete: bool
-    score: Optional[int]  # cumulative through this frame; None if a bonus it needs hasn't landed yet
+    score: NullableInt  # cumulative through this frame; None if unresolved
 
 
 class GameStateResponse(BaseModel):
@@ -77,12 +224,13 @@ class GameStateResponse(BaseModel):
 
     standing_pin_ids: list[int]
     frames: list[FrameStateResponse]
-    total_score: Optional[int]  # cumulative through the most recently resolved frame; None if nothing resolved yet
+    # cumulative through the most recently resolved frame; None if nothing resolved yet
+    total_score: NullableInt
     is_game_complete: bool
     # Both None exactly when is_game_complete is True — there is no next
     # roll. Otherwise the 1-based frame/ball the next legal roll belongs to.
-    next_frame_number: Optional[int]
-    next_ball_number: Optional[int]
+    next_frame_number: NullableInt
+    next_ball_number: NullableInt
 
 
 class ThrowResponse(BaseModel):
@@ -132,3 +280,95 @@ class GameStatusResponse(BaseModel):
     game_id: str
     lane_condition_version: int
     game_state: GameStateResponse
+
+
+class BallSpecResponse(BaseModel):
+    """The numeric inputs this simulator uses for one ball.
+
+    These are *model* parameters, not a manufacturer's spec sheet. They
+    describe what the trajectory code reads, and two of them are recorded
+    rather than used: `mass_lbs` cancels out of the Coulomb-friction
+    deceleration this milestone models, and `radius_in` is the same
+    regulation value for every catalog ball. See
+    `app.physics.ball`'s module docstring for both. `hook_potential` is a
+    derived scalar this project computes, not a published rating.
+    """
+
+    mass_lbs: float
+    radius_in: float
+    rg_in: float
+    differential: float
+    hook_potential: float
+
+
+class BallResponse(BaseModel):
+    """One selectable ball, as `GET /api/v1/balls` publishes it.
+
+    `coverstock` is the plain declared value (`plastic`, `urethane`,
+    `reactive`, `particle`), never an enum repr, so a client can compare
+    it as a string. `description` is display text the server owns, so a
+    client can render help for a ball whose id it has never seen.
+    """
+
+    id: str
+    name: str
+    coverstock: Literal["plastic", "urethane", "reactive", "particle"]
+    surface: str
+    description: str
+    spec: BallSpecResponse
+
+
+class BallCatalogResponse(BaseModel):
+    """`GET /api/v1/balls` — the server's whole selectable ball catalog,
+    in the order `app.physics.ball.BALL_CATALOG` declares.
+
+    A small starter catalog, and the authority on which `ball_id` values a
+    throw will accept. Clients read this instead of hardcoding ids.
+    """
+
+    balls: list[BallResponse]
+
+
+class OilPatternSpecResponse(BaseModel):
+    """The stated shape of one oil pattern, as this simulator models it.
+
+    Pattern inputs and modeling assumptions, not a certified USBC pattern.
+    `app.physics.lane`'s `HOUSE_SHOT_SPEC` records which of these numbers
+    were chosen to sit in a typical range rather than measured. Board
+    ranges are inclusive `[low, high]` pairs on the 1-39 board scale.
+    """
+
+    length_ft: float
+    taper_ft: float
+    center_boards: tuple[int, int]
+    total_boards: tuple[int, int]
+    pattern_ratio: float
+    total_volume_ml: float
+
+
+class OilPatternResponse(BaseModel):
+    """One selectable oil pattern, as `GET /api/v1/oil-patterns` publishes
+    it.
+
+    `id` is the value `POST /api/v1/games` accepts for `oil_pattern`.
+    `name` and `description` are display text the server owns, so a client
+    can render the pattern notice without knowing the legal id up front.
+    """
+
+    id: str
+    name: str
+    description: str
+    spec: OilPatternSpecResponse
+
+
+class OilPatternCatalogResponse(BaseModel):
+    """`GET /api/v1/oil-patterns` — every pattern a game can be created
+    with, in the order the supported-pattern registry declares.
+
+    The same registry `POST /api/v1/games` validates `oil_pattern`
+    against, so anything listed here is creatable and anything absent is
+    a 422 on create. Only the house shot is modeled today; named-pattern
+    selection stays deferred.
+    """
+
+    patterns: list[OilPatternResponse]
