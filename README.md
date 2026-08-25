@@ -223,9 +223,11 @@ The ball catalog and the oil-pattern notice are both fetched from the API
 (`GET /api/v1/balls`, `GET /api/v1/oil-patterns`) rather than hardcoded,
 so the frontend can never offer a value a throw or a game creation would
 reject; a failed catalog load shows a retry rather than falling back to a
-possibly-stale local copy. A stale saved game (most often the backend
-having restarted) is detected reactively — a reset or throw's 404 against
-it — and shows a "Start a new game" recovery action.
+possibly-stale local copy. A saved `game_id` is checked proactively on
+load and replaced if the server no longer has it; a game that disappears
+later, while the tab stays open (most often the backend restarting), is
+caught reactively on the next reset or throw and shows the same "Start a
+new game" recovery action.
 
 ### Run it locally
 
@@ -413,9 +415,10 @@ percentages, leave tracking, ball usage stats.
   writes to Postgres yet, and no migrations exist.
 - The frontend has no chart suite, accounts, or persistence. Its ball and
   oil-pattern catalogs are fixed at startup — no adding, editing, or
-  persisting either. It only detects a stale saved `game_id` reactively
-  (on the next throw/reset attempt), not via a proactive background
-  check.
+  persisting either. A saved `game_id` is proactively checked once, at
+  initial load; if the server loses that game later while the tab stays
+  open, that's caught only reactively, on the next throw/reset attempt,
+  not via a continuous background check.
 - The trajectory animation's timing is visual only (a fixed 900ms eased
   duration), not calibrated to the throw's own speed or travel time —
   `path` points are recorded at fixed downlane-*distance* steps, not
