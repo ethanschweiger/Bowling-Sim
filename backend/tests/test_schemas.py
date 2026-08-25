@@ -1,16 +1,15 @@
 """The nullable-int contract on the API's Pydantic models.
 
-`app/models/schemas.py` cannot spell these fields as plain `Optional[int]`
-without tripping Ruff's UP045 (target py311 prefers `X | None`), and it
-cannot spell them as `X | None` without breaking Pydantic on this
-project's Python 3.9 floor (Pydantic resolves annotations eagerly
-regardless of `from __future__ import annotations`). `NullableInt` is the
-schema module's own resolution — this file is the regression proving that
-resolution is actually equivalent to `Optional[int]` in every way a caller
-of the API can observe: `None` validates, serializes as JSON `null`, and
-the generated schema still advertises the field as nullable. Runs
-unmodified under whichever Python this suite is invoked with; nothing here
-is version-conditional.
+`app/models/schemas.py` cannot spell these fields as `X | None` without
+breaking Pydantic on this project's Python 3.9 floor (Pydantic resolves
+annotations eagerly regardless of `from __future__ import annotations`),
+so it spells them as literal `Optional[int]` with a line-level `noqa` on
+Ruff's UP045 (target py311 prefers `X | None`) -- `NullableInt` is that
+alias. This file is the regression proving `NullableInt` behaves exactly
+like `Optional[int]` in every way a caller of the API can observe: `None`
+validates, serializes as JSON `null`, and the generated schema still
+advertises the field as nullable. Runs unmodified under whichever Python
+this suite is invoked with; nothing here is version-conditional.
 """
 
 from app.models.schemas import FrameStateResponse, GameStateResponse, ThrowRequest

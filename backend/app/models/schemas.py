@@ -16,17 +16,28 @@ from app.physics.throw import RELEASE_BOUNDS
 # `Union[X, None]` usage regardless of runtime version -- both spellings
 # are flagged (UP045/UP007) the same way.
 #
-# `NullableInt` sidesteps that by calling the exact same method the `[]`
-# subscript syntax calls, just not spelled as a subscript: Ruff's pyupgrade
-# rules pattern-match the literal `Optional[...]`/`Union[...]` syntax
-# shapes, not "is this object equal to Optional[int]". The result is the
-# identical object `Optional[int]` would be (`NullableInt == Optional[int]`
-# is True; it even reprs as `typing.Optional[int]`) -- not an approximation,
-# a different route to the same value. Used only in this module, only for
-# the five Pydantic fields that need it; every other Optional-typed
-# annotation in the codebase still spells it as plain `Optional[X]` or
-# (where deferred annotations apply) `X | None`.
-NullableInt = Optional.__getitem__(int)
+# `NullableInt` used to dodge that by calling the exact same method the
+# `[]` subscript syntax calls (`Optional.__getitem__(int)`), just not
+# spelled as a subscript -- runtime-identical to `Optional[int]`, but
+# invisible to *mypy* too: mypy only recognizes a bare module-level
+# assignment as an implicit type alias when the right-hand side is
+# literally the `Optional[...]`/`Union[...]` subscript syntax it
+# pattern-matches for that purpose, the same shape Ruff's pyupgrade rule
+# pattern-matches to flag. Sidestepping Ruff's syntax check this way
+# meant sidestepping mypy's alias recognition too, which no `.__getitem__`
+# variant fixes -- there is no runtime-identical spelling that satisfies
+# both checkers.
+#
+# So this line keeps the literal `Optional[int]` subscript -- what mypy
+# needs to accept it as a real type alias -- and silences the one Ruff
+# rule that would otherwise rewrite it (pyupgrade's UP045, "use X | None"),
+# with the narrowest suppression available: a line-level noqa comment on
+# just that assignment, not a file- or config-level ignore. Used only in
+# this module, only for the five Pydantic fields that need it; every
+# other Optional-typed annotation in the codebase still spells it as
+# plain `Optional[X]` or (where deferred annotations
+# apply) `X | None`.
+NullableInt = Optional[int]  # noqa: UP045
 
 
 class ThrowRequest(BaseModel):
@@ -164,9 +175,9 @@ class CollisionReplayResponse(BaseModel):
     )
 
 
-# Same Pydantic/Python-3.9 constraint as `NullableInt` above, for an
-# optional nested model rather than an int.
-NullableReplay = Optional.__getitem__(CollisionReplayResponse)
+# Same Pydantic/Python-3.9/mypy/Ruff constraint as `NullableInt` above,
+# for an optional nested model rather than an int -- see that comment.
+NullableReplay = Optional[CollisionReplayResponse]  # noqa: UP045
 
 
 class PinfallInfo(BaseModel):
