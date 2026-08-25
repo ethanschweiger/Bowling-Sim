@@ -57,7 +57,7 @@ class ScorecardError(Exception):
 @dataclass(frozen=True)
 class Frame:
     number: int              # 1-10
-    rolls: tuple             # the pinfall values thrown in this frame (1-3 ints)
+    rolls: tuple[int, ...]    # the pinfall values thrown in this frame (1-3 ints)
     is_strike: bool
     is_spare: bool
     is_complete: bool        # this frame has thrown every roll it owns (not necessarily scored yet)
@@ -69,14 +69,14 @@ class _RawFrame:
     """Internal: a frame's layout in the flat roll sequence, before scoring."""
 
     number: int
-    rolls: tuple
+    rolls: tuple[int, ...]
     end_index: int  # index into the flat roll list right after this frame's own rolls
     is_strike: bool
     is_spare: bool
     is_complete: bool
 
 
-def _layout_tenth_frame(rolls: list, i: int) -> tuple:
+def _layout_tenth_frame(rolls: list[int], i: int) -> tuple[_RawFrame, int]:
     """Lays out frame 10 starting at index i. Returns (_RawFrame, next_index).
     Raises ScorecardError for any illegal tenth-frame sequence."""
     n = len(rolls)
@@ -120,7 +120,7 @@ def _layout_tenth_frame(rolls: list, i: int) -> tuple:
     return _RawFrame(10, (first, second, third), i + 3, False, True, True), i + 3
 
 
-def _layout(rolls: list) -> list:
+def _layout(rolls: list[int]) -> list[_RawFrame]:
     """Walks the flat roll list into up to 10 _RawFrames. Raises
     ScorecardError for any illegal roll — out of range, exceeding the pins
     available in that frame/ball, an illegal tenth-frame sequence, or a
@@ -167,7 +167,7 @@ def _layout(rolls: list) -> list:
     return frames
 
 
-def _own_points(raw: _RawFrame, rolls: list, is_last_frame: bool) -> int | None:
+def _own_points(raw: _RawFrame, rolls: list[int], is_last_frame: bool) -> int | None:
     """This frame's own point contribution (not cumulative), or None if a
     strike/spare bonus it needs hasn't been thrown yet. Frame 10 is
     self-contained — its bonus balls are already inside raw.rolls, so it
@@ -188,7 +188,7 @@ def _own_points(raw: _RawFrame, rolls: list, is_last_frame: bool) -> int | None:
     return base
 
 
-def _build_frames(rolls: list) -> tuple:
+def _build_frames(rolls: list[int]) -> tuple[Frame, ...]:
     raw_frames = _layout(rolls)  # raises ScorecardError; no partial frames list escapes on failure
 
     frames = []
@@ -218,8 +218,8 @@ class Scorecard:
     """One ten-pin game. Deterministic, no random input, no external state."""
 
     def __init__(self) -> None:
-        self._rolls: list = []
-        self._frames: tuple = ()
+        self._rolls: list[int] = []
+        self._frames: tuple[Frame, ...] = ()
 
     def add_roll(self, pins: int) -> None:
         """Records one ball's pinfall count (0-10). Raises ScorecardError,
@@ -238,7 +238,7 @@ class Scorecard:
         self._frames = candidate_frames
 
     @property
-    def frames(self) -> tuple:
+    def frames(self) -> tuple[Frame, ...]:
         """Every frame started so far (0-10 of them), each a `Frame`."""
         return self._frames
 
