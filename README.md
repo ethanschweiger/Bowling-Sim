@@ -414,7 +414,22 @@ percentages, leave tracking, ball usage stats.
   so a future persistent store can replace `InMemoryGameSessionRepository`
   without changing `GameService`'s API — but that in-memory
   implementation is still the only one, so a process/container restart
-  still loses every game exactly as before.
+  still loses every game exactly as before. `GameSession.to_record()` /
+  `from_record()` add a pure dump/rehydrate boundary for one game's
+  complete state — still just an in-process serialization/rehydration
+  shape a future repository could store, not a persistence mechanism
+  itself. `app/games/record_payload.py` converts that same state to and
+  from plain JSON-compatible primitives, for whatever a real storage
+  boundary would actually write — no database or file writes it yet.
+- `alembic/` and `app/db/schema.py` add a PostgreSQL migration scaffold
+  for a `game_sessions` table shaped to hold that same payload. It's
+  schema-only: nothing runs it against a real database, nothing in
+  `GameService` reads or writes through it, and `default_game_service`
+  still uses `InMemoryGameSessionRepository` exactly as before.
+  `app/db/row_store.py` adds row-value and SQL-statement helpers
+  (a `SELECT` and a PostgreSQL upsert) for that same table — still no
+  `Engine`, connection, or runtime repository anywhere; storage is still
+  in-memory only.
 - The deprecated `/api/v1/simulations/throws` route shares one game
   across every caller, for backward compatibility, not isolation; once
   that shared game finishes, calls return 409 until someone resets it via
