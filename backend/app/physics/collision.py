@@ -253,7 +253,9 @@ class _CollisionRun:
     replay: CollisionReplay | None
 
 
-def simulate_collision(impact: ImpactState, standing_ids: Iterable[int] | None = None):
+def simulate_collision(
+    impact: ImpactState, standing_ids: Iterable[int] | None = None
+) -> tuple[tuple[int, ...], int]:
     """Runs the fixed-timestep collision simulation for one impact.
 
     `standing_ids` restricts which pins exist in the simulation at all —
