@@ -105,4 +105,4 @@ STANDARD_DECK: tuple[Pin, ...] = _build_standard_deck()
 # The full set of valid pin IDs — the shared definition of "a fresh rack"
 # (app/physics/rack.py) and of every pin a collision model can be asked to
 # simulate (app/physics/collision.py).
-ALL_PIN_IDS: frozenset = frozenset(pin.id for pin in STANDARD_DECK)
+ALL_PIN_IDS: frozenset[int] = frozenset(pin.id for pin in STANDARD_DECK)

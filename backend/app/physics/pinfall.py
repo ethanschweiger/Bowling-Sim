@@ -37,7 +37,7 @@ class PinfallResult:
     # populate this, so it isn't guaranteed to satisfy
     # pins_knocked == len(fallen_pin_ids) across every implementation, only
     # ones that actually resolve individual pins.
-    fallen_pin_ids: tuple = ()
+    fallen_pin_ids: tuple[int, ...] = ()
     # Bounded frame-by-frame playback of a run that actually happened, for
     # a client to animate (see app/physics/replay.py). Additive and
     # optional: `None` means no replay is available, which is the honest

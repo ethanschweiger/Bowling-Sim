@@ -49,7 +49,7 @@ def validate_pin_ids(ids: Iterable[int]) -> frozenset[int]:
     except TypeError:
         raise RackError(f"pin IDs must come from an iterable, got {ids!r}") from None
 
-    seen: set = set()
+    seen: set[int] = set()
     for pin_id in candidates:
         if type(pin_id) is not int:
             raise RackError(f"pin IDs must be plain int, got {pin_id!r} ({type(pin_id).__name__})")
