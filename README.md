@@ -607,6 +607,41 @@ npm run lint
 `npm run build` runs `tsc -b` before the production build, so it doubles as
 the type check.
 
+## Continuous integration
+
+GitHub Actions runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on
+every push and pull request. It reports two checks:
+
+| Check | Runner | What it runs |
+|---|---|---|
+| `backend` | Ubuntu, Python 3.11 | Installs `requirements.txt` plus `requirements-dev.txt`, then runs `ruff check .` and `python -m pytest -q` in `backend/` |
+| `frontend` | Ubuntu, Node 20 | Runs `npm ci`, `npm run lint`, `npm run build`, and `npm run test -- --run` in `frontend/` |
+
+Use those two names, `backend` and `frontend`, if you turn on branch
+protection.
+
+### mypy runs locally, not in CI
+
+`backend/pyproject.toml` carries a strict mypy configuration pinned to the
+Python 3.9 runtime floor, which is what `backend/.venv` runs. CI pins 3.11 for
+tests and lint, so the two differ on purpose.
+
+```bash
+cd backend
+source .venv/bin/activate
+mypy app
+```
+
+That reports 52 findings across 11 files as of `139c035`. No CI job runs it,
+and nothing breaks when the count moves.
+
+### Branch protection
+
+Claude does not change repository settings, secrets, protections,
+environments, or external services. Once the `backend` and `frontend` checks
+look stable on GitHub, you can require them on `main` under Settings >
+Branches.
+
 ## Frontend
 
 `frontend/` (Vite + React + TypeScript, the official `react-ts` template)
