@@ -91,7 +91,9 @@ from dataclasses import dataclass
 from app.physics.impact import require_reached_pin_deck
 from app.physics.lane import LaneCondition
 from app.physics.lane_session import LaneSession
+from app.physics.pinfall import PinfallResult
 from app.physics.rack import Rack
+from app.physics.simulate import SimulationResult
 from app.scoring.scorecard import Frame, Scorecard
 
 # The only pattern selectable this milestone. A future named-pattern
@@ -173,9 +175,9 @@ class GameSession:
 
     def throw(
         self,
-        simulate: Callable[[LaneCondition], object],
-        resolve_pinfall: Callable[[object, frozenset], object],
-    ) -> tuple[object, object, GameStateSnapshot]:
+        simulate: Callable[[LaneCondition], SimulationResult],
+        resolve_pinfall: Callable[[SimulationResult, frozenset[int]], PinfallResult],
+    ) -> tuple[SimulationResult, PinfallResult, GameStateSnapshot]:
         """The one throw transaction. `simulate(lane_condition)` must
         return a `SimulationResult` (the same contract `LaneSession.run_throw`
         already uses); `resolve_pinfall(simulation_result, standing_ids)`

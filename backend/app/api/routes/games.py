@@ -40,6 +40,7 @@ from app.models.schemas import (
 from app.physics.ball import BALL_CATALOG
 from app.physics.collision import DEFAULT_PINFALL_MODEL
 from app.physics.impact import TruncatedTrajectoryError, impact_state_from_result
+from app.physics.pinfall import PinfallResult
 from app.physics.simulate import simulate_throw
 from app.physics.throw import Throw, sample_release
 
@@ -72,7 +73,7 @@ def truncated_trajectory_http_error() -> HTTPException:
     return HTTPException(status_code=503, detail=TRUNCATED_TRAJECTORY_DETAIL)
 
 
-def pinfall_to_response(pinfall: object) -> PinfallInfo:
+def pinfall_to_response(pinfall: PinfallResult) -> PinfallInfo:
     """The one place a domain `PinfallResult` turns into the API's
     `PinfallInfo` shape — used by both throw routes (game-scoped and the
     deprecated legacy one), so the serialized contract can't drift between
