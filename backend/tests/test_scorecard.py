@@ -211,3 +211,64 @@ def test_complete_legal_games_stay_within_0_and_300():
     assert mixed.is_game_complete
     assert 0 <= mixed.total_score <= 300
     assert mixed.total_score == 161  # hand-verified: cumulative bonus attribution frame by frame
+
+
+def test_rolls_reports_the_exact_flat_sequence_recorded_so_far():
+    card = Scorecard()
+    assert card.rolls == ()
+
+    sequence = [3, 4, 10, 2, 3]
+    _roll_all(card, sequence)
+    assert card.rolls == tuple(sequence)
+
+
+def test_rolls_is_a_plain_tuple_independent_of_the_scorecards_own_state():
+    card = Scorecard()
+    card.add_roll(7)
+    snapshot = card.rolls
+    card.add_roll(2)  # a later roll must not retroactively change an already-returned tuple
+    assert snapshot == (7,)
+    assert card.rolls == (7, 2)
+
+
+def test_from_rolls_with_no_rolls_produces_a_fresh_scorecard():
+    card = Scorecard.from_rolls(())
+    assert card.rolls == ()
+    assert card.frames == ()
+    assert not card.is_game_complete
+    assert card.total_score is None
+
+
+def test_from_rolls_reproduces_a_scorecard_built_by_add_roll_one_at_a_time():
+    sequence = [3, 4, 10, 2, 3, 10, 10, 4, 6, 10, 0, 0, 10, 10, 10, 10]
+
+    built = Scorecard()
+    _roll_all(built, sequence)
+
+    rehydrated = Scorecard.from_rolls(sequence)
+
+    assert rehydrated.rolls == built.rolls
+    assert rehydrated.frames == built.frames
+    assert rehydrated.is_game_complete == built.is_game_complete
+    assert rehydrated.total_score == built.total_score
+
+
+def test_from_rolls_reproduces_a_mid_game_scorecard_with_an_unresolved_strike():
+    sequence = [7, 2, 10]  # frame 3's strike is deliberately left unresolved
+
+    built = Scorecard()
+    _roll_all(built, sequence)
+
+    rehydrated = Scorecard.from_rolls(sequence)
+
+    assert rehydrated.frames == built.frames
+    assert rehydrated.frames[-1].score is None  # the strike still awaiting its bonus
+    assert rehydrated.total_score == built.total_score
+
+
+def test_from_rolls_rejects_an_illegal_sequence_the_same_way_add_roll_would():
+    with pytest.raises(ScorecardError):
+        Scorecard.from_rolls([5, 6])  # frame 1: 5 + 6 exceeds 10 pins
+
+    with pytest.raises(ScorecardError):
+        Scorecard.from_rolls([3, 11])  # 11 is out of range regardless of frame legality

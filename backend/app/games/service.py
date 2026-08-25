@@ -101,6 +101,41 @@ they produce — including the bounded-registry eviction policy below — are
 unchanged; see `GameSessionRepository`'s docstring for why `get_or_create`
 needed a third repository method (`get_or_put`), not just `get`+`put`, to
 preserve its original atomicity.
+
+## Durable session records
+
+`GameStateSnapshot` and `GameSessionRecord` solve different problems and
+neither substitutes for the other. `GameStateSnapshot` is a read model —
+what a caller sees *about* a game (lane version, standing pins, frames,
+score) — deliberately missing what it would take to rebuild play, most
+notably the original lane condition and the raw roll sequence a
+`Scorecard` was built from. `GameSessionRecord` is the complement: not
+something to show a caller, but everything `GameSession.from_record`
+needs to reconstruct a live, playable `GameSession` — including the
+*original* `LaneCondition` a `reset()` on the rebuilt session must return
+to, which `GameStateSnapshot` never carries at all.
+
+`to_record`/`from_record` are a pure in-process dump/rehydrate pair, not
+a serializer: `GameSessionRecord` holds live `LaneCondition` and
+`frozenset`/`tuple` values, not bytes or JSON, and nothing in this module
+imports a database driver, a file format, or a web framework. Turning a
+`GameSessionRecord` into bytes (for an actual persistent store) or back
+is a future repository implementation's job, entirely outside this
+module — the same boundary `GameSessionRepository` already draws around
+*where* a `GameSession` lives, this draws around *what it would take* to
+put one back together. `InMemoryGameSessionRepository` is still the only
+repository, still loses every session on process/container restart, and
+nothing here changes that; this only adds the piece a future durable
+repository would need in order to turn stored bytes back into a working
+`GameSession`.
+
+`from_record` rebuilds a session by replaying its stored `rolls` through
+`Scorecard.from_rolls` and its stored `standing_pin_ids` through `Rack`'s
+own constructor — the exact same validation `add_roll` and
+`validate_pin_ids` already apply to a live game, not a parallel, looser
+check invented for rehydration. An invalid stored record raises
+`ScorecardError` or `RackError`, the same exceptions a live game would
+have raised making the same illegal moves.
 """
 
 # Keeps `X | None` usable on this project's Python 3.9 floor — see
@@ -157,6 +192,27 @@ class GameStateSnapshot:
     is_game_complete: bool
     next_frame_number: int | None
     next_ball_number: int | None
+
+
+@dataclass(frozen=True)
+class GameSessionRecord:
+    """Everything `GameSession.from_record` needs to rebuild a live,
+    playable `GameSession` later. See "Durable session records" in this
+    module's own docstring for how this differs from `GameStateSnapshot`
+    and why both `initial_condition` and `current_condition` are stored,
+    not just one.
+    """
+
+    game_id: str
+    # The condition this game started with — what a restored session's own
+    # reset() must return to, exactly like a freshly created game's would.
+    initial_condition: LaneCondition
+    # The condition this game is on right now, worn in by however many
+    # throws it has taken since initial_condition.
+    current_condition: LaneCondition
+    # The flat pinfall-per-roll sequence Scorecard.from_rolls replays.
+    rolls: tuple[int, ...]
+    standing_pin_ids: frozenset[int]
 
 
 class GameSession:
@@ -263,6 +319,47 @@ class GameSession:
             self._rack = Rack.full()
             snapshot = self._build_snapshot()
             return self._initial_condition, snapshot
+
+    def to_record(self) -> GameSessionRecord:
+        """A durable `GameSessionRecord` capturing everything needed to
+        rebuild this session later, via `from_record`. Captured under this
+        session's own lock — the same one `throw`/`reset` hold — so
+        `current_condition`, `rolls`, and `standing_pin_ids` all describe
+        the same instant, never a torn read where one reflects a throw
+        still in flight and another doesn't.
+        """
+        with self._lock:
+            return GameSessionRecord(
+                game_id=self.game_id,
+                initial_condition=self._initial_condition,
+                current_condition=self.lane.condition,
+                rolls=self._scorecard.rolls,
+                standing_pin_ids=self._rack.standing_ids,
+            )
+
+    @classmethod
+    def from_record(cls, record: GameSessionRecord) -> GameSession:
+        """Rebuilds a live `GameSession` from a `GameSessionRecord` — the
+        inverse of `to_record`. The result is not a fresh game: its lane
+        is worn in to `record.current_condition`, its scorecard resumes
+        from `record.rolls`, and its rack reflects `record.standing_pin_ids`
+        — the next `throw()` continues this game, not a new one. `reset()`
+        on the result still returns to `record.initial_condition`, exactly
+        like a freshly created game's own reset would.
+
+        Raises `ScorecardError` for an illegal stored roll sequence (via
+        `Scorecard.from_rolls`) or `RackError` for invalid stored standing
+        pin IDs (via `Rack`'s own constructor) — the same exceptions a
+        live game would have raised making the same illegal moves, before
+        this method returns anything.
+        """
+        session = cls(game_id=record.game_id, initial_condition=record.initial_condition)
+        scorecard = Scorecard.from_rolls(record.rolls)
+        rack = Rack(standing_ids=record.standing_pin_ids)
+        session.lane.reset_to(record.current_condition)
+        session._scorecard = scorecard
+        session._rack = rack
+        return session
 
 
 # The production default for `InMemoryGameSessionRepository.max_games` /

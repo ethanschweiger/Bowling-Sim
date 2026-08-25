@@ -414,7 +414,11 @@ percentages, leave tracking, ball usage stats.
   so a future persistent store can replace `InMemoryGameSessionRepository`
   without changing `GameService`'s API — but that in-memory
   implementation is still the only one, so a process/container restart
-  still loses every game exactly as before.
+  still loses every game exactly as before. `GameSession.to_record()` /
+  `from_record()` add a pure dump/rehydrate boundary for one game's
+  complete state — still just an in-process serialization/rehydration
+  shape a future repository could store, not a persistence mechanism
+  itself.
 - The deprecated `/api/v1/simulations/throws` route shares one game
   across every caller, for backward compatibility, not isolation; once
   that shared game finishes, calls return 409 until someone resets it via

@@ -37,12 +37,26 @@ strike or spare) reports `Frame.score` as `None`, never as a number
 computed by treating a missing bonus as zero. Once any frame's score is
 unresolved, every later frame's cumulative score is `None` too — a
 running total can't skip past a gap.
+
+## Rehydration
+
+`rolls` and `from_rolls` are the one supported way to get a scorecard's
+state out and back in — for a future durable session record, not for
+general external mutation. `rolls` returns a plain, read-only tuple (never
+the live internal list), and `from_rolls` rebuilds a `Scorecard` by
+replaying that sequence through `add_roll` one roll at a time, so a
+rehydrated scorecard is validated through exactly the same rules — and
+raises the same `ScorecardError` for the same illegal sequences — a live
+game would have hit roll by roll. There is no way to set `_frames` or
+`_rolls` directly; a caller can only ever reach a scorecard state
+`add_roll` itself could have produced.
 """
 
 # Keeps `X | None` usable on this project's Python 3.9 floor — see
 # app/physics/throw.py's module docstring for the full explanation.
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 FRAME_COUNT = 10
@@ -236,6 +250,28 @@ class Scorecard:
 
         self._rolls = candidate_rolls
         self._frames = candidate_frames
+
+    @classmethod
+    def from_rolls(cls, rolls: Iterable[int]) -> Scorecard:
+        """Rebuilds a `Scorecard` by replaying a stored roll sequence
+        through `add_roll`, one roll at a time, in order — see
+        "Rehydration" in this module's own docstring. Raises
+        `ScorecardError` on the first illegal roll in the sequence, same
+        as a live game would have; a scorecard built this way is
+        indistinguishable from one built by calling `add_roll` that many
+        times directly.
+        """
+        scorecard = cls()
+        for pins in rolls:
+            scorecard.add_roll(pins)
+        return scorecard
+
+    @property
+    def rolls(self) -> tuple[int, ...]:
+        """The flat roll sequence recorded so far, as a read-only tuple —
+        `from_rolls`'s exact inverse input. Never the live internal list,
+        so mutating what this returns can't affect this scorecard."""
+        return tuple(self._rolls)
 
     @property
     def frames(self) -> tuple[Frame, ...]:
