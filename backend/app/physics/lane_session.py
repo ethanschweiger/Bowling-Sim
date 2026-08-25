@@ -30,6 +30,7 @@ import threading
 from collections.abc import Callable
 
 from app.physics.lane import LaneCondition, apply_wear
+from app.physics.simulate import SimulationResult
 
 
 class LaneSession:
@@ -42,11 +43,11 @@ class LaneSession:
         with self._lock:
             return self._condition
 
-    def run_throw(self, simulate: Callable[[LaneCondition], object]):
+    def run_throw(self, simulate: Callable[[LaneCondition], SimulationResult]) -> SimulationResult:
         """Atomically read the current condition, simulate against it, and
-        record the resulting wear. `simulate(condition)` must return an
-        object with a `.path` of TrajectoryPoints (a SimulationResult).
-        Held under the lock end to end, so no other call can read the same
+        record the resulting wear. `simulate(condition)` must return a
+        `SimulationResult` (its `.path` is what wears the lane in). Held
+        under the lock end to end, so no other call can read the same
         condition before this one's wear is recorded.
         """
         with self._lock:

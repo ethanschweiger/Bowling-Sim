@@ -171,8 +171,8 @@ settings, secrets, protections, or external services itself.
 `backend/pyproject.toml` also carries a strict mypy configuration, run
 locally only (`cd backend && mypy app`) — not a CI gate. It's pinned to
 the Python 3.9 runtime floor `backend/.venv` runs, while CI pins 3.11 for
-tests and lint; the two differ on purpose. It currently reports 10
-findings across 4 files (29 source files checked); nothing breaks when
+tests and lint; the two differ on purpose. It currently reports 7
+findings across 2 files (29 source files checked); nothing breaks when
 that count moves.
 
 ## Docker

@@ -14,8 +14,22 @@ definition of a pattern's shape; `LaneCondition` is what that shape looks
 like right now, after however many throws have crossed it.
 """
 
+# Deferred annotation evaluation: `apply_wear`'s `path` parameter names the
+# real `TrajectoryPoint` type below, but `simulate.py` (where it's defined)
+# already imports from *this* module (`LaneCondition`), so a normal
+# top-level import back here would be circular. With this import,
+# annotations are stored as plain strings and never evaluated at
+# function-definition time, so the `TYPE_CHECKING`-only import further
+# down is enough for the type checker without ever running at import time.
+from __future__ import annotations
+
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.physics.simulate import TrajectoryPoint
 
 BOARD_COUNT = 39
 LANE_LENGTH_FT = 60.0
@@ -158,13 +172,13 @@ class LaneCondition:
         return BOARD_COUNT
 
     @staticmethod
-    def house_shot(temperature_f: float = REFERENCE_TEMPERATURE_F) -> "LaneCondition":
+    def house_shot(temperature_f: float = REFERENCE_TEMPERATURE_F) -> LaneCondition:
         return LaneCondition._build(HOUSE_SHOT_SPEC, temperature_f=temperature_f)
 
     @staticmethod
     def _build(
         spec: OilPatternSpec, temperature_f: float = REFERENCE_TEMPERATURE_F
-    ) -> "LaneCondition":
+    ) -> LaneCondition:
         shape: list[list[float]] = []
         for board in range(1, BOARD_COUNT + 1):
             lateral = _lateral_factor(board, spec)
@@ -257,7 +271,7 @@ class LaneCondition:
         return _clamp(adjusted, OILED_FRICTION, DRY_FRICTION)
 
 
-def apply_wear(condition: LaneCondition, path) -> LaneCondition:
+def apply_wear(condition: LaneCondition, path: Iterable[TrajectoryPoint]) -> LaneCondition:
     """Pure function: a completed throw's path picks up oil along the boards
     it touched and carries a small amount of it further down those same
     boards. Returns a new, incremented LaneCondition — never mutates the one
