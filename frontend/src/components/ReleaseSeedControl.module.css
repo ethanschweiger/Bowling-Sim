@@ -1,7 +1,7 @@
 .field {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 
 .label {
@@ -9,10 +9,10 @@
 }
 
 .input {
-  width: min(100%, 16rem);
+  width: min(100%, 13rem);
   box-sizing: border-box;
   font: inherit;
-  padding: 0.5rem 0.625rem;
+  padding: 0.425rem 0.55rem;
   border: 1px solid var(--color-border);
   border-radius: 0.5rem;
   background: var(--color-surface-inset);
@@ -28,7 +28,8 @@
 .help {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.85rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .reuseButton {
@@ -50,4 +51,18 @@
 .reuseButton:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+@media (min-width: 860px) {
+  .help {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 }

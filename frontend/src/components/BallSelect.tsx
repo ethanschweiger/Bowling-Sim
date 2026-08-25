@@ -32,7 +32,7 @@ export function BallSelect({ options, value, onChange, pattern, disabled = false
   }
 
   return (
-    <div>
+    <div className={styles.catalogSummary}>
       <div className={styles.field}>
         <label className={styles.label} htmlFor="ball-select">
           Ball
