@@ -238,16 +238,81 @@ class GameSession:
             return self._initial_condition, snapshot
 
 
+# The production default for `GameService.max_games`. Comfortably above
+# anything the backend's own test suite creates against
+# `default_game_service` in one run (38, measured directly by
+# instrumenting a full `pytest` pass), while still bounding a long-running
+# process instead of letting it grow without limit. Not derived from any
+# measured request-volume or memory target -- a chosen ceiling, the same
+# way `HOUSE_SHOT_SPEC`'s numbers are chosen rather than measured.
+DEFAULT_MAX_GAMES = 1000
+
+
 class GameService:
-    """Thread-safe mapping from game_id to GameSession. The lock here only
-    protects the mapping (create/lookup) — each GameSession's own lock
-    covers the read-simulate-record-update sequence for that game's
-    throws (lane, scorecard, and rack together).
+    """Thread-safe mapping from game_id to GameSession, bounded to at most
+    `max_games` retained sessions. The lock here only protects the mapping
+    (create/lookup/evict) — each GameSession's own lock covers the
+    read-simulate-record-update sequence for that game's throws (lane,
+    scorecard, and rack together).
+
+    ## The eviction policy
+
+    When inserting a new session would put the registry over `max_games`,
+    the single oldest retained session -- the one that has been in
+    `_games` the longest, by insertion order, never by how recently it
+    was read or thrown in -- is evicted first. This is deliberately FIFO,
+    not LRU: an LRU policy would need every read (`get_game`, a throw) to
+    reorder state, which the requirements this class exists to preserve
+    (`get_or_create`, `get_game`, throws, reset, scorecard/rack isolation
+    all behaving exactly as before for any ID that remains retained) don't
+    ask for and would make harder to reason about. There are no TTLs,
+    wall-clock timers, or background sweeps -- eviction is a synchronous
+    side effect of `create_game`/`get_or_create` creating a new session,
+    nothing else ever removes an entry.
+
+    Eviction always happens *before* the new session is inserted, so the
+    session a `create_game`/`get_or_create` call is about to return can
+    never be the one evicted by that same call, for any `max_games >= 1`.
+
+    An evicted game_id then behaves exactly like a game_id that never
+    existed: `get_game` raises `UnknownGameError`, which the API layer
+    already turns into the same 404 an unknown ID always produced. There
+    is no separate "evicted" state to track or expose.
     """
 
-    def __init__(self):
+    def __init__(self, max_games: int | None = DEFAULT_MAX_GAMES):
+        """`max_games=None` disables the cap entirely -- unbounded, the
+        registry's original behavior before this class had one at all.
+        That is an explicit, tested opt-out (see
+        `test_a_none_cap_disables_eviction_entirely`), not a silent
+        default; `default_game_service` below always passes a real
+        integer.
+
+        Any non-`None` `max_games` must be a positive integer. `0` or a
+        negative value raises `ValueError` immediately, here at
+        construction, rather than silently behaving as unbounded or as
+        "evict everything including whatever was just created" -- see
+        `test_a_non_positive_cap_is_rejected_at_construction`.
+        """
+        if max_games is not None and max_games < 1:
+            raise ValueError(f"max_games must be a positive integer or None, got {max_games!r}")
         self._games: dict[str, GameSession] = {}
         self._lock = threading.Lock()
+        self._max_games = max_games
+
+    def _evict_oldest_locked(self) -> None:
+        """Caller must already hold `self._lock`. Evicts retained sessions
+        oldest-first until inserting one more would not exceed
+        `self._max_games`. A `while` rather than a single `if`: `_games`
+        only ever grows by exactly one per `create_game`/`get_or_create`
+        call today, so one eviction always suffices in practice, but a
+        `while` doesn't depend on that staying true to keep its own
+        invariant (never leave the registry over cap)."""
+        if self._max_games is None:
+            return
+        while len(self._games) >= self._max_games:
+            oldest_id = next(iter(self._games))
+            del self._games[oldest_id]
 
     def create_game(self, oil_pattern: str = "house", game_id: str | None = None) -> GameSession:
         build_condition = SUPPORTED_OIL_PATTERNS.get(oil_pattern)
@@ -258,6 +323,7 @@ class GameService:
             game_id=game_id or uuid.uuid4().hex, initial_condition=build_condition()
         )
         with self._lock:
+            self._evict_oldest_locked()
             self._games[session.game_id] = session
         return session
 
@@ -265,7 +331,11 @@ class GameService:
         """Idempotent create: returns the existing session for `game_id` if
         one exists, otherwise creates it. Used by the legacy, non-game-scoped
         throw route to get one well-known, lazily-created game rather than
-        owning a separate hidden lane of its own."""
+        owning a separate hidden lane of its own.
+
+        A lookup hit never evicts anything and never changes `game_id`'s
+        own position in the insertion order -- only creating a genuinely
+        new session can trigger eviction, the same as `create_game`."""
         with self._lock:
             session = self._games.get(game_id)
             if session is not None:
@@ -276,6 +346,7 @@ class GameService:
                 raise ValueError(f"Unsupported oil_pattern '{oil_pattern}'")
 
             session = GameSession(game_id=game_id, initial_condition=build_condition())
+            self._evict_oldest_locked()
             self._games[game_id] = session
             return session
 
@@ -291,4 +362,6 @@ class GameService:
 # independent lane, scorecard, and rack — this is the "hidden global lane"
 # problem's fix, not a repeat of it: nothing simulates against this object
 # directly, only against the one GameSession a request's game_id resolves to.
-default_game_service = GameService()
+# Bounded at `DEFAULT_MAX_GAMES` — see `GameService`'s docstring for the
+# eviction policy this applies to a long-running process.
+default_game_service = GameService(max_games=DEFAULT_MAX_GAMES)

@@ -949,8 +949,16 @@ percentages, leave tracking, ball usage stats.
 - Games live in memory only — restarting the process loses every game.
   There's no accounts/ownership layer yet: any caller who has a `game_id`
   can throw in or reset that game.
-- `GameService` never expires old games, so a long-running process
-  accumulates one `GameSession` per game created, indefinitely.
+- `GameService` bounds itself to `DEFAULT_MAX_GAMES` (1000) retained
+  games. Creating one more once the registry is full evicts the single
+  oldest game, by creation order — never by last read or last throw.
+  There is no TTL and no background sweep; eviction happens only as a
+  side effect of a new game being created. An evicted `game_id` behaves
+  exactly like one that never existed: a 404 on `GET`, throw, or reset,
+  which the frontend already treats as a stale saved game and recovers
+  from. Games are still in-memory only — the cap bounds a long-running
+  process's registry, it does not add persistence, so a process restart
+  still loses every game regardless of the cap.
 - The deprecated `/api/v1/simulations/throws` route shares one game across
   every caller — it's for backward compatibility, not isolation. It now
   goes through the same `GameSession.throw` transaction the game-scoped
