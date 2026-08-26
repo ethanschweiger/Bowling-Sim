@@ -210,10 +210,10 @@ either way.
 ## Frontend
 
 `frontend/` (Vite + React + TypeScript) is a first connected shell, not
-the polished v1 experience the roadmap describes: it plays one
-fixed-duration replay animation of a completed throw's own
-server-recorded path, not a real-time simulation of its own, and has no
-charts, accounts, or persistence. It talks to the real API and nothing
+the polished v1 experience the roadmap describes: it plays a completed
+throw's own server-recorded path with server-timed visual playback, not
+a literal real-time or client-side physics simulation of its own, and
+has no charts, accounts, or persistence. It talks to the real API and nothing
 else — on load it creates a game (or resumes the one this browser created
 last time, if the server still has it) and renders exactly the
 `game_state`/trajectory a response contains. No score, rack, or completion
@@ -350,8 +350,8 @@ in `/docs`; new integrations should create their own game instead.
 
 **v1** — draw the lane, pick an oil pattern and ball, enter throw parameters,
 animate the throw, show pin impact, score the frame. The frontend shell
-now covers all of this, as a fixed-duration replay of each throw's own
-server-recorded path rather than a from-scratch or true-to-real-time
+now covers all of this, as a server-timed replay of each throw's own
+server-recorded path rather than a from-scratch or literal real-time
 simulation.
 
 **v2** — more balls and surfaces, adjustable drilling layouts, an oil-pattern
