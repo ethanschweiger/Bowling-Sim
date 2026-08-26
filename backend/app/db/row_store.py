@@ -135,6 +135,32 @@ def select_game_session_stmt(game_id: str) -> sa.Select[Any]:
     return sa.select(game_sessions).where(game_sessions.c.game_id == game_id)
 
 
+def insert_if_absent_game_session_stmt(record: GameSessionRecord) -> PgInsert:
+    """A PostgreSQL `INSERT ... ON CONFLICT (game_id) DO NOTHING` for
+    `record` -- a statement to compile or execute, not a completed
+    write. Inserts a new row only if `record.game_id` isn't already
+    stored; on an existing `game_id` this is a no-op that leaves the
+    stored row (payload, payload_version, created_at, updated_at)
+    completely untouched -- contrast `upsert_game_session_stmt`, which
+    overwrites an existing row's payload on conflict instead.
+
+    Exists for the atomic create-if-missing path `GameService.get_or_create`
+    will need against a future persistent repository: a plain
+    `SELECT` then `INSERT` (or an unconditional `upsert_game_session_stmt`)
+    would either race two concurrent callers creating the same `game_id`,
+    or let a later caller silently clobber an earlier one's row --
+    `ON CONFLICT ... DO NOTHING` makes "insert only if this row doesn't
+    exist yet" a single atomic statement instead.
+
+    Uses the exact same `record_to_row_values(record)` payload and
+    `PAYLOAD_VERSION` `upsert_game_session_stmt` does -- this is the same
+    row shape through a different conflict policy, not a second,
+    divergent one.
+    """
+    stmt = pg_insert(game_sessions).values(**record_to_row_values(record))
+    return stmt.on_conflict_do_nothing(index_elements=[game_sessions.c.game_id])
+
+
 def upsert_game_session_stmt(record: GameSessionRecord) -> PgInsert:
     """A PostgreSQL `INSERT ... ON CONFLICT (game_id) DO UPDATE` for
     `record` -- a statement to compile or execute, not a completed

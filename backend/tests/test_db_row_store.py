@@ -12,6 +12,7 @@ from sqlalchemy.dialects import postgresql
 from app.db.row_store import (
     PAYLOAD_VERSION,
     GameSessionRowError,
+    insert_if_absent_game_session_stmt,
     record_from_row,
     record_to_row_values,
     select_game_session_stmt,
@@ -236,6 +237,62 @@ def test_upsert_game_session_stmt_does_not_open_a_connection():
     _session, record = _worn_record()
     stmt = upsert_game_session_stmt(record)
     assert isinstance(stmt, sa.sql.dml.Insert)
+
+
+def test_insert_if_absent_game_session_stmt_compiles_with_postgresql_dialect():
+    _session, record = _worn_record()
+    stmt = insert_if_absent_game_session_stmt(record)
+    compiled = stmt.compile(dialect=postgresql.dialect())
+
+    assert record.game_id in compiled.params.values()
+
+
+def test_insert_if_absent_game_session_stmt_is_an_on_conflict_do_nothing_for_game_id():
+    _session, record = _worn_record()
+    stmt = insert_if_absent_game_session_stmt(record)
+    sql_text = str(stmt.compile(dialect=postgresql.dialect()))
+
+    assert "INSERT INTO game_sessions" in sql_text
+    assert "ON CONFLICT (game_id) DO NOTHING" in sql_text
+    # Not the upsert's conflict policy -- the two must stay genuinely
+    # different statements, not the same one under two names.
+    assert "DO UPDATE" not in sql_text
+
+
+def test_insert_if_absent_game_session_stmt_uses_record_to_row_values():
+    _session, record = _worn_record()
+    stmt = insert_if_absent_game_session_stmt(record)
+    compiled = stmt.compile(dialect=postgresql.dialect())
+
+    expected = record_to_row_values(record)
+    assert compiled.params["game_id"] == expected["game_id"]
+    assert compiled.params["payload"] == expected["payload"]
+    assert compiled.params["payload_version"] == expected["payload_version"] == PAYLOAD_VERSION
+
+
+def test_insert_if_absent_game_session_stmt_does_not_open_a_connection():
+    """Same sanity check as the upsert helper's own -- constructing and
+    compiling this statement never needs a database."""
+    _session, record = _worn_record()
+    stmt = insert_if_absent_game_session_stmt(record)
+    assert isinstance(stmt, sa.sql.dml.Insert)
+
+
+def test_insert_if_absent_and_upsert_remain_two_distinct_conflict_policies():
+    """The two helpers must not collapse into one ambiguous operation --
+    same row values, genuinely different SQL for what happens on a
+    conflicting game_id."""
+    _session, record = _worn_record()
+
+    insert_if_absent_sql = str(
+        insert_if_absent_game_session_stmt(record).compile(dialect=postgresql.dialect())
+    )
+    upsert_sql = str(upsert_game_session_stmt(record).compile(dialect=postgresql.dialect()))
+
+    assert "DO NOTHING" in insert_if_absent_sql
+    assert "DO NOTHING" not in upsert_sql
+    assert "DO UPDATE SET" in upsert_sql
+    assert "DO UPDATE SET" not in insert_if_absent_sql
 
 
 # --- scope boundary: runtime storage is unaffected ---------------------
