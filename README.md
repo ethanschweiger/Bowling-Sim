@@ -32,7 +32,7 @@ React + TypeScript frontend  <- frontend/src — Vite dev server proxies /api to
       |
 Physics engine  <- backend/app/physics — pure Python, no FastAPI or DB imports
       |
-PostgreSQL (later) — a database URL is already in config; nothing connects yet
+PostgreSQL (opt-in) — GAME_STORAGE_MODE=sql wires it up; default is in-memory only
 ```
 
 The physics module knows nothing about HTTP. `simulate_throw(ball, throw, lane)`
@@ -422,15 +422,14 @@ percentages, leave tracking, ball usage stats.
   from plain JSON-compatible primitives, for whatever a real storage
   boundary would actually write — no database or file writes it yet.
 - `alembic/` and `app/db/schema.py` add a PostgreSQL migration scaffold
-  for a `game_sessions` table shaped to hold that same payload. It's
-  schema-only: nothing runs it against a real database, nothing in
-  `GameService` reads or writes through it, and `default_game_service`
-  still uses `InMemoryGameSessionRepository` exactly as before.
-  `app/db/row_store.py` adds row-value and SQL-statement helpers
-  (a `SELECT`, a PostgreSQL upsert, and an insert-if-absent
-  `ON CONFLICT DO NOTHING` statement) for that same table — still no
-  `Engine`, connection, or runtime repository anywhere; storage is still
-  in-memory only.
+  for a `game_sessions` table shaped to hold that same payload — a
+  scaffold to apply by hand, not something app startup runs
+  automatically. `app/db/row_store.py` adds the row-value and
+  SQL-statement helpers (a `SELECT`, a PostgreSQL upsert, and an
+  insert-if-absent `ON CONFLICT DO NOTHING` statement) built from that
+  table. Neither module opens a connection by itself — see the
+  `database_url`/`GAME_STORAGE_MODE` bullet below for what actually can,
+  and when.
 - The deprecated `/api/v1/simulations/throws` route shares one game
   across every caller, for backward compatibility, not isolation; once
   that shared game finishes, calls return 409 until someone resets it via
