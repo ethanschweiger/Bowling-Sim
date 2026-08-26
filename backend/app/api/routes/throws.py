@@ -58,8 +58,13 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
     )
     actual_throw, seed = sample_release(requested_throw, request.seed)
 
+    # Same service-level write-back path the game-scoped throw route uses
+    # (GameService.throw_in_game) -- get_or_create above only ensures the
+    # shared game exists; this is still the one place its mutation gets
+    # written back through the repository.
     try:
-        result, pinfall, snapshot = session.throw(
+        result, pinfall, snapshot = default_game_service.throw_in_game(
+            session,
             simulate=lambda condition: simulate_throw(ball, actual_throw, condition),
             resolve_pinfall=lambda sim_result, standing_ids: DEFAULT_PINFALL_MODEL.resolve(
                 impact_state_from_result(sim_result, ball), standing_ids=standing_ids

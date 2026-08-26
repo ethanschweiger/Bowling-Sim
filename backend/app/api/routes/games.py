@@ -206,8 +206,12 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
     # rack, and hands back this throw's own durable snapshot — all under
     # this game's own lock. Never any other game's state, never a shared
     # process-global one, and never a snapshot a later throw could change.
+    # Routed through GameService.throw_in_game so the mutated session is
+    # written back through the repository afterward -- see that method's
+    # own docstring.
     try:
-        result, pinfall, snapshot = session.throw(
+        result, pinfall, snapshot = default_game_service.throw_in_game(
+            session,
             simulate=lambda condition: simulate_throw(ball, actual_throw, condition),
             resolve_pinfall=lambda sim_result, standing_ids: DEFAULT_PINFALL_MODEL.resolve(
                 impact_state_from_result(sim_result, ball), standing_ids=standing_ids
@@ -244,7 +248,10 @@ def reset_game(game_id: str) -> GameResetResponse:
     except UnknownGameError:
         raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
-    condition, snapshot = session.reset()
+    # Routed through GameService.reset_game so the mutated session is
+    # written back through the repository afterward -- see that method's
+    # own docstring.
+    condition, snapshot = default_game_service.reset_game(session)
     return GameResetResponse(
         game_id=game_id,
         lane_condition_version=condition.version,
