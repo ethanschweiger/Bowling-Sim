@@ -23,7 +23,10 @@ const response: GameThrowResponse = {
     launch_angle: -1.45,
     launch_position: 27.38,
   },
-  path: [{ distance_ft: 0, board: 28 }, { distance_ft: 60, board: 17.2 }],
+  path: [
+    { distance_ft: 0, board: 28, elapsed_s: 0 },
+    { distance_ft: 60, board: 17.2, elapsed_s: 3 },
+  ],
   entry_board: 17.2,
   entry_angle_deg: 1.4,
   speed_at_pins_mph: 15.9,

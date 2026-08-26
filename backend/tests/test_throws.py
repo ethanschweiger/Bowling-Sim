@@ -115,6 +115,15 @@ def test_representative_throw_returns_a_plausible_trajectory():
     for point in body["path"]:
         assert 0.0 <= point["board"] <= 40.0
 
+    # elapsed_s is the backend's real, observed simulation clock: it starts
+    # at release (0.0) and is strictly increasing sample to sample — never a
+    # second, client-invented timing model.
+    times = [point["elapsed_s"] for point in body["path"]]
+    assert times[0] == 0.0
+    # Explicit indexing rather than zip(..., strict=): the runtime floor
+    # is Python 3.9, one minor version below the `strict` keyword.
+    assert all(times[i] > times[i - 1] for i in range(1, len(times)))
+
     assert 0 <= body["pins_knocked"] <= 10
     assert body["seed"] == 7
     assert body["lane_condition_version"] == 1

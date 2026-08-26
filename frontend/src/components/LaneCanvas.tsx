@@ -16,6 +16,7 @@ import {
 import {
   INITIAL_PLAYBACK_STATE,
   interpolatePathPosition,
+  pathLowerIndexAtProgress,
   planPlaybackTransition,
   trajectoryEndpoint,
   type PlaybackState,
@@ -218,7 +219,11 @@ export function LaneCanvas({
       return;
     }
     onPlaybackStarted();
-    controller.start({ replay }, prefersReducedMotion(), onPlaybackCompleted);
+    // `action.path` (narrowed to the 'start' variant by the checks above)
+    // is this decision's own path -- the same one the path phase's
+    // duration is derived from -- rather than re-reading `latestThrowPath`
+    // out of the surrounding closure.
+    controller.start({ replay, path: action.path }, prefersReducedMotion(), onPlaybackCompleted);
   }, [latestThrowPath, onPlaybackCompleted, onPlaybackStarted, requestPending, replayCount, replay]);
 
   // What to draw is decided by `buildLaneScene` — one place, testable
@@ -338,14 +343,15 @@ function draw(
   // are decided here; which pins to draw, and from where, is the scene's
   // job — see `domain/laneScene.ts`.
   if (latestThrow && latestThrow.path.length > 0) {
-    // The same lowerIndex interpolatePathPosition computes internally —
-    // recomputed here (not returned from it) only because drawing the
-    // partial line needs the index boundary, not just the interpolated
-    // point. path[0..lowerIndex] are fully "behind" the ball; the line
-    // extends from there to the interpolated point below, never past it.
+    // The exact same boundary interpolatePathPosition uses internally —
+    // via the shared `pathLowerIndexAtProgress` helper, not recomputed by
+    // a separate rule, so the drawn line and the interpolated ball
+    // position can't disagree on where the ball actually is by time.
+    // path[0..lowerIndex] are fully "behind" the ball; the line extends
+    // from there to the interpolated point below, never past it.
     const clampedProgress = Math.max(0, Math.min(1, progress));
     const isComplete = clampedProgress >= 1;
-    const lowerIndex = Math.floor(clampedProgress * (latestThrow.path.length - 1));
+    const lowerIndex = pathLowerIndexAtProgress(latestThrow.path, clampedProgress);
     const shownPath = isComplete ? latestThrow.path : latestThrow.path.slice(0, lowerIndex + 1);
 
     ctx.strokeStyle = colors.trajectory;

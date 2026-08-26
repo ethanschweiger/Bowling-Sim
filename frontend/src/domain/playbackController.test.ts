@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CollisionReplayResponse } from '../api/types';
+import type { CollisionReplayResponse, TrajectoryPointResponse } from '../api/types';
 import { acceptReplay, SUPPORTED_REPLAY_MODEL_VERSION } from './collisionReplay';
 import {
   PlaybackController,
@@ -11,10 +11,23 @@ import {
 } from './playbackController';
 import {
   INITIAL_PLAYBACK_STATE,
+  pathAnimationDurationMs,
   planPlaybackTransition,
-  TRAJECTORY_ANIMATION_DURATION_MS,
   type PlaybackState,
 } from './trajectoryAnimation';
+
+// Shared across every sequence fixture in this file. Its final `elapsed_s`
+// (3.0) is chosen so `PATH_DURATION_MS` below comes out to exactly 900 --
+// the same number the fixed path-phase duration used to be before this
+// module derived it from a path -- purely so the many pre-existing
+// lifecycle/cancellation assertions below don't need new arithmetic.
+// Nothing here requires that specific value; see the "path phase duration
+// scales with elapsed_s" suite below for tests that deliberately vary it.
+const PATH: readonly TrajectoryPointResponse[] = [
+  { distance_ft: 0, board: 28, elapsed_s: 0 },
+  { distance_ft: 60, board: 17, elapsed_s: 3 },
+];
+const PATH_DURATION_MS = pathAnimationDurationMs(PATH);
 
 /**
  * A deterministic stand-in for requestAnimationFrame. Nothing here sleeps
@@ -112,23 +125,23 @@ describe('the shared fixture', () => {
 
 describe('sequenceDurationMs', () => {
   it('is the path phase alone when there is no replay', () => {
-    expect(sequenceDurationMs({ replay: null })).toBe(TRAJECTORY_ANIMATION_DURATION_MS);
+    expect(sequenceDurationMs({ replay: null, path: PATH })).toBe(PATH_DURATION_MS);
   });
 
   it('adds the replay duration at one-times simulation time, plus the terminal hold', () => {
-    expect(sequenceDurationMs({ replay: replay() })).toBe(
-      TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000 + TERMINAL_HOLD_MS,
+    expect(sequenceDurationMs({ replay: replay(), path: PATH })).toBe(
+      PATH_DURATION_MS + DECK_DURATION_S * 1000 + TERMINAL_HOLD_MS,
     );
   });
 });
 
 describe('phaseAt', () => {
-  const withDeck = { replay: replay() };
-  const withoutDeck = { replay: null };
+  const withDeck = { replay: replay(), path: PATH };
+  const withoutDeck = { replay: null, path: PATH };
 
   it('runs the path phase for its full documented duration', () => {
     expect(phaseAt(withDeck, 0)).toEqual({ kind: 'path', progress: 0 });
-    expect(phaseAt(withDeck, TRAJECTORY_ANIMATION_DURATION_MS / 2)).toEqual({
+    expect(phaseAt(withDeck, PATH_DURATION_MS / 2)).toEqual({
       kind: 'path',
       progress: 0.5,
     });
@@ -137,12 +150,12 @@ describe('phaseAt', () => {
   it('hands off to the deck phase exactly at the headpin plane, with no gap', () => {
     // The last path instant and the deck's own t_s = 0 describe the same
     // moment; the handoff must not skip or repeat time.
-    const boundary = phaseAt(withDeck, TRAJECTORY_ANIMATION_DURATION_MS);
+    const boundary = phaseAt(withDeck, PATH_DURATION_MS);
     expect(boundary).toEqual({ kind: 'deck', tS: 0, isTerminal: false });
   });
 
   it('advances deck time at one-times simulation scale', () => {
-    const half = phaseAt(withDeck, TRAJECTORY_ANIMATION_DURATION_MS + 1000);
+    const half = phaseAt(withDeck, PATH_DURATION_MS + 1000);
     expect(half).toEqual({ kind: 'deck', tS: 1, isTerminal: false });
   });
 
@@ -151,15 +164,15 @@ describe('phaseAt', () => {
     // authoritative frame was never rendered at all. Real frame times
     // rarely land exactly on the duration, so past-the-end must clamp back
     // onto the terminal frame rather than jump over it.
-    const atEnd = phaseAt(withDeck, TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000);
+    const atEnd = phaseAt(withDeck, PATH_DURATION_MS + DECK_DURATION_S * 1000);
     expect(atEnd).toEqual({ kind: 'deck', tS: DECK_DURATION_S, isTerminal: true });
 
-    const pastEnd = phaseAt(withDeck, TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000 + 250);
+    const pastEnd = phaseAt(withDeck, PATH_DURATION_MS + DECK_DURATION_S * 1000 + 250);
     expect(pastEnd).toEqual({ kind: 'deck', tS: DECK_DURATION_S, isTerminal: true });
   });
 
   it('holds the terminal frame for the whole documented interval, then settles', () => {
-    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const end = PATH_DURATION_MS + DECK_DURATION_S * 1000;
     const terminal = { kind: 'deck', tS: DECK_DURATION_S, isTerminal: true };
 
     // Throughout the hold the terminal scene is still what should be drawn.
@@ -173,7 +186,51 @@ describe('phaseAt', () => {
   });
 
   it('settles straight after the path when there is no replay', () => {
-    expect(phaseAt(withoutDeck, TRAJECTORY_ANIMATION_DURATION_MS)).toEqual({ kind: 'settled' });
+    expect(phaseAt(withoutDeck, PATH_DURATION_MS)).toEqual({ kind: 'settled' });
+  });
+});
+
+describe('path phase duration scales with the server-recorded elapsed_s', () => {
+  // The rejection this corrects: an earlier version derived elapsed_s and
+  // used it for interpolation *within* the path, but still handed off to
+  // the deck phase at the same fixed millisecond for every throw. These
+  // tests fail on that version and pass on this one -- two throws with
+  // different recorded path times must get different path durations and
+  // different deck handoff instants, not the same one twice.
+  const FAST_PATH = [
+    { distance_ft: 0, board: 20, elapsed_s: 0 },
+    { distance_ft: 60, board: 18, elapsed_s: 1.65 },
+  ];
+  const SLOW_PATH = [
+    { distance_ft: 0, board: 20, elapsed_s: 0 },
+    { distance_ft: 60, board: 18, elapsed_s: 4.17 },
+  ];
+
+  it('gives sequenceDurationMs a different total for a faster vs. a slower recorded throw', () => {
+    const fastTotal = sequenceDurationMs({ replay: null, path: FAST_PATH });
+    const slowTotal = sequenceDurationMs({ replay: null, path: SLOW_PATH });
+
+    expect(fastTotal).not.toBe(slowTotal);
+    expect(slowTotal).toBeGreaterThan(fastTotal);
+  });
+
+  it('hands off to the deck phase at a different elapsedMs for a faster vs. a slower recorded throw', () => {
+    const fastSequence = { replay: replay(), path: FAST_PATH };
+    const slowSequence = { replay: replay(), path: SLOW_PATH };
+    const fastHandoffMs = pathAnimationDurationMs(FAST_PATH);
+    const slowHandoffMs = pathAnimationDurationMs(SLOW_PATH);
+
+    expect(fastHandoffMs).not.toBe(slowHandoffMs);
+
+    // Each sequence reaches the deck (t_s = 0) exactly at its own path's
+    // duration, not at the other one's, and not at a shared constant.
+    expect(phaseAt(fastSequence, fastHandoffMs)).toEqual({ kind: 'deck', tS: 0, isTerminal: false });
+    expect(phaseAt(slowSequence, slowHandoffMs)).toEqual({ kind: 'deck', tS: 0, isTerminal: false });
+
+    // Still mid-path for the slower throw at the instant the faster one
+    // has already handed off -- proof the boundary actually moved, not
+    // just that two numbers differ in isolation.
+    expect(phaseAt(slowSequence, fastHandoffMs).kind).toBe('path');
   });
 });
 
@@ -182,19 +239,19 @@ describe('PlaybackController lifecycle', () => {
     const fake = fakeScheduler();
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
-    const END_MS = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const END_MS = PATH_DURATION_MS + DECK_DURATION_S * 1000;
 
-    controller.start({ replay: replay() }, false);
+    controller.start({ replay: replay(), path: PATH }, false);
     // Phase zero is emitted synchronously, before any frame is requested,
     // so the approach is staged in the same pass the caller renders in --
     // this is what removes the one-paint post-score flash.
     expect(phases).toEqual([{ kind: 'path', progress: 0 }]);
     expect(fake.pendingCount).toBe(1);
 
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
+    fake.advanceTo(PATH_DURATION_MS / 2);
     expect(fake.pendingCount).toBe(1); // still exactly one, never two
 
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 500);
+    fake.advanceTo(PATH_DURATION_MS + 500);
     expect(fake.pendingCount).toBe(1);
 
     // Reaching the end emits the terminal frame and keeps exactly one
@@ -232,9 +289,9 @@ describe('PlaybackController lifecycle', () => {
     const fake = fakeScheduler();
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
-    const END_MS = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const END_MS = PATH_DURATION_MS + DECK_DURATION_S * 1000;
 
-    controller.start({ replay: replay() }, false);
+    controller.start({ replay: replay(), path: PATH }, false);
     fake.advanceTo(END_MS + 5000); // land well past the end
 
     const last = phases[phases.length - 1];
@@ -250,9 +307,9 @@ describe('PlaybackController lifecycle', () => {
     const fake = fakeScheduler();
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
-    const END_MS = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const END_MS = PATH_DURATION_MS + DECK_DURATION_S * 1000;
 
-    controller.start({ replay: replay() }, false);
+    controller.start({ replay: replay(), path: PATH }, false);
     fake.advanceTo(END_MS);
     expect(phases[phases.length - 1]).toMatchObject({ isTerminal: true });
 
@@ -267,7 +324,7 @@ describe('PlaybackController lifecycle', () => {
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
 
-    controller.start({ replay: replay() }, true);
+    controller.start({ replay: replay(), path: PATH }, true);
 
     expect(fake.pendingCount).toBe(0);
     expect(controller.isRunning).toBe(false);
@@ -279,9 +336,9 @@ describe('PlaybackController lifecycle', () => {
     const { onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
     let completions = 0;
-    const END_MS = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const END_MS = PATH_DURATION_MS + DECK_DURATION_S * 1000;
 
-    controller.start({ replay: replay() }, false, () => {
+    controller.start({ replay: replay(), path: PATH }, false, () => {
       completions += 1;
     });
     fake.advanceTo(END_MS);
@@ -300,7 +357,7 @@ describe('PlaybackController lifecycle', () => {
     const controller = new PlaybackController(fake.scheduler, onPhase);
     let completions = 0;
 
-    controller.start({ replay: replay() }, true, () => {
+    controller.start({ replay: replay(), path: PATH }, true, () => {
       completions += 1;
     });
 
@@ -317,14 +374,14 @@ describe('PlaybackController lifecycle', () => {
       completions += 1;
     };
 
-    controller.start({ replay: replay() }, false, onComplete);
+    controller.start({ replay: replay(), path: PATH }, false, onComplete);
     fake.advanceTo(100);
     controller.settle();
     expect(completions).toBe(0);
 
-    controller.start({ replay: replay() }, false, onComplete);
+    controller.start({ replay: replay(), path: PATH }, false, onComplete);
     fake.advanceTo(200);
-    controller.start({ replay: replay() }, false);
+    controller.start({ replay: replay(), path: PATH }, false);
     expect(completions).toBe(0);
 
     controller.dispose();
@@ -336,11 +393,11 @@ describe('PlaybackController lifecycle', () => {
     const { onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
 
-    controller.start({ replay: replay() }, false);
+    controller.start({ replay: replay(), path: PATH }, false);
     fake.advanceTo(100);
     expect(fake.pendingCount).toBe(1);
 
-    controller.start({ replay: replay() }, false);
+    controller.start({ replay: replay(), path: PATH }, false);
     // Still exactly one queued frame -- the old one was cancelled, not
     // left running alongside the new one.
     expect(fake.pendingCount).toBe(1);
@@ -352,7 +409,7 @@ describe('PlaybackController lifecycle', () => {
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
 
-    controller.start({ replay: replay() }, false);
+    controller.start({ replay: replay(), path: PATH }, false);
     fake.advanceTo(200);
     controller.settle();
 
@@ -370,8 +427,8 @@ describe('PlaybackController lifecycle', () => {
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
 
-    controller.start({ replay: replay() }, false);
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 500);
+    controller.start({ replay: replay(), path: PATH }, false);
+    fake.advanceTo(PATH_DURATION_MS + 500);
     expect(phases[phases.length - 1].kind).toBe('deck');
 
     controller.settle();
@@ -390,13 +447,13 @@ describe('PlaybackController lifecycle', () => {
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
 
-    controller.start({ replay: replay() }, false);
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 500);
+    controller.start({ replay: replay(), path: PATH }, false);
+    fake.advanceTo(PATH_DURATION_MS + 500);
     controller.settle();
     phases.length = 0;
 
     // Time keeps passing; no frames are queued, so nothing draws.
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 1500);
+    fake.advanceTo(PATH_DURATION_MS + 1500);
     expect(fake.pendingCount).toBe(0);
     expect(phases).toEqual([]);
   });
@@ -406,7 +463,7 @@ describe('PlaybackController lifecycle', () => {
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
 
-    controller.start({ replay: replay() }, false);
+    controller.start({ replay: replay(), path: PATH }, false);
     fake.advanceTo(100);
     const beforeDispose = phases.length;
 
@@ -415,7 +472,7 @@ describe('PlaybackController lifecycle', () => {
 
     // A start after dispose must also stay inert -- the unmounted
     // component can never be driven again.
-    controller.start({ replay: replay() }, false);
+    controller.start({ replay: replay(), path: PATH }, false);
     expect(fake.pendingCount).toBe(0);
     expect(phases.length).toBe(beforeDispose);
   });
@@ -437,9 +494,9 @@ describe('PlaybackController lifecycle', () => {
 
     // The gutter / heuristic / unknown-version case: no deck phase exists,
     // so nothing invents ball or pin movement past the path.
-    controller.start({ replay: null }, false);
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS);
+    controller.start({ replay: null, path: PATH }, false);
+    fake.advanceTo(PATH_DURATION_MS / 2);
+    fake.advanceTo(PATH_DURATION_MS);
 
     // Two 'path' entries: the synchronous phase-zero staging, then the
     // frame that advances it. Both precede the settle.
@@ -462,11 +519,11 @@ describe('PlaybackController lifecycle', () => {
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
 
-    controller.start({ replay: rejected }, false);
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS);
+    controller.start({ replay: rejected, path: PATH }, false);
+    fake.advanceTo(PATH_DURATION_MS / 2);
+    fake.advanceTo(PATH_DURATION_MS);
     // Well past where a deck phase would have run, had one been started.
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000 + 100);
+    fake.advanceTo(PATH_DURATION_MS + DECK_DURATION_S * 1000 + 100);
 
     expect(phases.map((p) => p.kind)).toEqual(['path', 'path', 'settled']);
     expect(phases.some((p) => p.kind === 'deck')).toBe(false);
@@ -477,14 +534,14 @@ describe('PlaybackController lifecycle', () => {
     const fake = fakeScheduler();
     const { phases, onPhase } = collect();
     const controller = new PlaybackController(fake.scheduler, onPhase);
-    const sequence = { replay: replay() };
+    const sequence = { replay: replay(), path: PATH };
 
-    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const end = PATH_DURATION_MS + DECK_DURATION_S * 1000;
     const playOnce = (base: number) => {
       fake.setNow(base);
       controller.start(sequence, false);
       fake.advanceTo(base + 10);
-      fake.advanceTo(base + TRAJECTORY_ANIMATION_DURATION_MS + 10);
+      fake.advanceTo(base + PATH_DURATION_MS + 10);
       fake.advanceTo(base + end);
       fake.advanceTo(base + end + TERMINAL_HOLD_MS);
     };
@@ -513,10 +570,8 @@ describe('preloaded mount lifecycle', () => {
   // exact pair of collaborators the component wires together, which is where
   // the defect actually lived.
 
-  const PATH = [
-    { distance_ft: 0, board: 28 },
-    { distance_ft: 60, board: 17 },
-  ];
+  // Reuses the file-level PATH/PATH_DURATION_MS fixture -- no separate one
+  // needed here.
   const PRELOADED: PlaybackState = { latestThrowPath: PATH, isBusy: false, replayCount: 0 };
 
   /** One mount pass. `controllerFirst` mirrors creating the controller in a
@@ -535,7 +590,7 @@ describe('preloaded mount lifecycle', () => {
       const planned = planPlaybackTransition(snapshot, PRELOADED, controller !== null);
       snapshot = planned.snapshot;
       if (planned.action.kind === 'start' && controller) {
-        controller.start({ replay: replay() }, false);
+        controller.start({ replay: replay(), path: PATH }, false);
       }
     };
 
@@ -586,10 +641,10 @@ describe('preloaded mount lifecycle', () => {
 
   it('plays the full path/deck/terminal-hold sequence from a preloaded mount', () => {
     const { fake, phases, getController } = mount(true);
-    const END_MS = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const END_MS = PATH_DURATION_MS + DECK_DURATION_S * 1000;
 
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS / 2);
-    fake.advanceTo(TRAJECTORY_ANIMATION_DURATION_MS + 500);
+    fake.advanceTo(PATH_DURATION_MS / 2);
+    fake.advanceTo(PATH_DURATION_MS + 500);
     fake.advanceTo(END_MS);
     expect(phases[phases.length - 1]).toEqual({
       kind: 'deck',
@@ -620,7 +675,7 @@ describe('preloaded mount lifecycle', () => {
       const planned = planPlaybackTransition(snapshot, PRELOADED, true);
       snapshot = planned.snapshot;
       if (planned.action.kind === 'start') {
-        controller.start({ replay: replay() }, false);
+        controller.start({ replay: replay(), path: PATH }, false);
       }
       return controller;
     };
@@ -651,7 +706,7 @@ describe('preloaded mount lifecycle', () => {
     const planned = planPlaybackTransition(INITIAL_PLAYBACK_STATE, PRELOADED, true);
 
     expect(planned.action.kind).toBe('start');
-    controller.start({ replay: replay() }, true);
+    controller.start({ replay: replay(), path: PATH }, true);
 
     expect(fake.pendingCount).toBe(0);
     expect(phases).toEqual([{ kind: 'settled' }]);

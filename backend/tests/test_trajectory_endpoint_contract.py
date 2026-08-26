@@ -24,6 +24,7 @@ from app.physics.simulate import (
     PATH_SAMPLE_FT,
     STEP_CAP_GUARD,
     STEP_FT,
+    TIME_DECIMALS,
     SimulationResult,
     TerminalState,
     TrajectoryPoint,
@@ -94,6 +95,43 @@ def test_endpoint_agreement_holds_across_balls_and_seeds():
             expected = boards_to_in(trace.result.terminal.board - LANE_CENTER_BOARD)
             assert trace.impact.lateral_position_in == expected, (ball_id, seed)
     assert lane.version == 1  # the sweep never mutated the shared condition
+
+
+# --- Path timing: real, server-observed elapsed time --------------------
+
+
+def test_path_starts_at_zero_elapsed_time():
+    trace = trace_diagnostic_throw()
+    assert trace.result.path[0].elapsed_s == 0.0
+
+
+def test_elapsed_time_is_strictly_increasing_along_the_path():
+    trace = trace_diagnostic_throw()
+    times = [p.elapsed_s for p in trace.result.path]
+    # Explicit indexing rather than zip(..., strict=): the runtime floor
+    # is Python 3.9, one minor version below the `strict` keyword.
+    assert all(times[i] > times[i - 1] for i in range(1, len(times)))
+
+
+def test_final_path_point_elapsed_time_matches_the_terminal_state():
+    trace = trace_diagnostic_throw()
+    terminal = trace.result.terminal
+    # Same relationship as `entry_board`/`terminal.board`: the last recorded
+    # sample is a rounded view of the one unrounded canonical endpoint, not
+    # a second, independently derived value.
+    assert trace.last_path_point.elapsed_s == round(terminal.elapsed_s, TIME_DECIMALS)
+
+
+def test_elapsed_time_agreement_holds_across_balls_and_seeds():
+    for ball_id, _ball in BALL_CATALOG.items():
+        for seed in (1, 7, 99, 4242):
+            trace = trace_diagnostic_throw(ball_id=ball_id, seed=seed)
+            times = [p.elapsed_s for p in trace.result.path]
+            assert times[0] == 0.0, (ball_id, seed)
+            assert all(times[i] > times[i - 1] for i in range(1, len(times))), (ball_id, seed)
+            assert trace.last_path_point.elapsed_s == round(
+                trace.result.terminal.elapsed_s, TIME_DECIMALS
+            ), (ball_id, seed)
 
 
 # --- Terminal validity --------------------------------------------------

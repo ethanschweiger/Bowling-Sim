@@ -91,7 +91,8 @@ def create_throw(
         seed=seed,
         actual_release=ReleaseValues(**asdict(actual_throw)),
         path=[
-            TrajectoryPointResponse(distance_ft=p.distance_ft, board=p.board) for p in result.path
+            TrajectoryPointResponse(distance_ft=p.distance_ft, board=p.board, elapsed_s=p.elapsed_s)
+            for p in result.path
         ],
         entry_board=result.entry_board,
         entry_angle_deg=result.entry_angle_deg,

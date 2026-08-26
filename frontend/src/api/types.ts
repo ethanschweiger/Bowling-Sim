@@ -97,6 +97,10 @@ export interface ReleaseValues {
 export interface TrajectoryPointResponse {
   distance_ft: number;
   board: number;
+  /** Real accumulated simulation time (seconds since release) the backend
+   * observed at this sample — see
+   * `backend/app/physics/simulate.py`'s `TrajectoryPoint.elapsed_s`. */
+  elapsed_s: number;
 }
 
 /** One body's position at one instant of a collision replay.

@@ -82,6 +82,9 @@ class ReleaseValues(BaseModel):
 class TrajectoryPointResponse(BaseModel):
     distance_ft: float
     board: float
+    # Real accumulated simulation time (seconds since release) the backend
+    # observed at this sample — see `app.physics.simulate.TrajectoryPoint`.
+    elapsed_s: float
 
 
 class ReplayBodyResponse(BaseModel):
