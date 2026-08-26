@@ -102,6 +102,18 @@ unchanged; see `GameSessionRepository`'s docstring for why `get_or_create`
 needed a third repository method (`get_or_put`), not just `get`+`put`, to
 preserve its original atomicity.
 
+`throw_in_game` and `reset_game` are the write-back half of this same
+boundary: mutating an in-memory `GameSession` in place is already enough
+for `InMemoryGameSessionRepository` to see the change (both hold the
+exact same object), which is exactly why nothing needed an explicit
+write-back call before now. A future database-backed repository has no
+such shortcut — mutating a Python object in memory writes nothing to a
+database row. `throw_in_game`/`reset_game` are the point every
+game-scoped and legacy mutation now routes through so a future
+repository's `put` gets called after every successful mutation, not
+only after `create_game`; see "The eviction policy" below for the
+`put`-must-not-evict-on-replacement fix this write-back path depends on.
+
 ## Durable session records
 
 `GameStateSnapshot` and `GameSessionRecord` solve different problems and
@@ -409,8 +421,13 @@ class GameSessionRepository(ABC):
         """Stores `session` under its own `game_id`, unconditionally --
         replacing whatever was already there under that ID, if anything.
         An implementation that bounds its own capacity (like the
-        in-memory one below) applies its own eviction policy here,
-        atomically with the insert."""
+        in-memory one below) applies its own eviction policy here, but
+        only when `game_id` is genuinely new to this repository --
+        replacing an existing entry (a write-back after a successful
+        mutation, not a creation) must never evict another retained
+        session and must never change `game_id`'s own retention
+        position, the same guarantee `get_or_put` already makes for its
+        own lookup-hit path."""
         ...
 
     @abstractmethod
@@ -433,22 +450,34 @@ class InMemoryGameSessionRepository(GameSessionRepository):
 
     ## The eviction policy
 
-    When storing a new session would put the registry over `max_games`,
-    the single oldest retained session -- the one that has been in
-    `_games` the longest, by insertion order, never by how recently it
-    was read or thrown in -- is evicted first. This is deliberately FIFO,
-    not LRU: an LRU policy would need every read (`get`, a throw) to
-    reorder state, which the behavior this class exists to preserve
-    (`get_or_put`'s lookups, throws, reset, scorecard/rack isolation all
-    behaving exactly as before for any ID that remains retained) doesn't
-    ask for and would make harder to reason about. There are no TTLs,
-    wall-clock timers, or background sweeps -- eviction is a synchronous
-    side effect of `put`/`get_or_put` storing a genuinely new session,
-    nothing else ever removes an entry.
+    When storing a *genuinely new* session would put the registry over
+    `max_games`, the single oldest retained session -- the one that has
+    been in `_games` the longest, by insertion order, never by how
+    recently it was read or thrown in -- is evicted first. This is
+    deliberately FIFO, not LRU: an LRU policy would need every read
+    (`get`, a throw) to reorder state, which the behavior this class
+    exists to preserve (`get_or_put`'s lookups, throws, reset,
+    scorecard/rack isolation all behaving exactly as before for any ID
+    that remains retained) doesn't ask for and would make harder to
+    reason about. There are no TTLs, wall-clock timers, or background
+    sweeps -- eviction is a synchronous side effect of `put`/`get_or_put`
+    storing a genuinely new session, nothing else ever removes an entry.
 
-    Eviction always happens *before* the new session is inserted, so the
-    session a `put`/`get_or_put` call is about to return can never be the
-    one evicted by that same call, for any `max_games >= 1`.
+    "Genuinely new" matters here specifically because `put` is also the
+    write-back path a service uses to persist a session it already held
+    and just mutated (see `GameService.throw_in_game`/`reset_game`) --
+    that is a replacement of an existing entry, not an insertion, and
+    must never evict a sibling game or disturb `game_id`'s own retention
+    position just because a write happened to land while the registry
+    was at capacity. `put` checks whether `game_id` is already present
+    before ever considering eviction; only a `game_id` this repository
+    has never seen can trigger it. `get_or_put`'s own lookup-hit path
+    already had this property (a hit returns immediately, before
+    `_evict_oldest_locked` is ever called) -- `put` now matches it.
+
+    Eviction always happens *before* a genuinely new session is inserted,
+    so the session a `put`/`get_or_put` call is about to return can never
+    be the one evicted by that same call, for any `max_games >= 1`.
 
     An evicted game_id then behaves exactly like a game_id that was never
     stored: `get` returns `None`, which `GameService.get_game` turns into
@@ -496,7 +525,14 @@ class InMemoryGameSessionRepository(GameSessionRepository):
 
     def put(self, session: GameSession) -> None:
         with self._lock:
-            self._evict_oldest_locked()
+            # Only a genuinely new game_id can trigger eviction -- see
+            # "The eviction policy" above for why a write-back replacing
+            # an existing entry must not. Reassigning an existing dict
+            # key's value never moves it in iteration order, so a
+            # replacement is already a no-op for retention position;
+            # only the eviction call needed guarding.
+            if session.game_id not in self._games:
+                self._evict_oldest_locked()
             self._games[session.game_id] = session
 
     def get_or_put(self, game_id: str, factory: Callable[[], GameSession]) -> GameSession:
@@ -513,10 +549,12 @@ class InMemoryGameSessionRepository(GameSessionRepository):
 class GameService:
     """A thin orchestrator over a `GameSessionRepository`: decides which
     oil pattern builds which `GameSession` and its initial `LaneCondition`,
-    and translates a missing lookup into `UnknownGameError`. All storage,
-    locking, and eviction live in the repository this class holds -- see
-    "The repository boundary" in this module's own docstring, and
-    `GameSessionRepository` for the storage interface itself.
+    translates a missing lookup into `UnknownGameError`, and writes a
+    session back to the repository after `throw_in_game`/`reset_game`
+    mutate it. All storage, locking, and eviction live in the repository
+    this class holds -- see "The repository boundary" in this module's
+    own docstring, and `GameSessionRepository` for the storage interface
+    itself.
     """
 
     def __init__(
@@ -578,6 +616,53 @@ class GameService:
         if session is None:
             raise UnknownGameError(game_id)
         return session
+
+    def throw_in_game(
+        self,
+        session: GameSession,
+        simulate: Callable[[LaneCondition], SimulationResult],
+        resolve_pinfall: Callable[[SimulationResult, frozenset[int]], PinfallResult],
+    ) -> tuple[SimulationResult, PinfallResult, GameStateSnapshot]:
+        """Runs one throw transaction against an already-resolved
+        `session` (from this service's own `get_game`/`get_or_create`)
+        and, only once it succeeds, writes the mutated session back
+        through this service's repository -- the write-back boundary a
+        future persistent repository would need after every successful
+        mutation, so it can actually persist what an in-memory session's
+        in-place mutation already makes visible for free.
+
+        Takes an already-resolved `session`, not a `game_id`: the caller
+        (a route) already did its own `get_game`/`get_or_create` lookup
+        -- often interleaved with its own validation (an unknown ball_id,
+        for instance) that must still 404 in exactly the same order it
+        always has -- and this method's only job is the mutate-then-write-
+        back step, not a second lookup.
+
+        Raises whatever `GameSession.throw` itself raises
+        (`GameCompleteError`, or `TruncatedTrajectoryError` propagating
+        out of `simulate`) -- in either case this never reaches the
+        repository write-back below, since `put` is only called after
+        `session.throw` returns. `session` (and, for
+        `InMemoryGameSessionRepository`, therefore the repository too)
+        is left exactly as `GameSession.throw` itself already guarantees
+        on failure: completely unchanged.
+        """
+        result = session.throw(simulate=simulate, resolve_pinfall=resolve_pinfall)
+        self._repository.put(session)
+        return result
+
+    def reset_game(self, session: GameSession) -> tuple[LaneCondition, GameStateSnapshot]:
+        """Resets an already-resolved `session` and writes the mutated
+        session back through this service's repository -- see
+        `throw_in_game`'s own docstring for why this takes a resolved
+        `session` rather than a `game_id`, and why write-back after a
+        mutation is this method's whole reason to exist. `GameSession.reset`
+        cannot fail, so there is no failure path here to keep `put` away
+        from -- every call reaches the write-back.
+        """
+        result = session.reset()
+        self._repository.put(session)
+        return result
 
 
 # One shared registry for the process. Each game inside it gets its own

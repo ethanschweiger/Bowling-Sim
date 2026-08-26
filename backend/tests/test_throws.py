@@ -5,7 +5,12 @@ from fastapi.testclient import TestClient
 
 from app.api.routes.games import TRUNCATED_TRAJECTORY_DETAIL
 from app.api.routes.throws import LEGACY_GAME_ID
-from app.games.service import default_game_service
+from app.games.service import (
+    GameService,
+    GameSessionRepository,
+    InMemoryGameSessionRepository,
+    default_game_service,
+)
 from app.main import app
 from app.physics.simulate import SimulationResult, TerminalState, TrajectoryPoint
 from app.physics.throw import Throw, sample_release
@@ -151,3 +156,41 @@ def test_legacy_throw_response_uses_the_planar_collision_model():
     assert body["pinfall"]["model_id"] == "planar-collision-2d-v1"
     assert isinstance(body["pinfall"]["fallen_pin_ids"], list)
     assert body["pins_knocked"] == len(body["pinfall"]["fallen_pin_ids"])
+
+
+class _SpyRepository(GameSessionRepository):
+    """See tests/test_game_service_writeback.py's identical helper --
+    wraps a real repository, delegating every call, while recording each
+    `game_id` a `put()` call was made for."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.put_calls = []
+
+    def get(self, game_id):
+        return self._inner.get(game_id)
+
+    def put(self, session):
+        self.put_calls.append(session.game_id)
+        self._inner.put(session)
+
+    def get_or_put(self, game_id, factory):
+        return self._inner.get_or_put(game_id, factory)
+
+
+def test_legacy_throw_route_writes_back_through_the_same_service_path(monkeypatch):
+    """Proves the deprecated route uses GameService.throw_in_game -- the
+    same write-back path the game-scoped route uses -- not a direct
+    session.throw() call that would silently skip a future persistent
+    repository's put(). get_or_create still ensures the shared game
+    exists; this only checks what happens after."""
+    import app.api.routes.throws as throws_route
+
+    spy = _SpyRepository(InMemoryGameSessionRepository())
+    temp_service = GameService(repository=spy)
+    monkeypatch.setattr(throws_route, "default_game_service", temp_service)
+
+    response = client.post("/api/v1/simulations/throws", json=VALID_PAYLOAD)
+
+    assert response.status_code == 200
+    assert spy.put_calls == [LEGACY_GAME_ID]

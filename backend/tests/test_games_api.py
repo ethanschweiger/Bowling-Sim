@@ -1,7 +1,12 @@
 from fastapi.testclient import TestClient
 
 from app.api.routes.games import TRUNCATED_TRAJECTORY_DETAIL
-from app.games.service import default_game_service
+from app.games.service import (
+    GameService,
+    GameSessionRepository,
+    InMemoryGameSessionRepository,
+    default_game_service,
+)
 from app.main import app
 from app.physics.ball import BALL_CATALOG
 from app.physics.pinfall import PinfallResult
@@ -280,3 +285,50 @@ def test_get_after_reset_matches_a_fresh_game():
     assert status["game_state"] == reset_body["game_state"]
     assert status["game_state"]["standing_pin_ids"] == list(range(1, 11))
     assert status["game_state"]["frames"] == []
+
+
+class _SpyRepository(GameSessionRepository):
+    """See tests/test_game_service_writeback.py's identical helper --
+    wraps a real repository, delegating every call, while recording each
+    `game_id` a `put()` call was made for."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.put_calls = []
+
+    def get(self, game_id):
+        return self._inner.get(game_id)
+
+    def put(self, session):
+        self.put_calls.append(session.game_id)
+        self._inner.put(session)
+
+    def get_or_put(self, game_id, factory):
+        return self._inner.get_or_put(game_id, factory)
+
+
+def test_game_scoped_throw_and_reset_write_back_through_the_service(monkeypatch):
+    """The API-level proof that create_game_throw/reset_game route
+    through GameService.throw_in_game/reset_game (and therefore a
+    repository write-back), not a direct session.throw()/reset() call
+    that would silently skip it for a future persistent repository.
+    Exercises a temporary spy-wrapped GameService swapped into the games
+    route module for this test only -- default_game_service (used by the
+    rest of the suite) is never touched."""
+    import app.api.routes.games as games_route
+
+    spy = _SpyRepository(InMemoryGameSessionRepository())
+    temp_service = GameService(repository=spy)
+    monkeypatch.setattr(games_route, "default_game_service", temp_service)
+
+    created = client.post("/api/v1/games", json={})
+    game_id = created.json()["game_id"]
+    spy.put_calls.clear()  # only interested in throw/reset write-backs below
+
+    throw_response = client.post(f"/api/v1/games/{game_id}/throws", json=THROW_PAYLOAD)
+    assert throw_response.status_code == 200
+    assert spy.put_calls == [game_id]
+
+    reset_response = client.post(f"/api/v1/games/{game_id}/reset")
+    assert reset_response.status_code == 200
+    assert spy.put_calls == [game_id, game_id]

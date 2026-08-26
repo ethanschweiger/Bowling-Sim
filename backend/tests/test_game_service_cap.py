@@ -10,7 +10,13 @@ docstring in `app/games/service.py` for the policy these tests pin.
 import pytest
 from fastapi.testclient import TestClient
 
-from app.games.service import DEFAULT_MAX_GAMES, GameService, UnknownGameError, default_game_service
+from app.games.service import (
+    DEFAULT_MAX_GAMES,
+    GameService,
+    InMemoryGameSessionRepository,
+    UnknownGameError,
+    default_game_service,
+)
 from app.main import app
 from app.physics.ball import BALL_CATALOG
 from app.physics.simulate import simulate_throw
@@ -165,3 +171,44 @@ def test_evicted_game_returns_404_through_the_api(monkeypatch):
     retained = client.get(f"/api/v1/games/{second_id}")
     assert retained.status_code == 200
     assert retained.json()["game_id"] == second_id
+
+
+def test_replacing_an_existing_entry_at_capacity_does_not_evict_a_sibling():
+    """The write-back prerequisite fix: `put()` on a `game_id` this
+    repository already holds is a replacement, not a creation, and must
+    not evict another retained game just because the registry happens to
+    be full at that moment -- see `InMemoryGameSessionRepository`'s own
+    "The eviction policy" docstring for why this matters for
+    `GameService.throw_in_game`/`reset_game`'s write-back calls."""
+    repository = InMemoryGameSessionRepository(max_games=2)
+    service = GameService(repository=repository)
+    a = service.create_game()
+    b = service.create_game()
+    assert list(repository._games) == [a.game_id, b.game_id]
+
+    # Replace b -- the registry is already at its cap of 2, but this must
+    # not evict a, since b already existed (this is not a third game).
+    repository.put(b)
+
+    assert list(repository._games) == [a.game_id, b.game_id]
+    assert service.get_game(a.game_id) is a
+    assert service.get_game(b.game_id) is b
+
+
+def test_replacing_an_existing_entry_does_not_change_its_retention_position():
+    """A replacement must not act like a new insertion even when there is
+    room to spare -- `game_id`'s position among retained games (oldest
+    to newest) must be exactly what it already was, not moved to the
+    end as if it had just been created."""
+    repository = InMemoryGameSessionRepository(max_games=5)
+    service = GameService(repository=repository)
+    a = service.create_game()
+    b = service.create_game()
+    c = service.create_game()
+    assert list(repository._games) == [a.game_id, b.game_id, c.game_id]
+
+    # Replace the oldest entry, a -- its position must stay first, not
+    # jump to the end the way a genuinely new game_id would land.
+    repository.put(a)
+
+    assert list(repository._games) == [a.game_id, b.game_id, c.game_id]

@@ -427,15 +427,23 @@ percentages, leave tracking, ball usage stats.
   `GameService` reads or writes through it, and `default_game_service`
   still uses `InMemoryGameSessionRepository` exactly as before.
   `app/db/row_store.py` adds row-value and SQL-statement helpers
-  (a `SELECT` and a PostgreSQL upsert) for that same table — still no
+  (a `SELECT`, a PostgreSQL upsert, and an insert-if-absent
+  `ON CONFLICT DO NOTHING` statement) for that same table — still no
   `Engine`, connection, or runtime repository anywhere; storage is still
   in-memory only.
 - The deprecated `/api/v1/simulations/throws` route shares one game
   across every caller, for backward compatibility, not isolation; once
   that shared game finishes, calls return 409 until someone resets it via
   `POST /api/v1/games/legacy-default/reset`.
-- `database_url` exists in config for the v3 milestone; nothing reads or
-  writes to Postgres yet, and no migrations exist.
+- `database_url` exists in config for the v3 milestone. A SQLAlchemy
+  table schema, an Alembic migration, row-value/SQL-statement helpers,
+  an opt-in `Engine`/session factory (`app/db/session.py`), and now a
+  concrete `SqlAlchemyGameSessionRepository` adapter
+  (`app/db/sql_repository.py`) all exist for it, but none of it is
+  wired into app startup or `GameService`: `default_game_service` still
+  uses `InMemoryGameSessionRepository` by default, nothing opens a
+  database engine or connection at runtime, and games still live in
+  memory only.
 - The frontend has no chart suite, accounts, or persistence. Its ball and
   oil-pattern catalogs are fixed at startup — no adding, editing, or
   persisting either. A saved `game_id` is proactively checked once, at
