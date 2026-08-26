@@ -9,7 +9,7 @@ import {
 } from './collisionReplay';
 import { buildLaneScene, type LaneScene } from './laneScene';
 import { phaseAt, SETTLED, TERMINAL_HOLD_MS } from './playbackController';
-import { TRAJECTORY_ANIMATION_DURATION_MS } from './trajectoryAnimation';
+import { pathAnimationDurationMs } from './trajectoryAnimation';
 
 /**
  * Staging continuity for the lane canvas.
@@ -87,6 +87,11 @@ const PATH: readonly TrajectoryPointResponse[] = [
   { distance_ft: 30, board: 22, elapsed_s: 1.5 },
   { distance_ft: 60, board: 17, elapsed_s: 3 },
 ];
+// This path's final elapsed_s (3.0) happens to derive exactly 900ms --
+// the same number the fixed path-phase duration used to be before this
+// module derived it from a path -- so the boundary/handoff assertions
+// below don't need new arithmetic.
+const PATH_DURATION_MS = pathAnimationDurationMs(PATH);
 
 // Deliberately disagrees with every replay above: pin 1 is gone and pins 5
 // and 9 appear. If any approach or deck scene reads this, the difference is
@@ -178,12 +183,12 @@ describe('buildLaneScene — the path-to-deck boundary', () => {
     // Driven by phaseAt rather than hand-built phases, so the boundary under
     // test is the one the controller actually produces.
     const replay = accepted(fullRackReplay());
-    const sequence = { replay };
+    const sequence = { replay, path: PATH };
     const sceneAt = (elapsed: number) =>
       buildLaneScene(phaseAt(sequence, elapsed), replay, PATH, POST_SCORE_RACK);
 
-    const lastApproach = sceneAt(TRAJECTORY_ANIMATION_DURATION_MS - 1);
-    const firstDeck = sceneAt(TRAJECTORY_ANIMATION_DURATION_MS);
+    const lastApproach = sceneAt(PATH_DURATION_MS - 1);
+    const firstDeck = sceneAt(PATH_DURATION_MS);
 
     expect(lastApproach.pins).toEqual(firstDeck.pins);
     expect(firstDeck.pins.source).toBe('replay');
@@ -191,8 +196,8 @@ describe('buildLaneScene — the path-to-deck boundary', () => {
 
   it('never shows two balls at any point in the sequence', () => {
     const replay = accepted(fullRackReplay());
-    const sequence = { replay };
-    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const sequence = { replay, path: PATH };
+    const end = PATH_DURATION_MS + DECK_DURATION_S * 1000;
 
     for (let elapsed = 0; elapsed <= end + TERMINAL_HOLD_MS + 200; elapsed += 25) {
       const scene = buildLaneScene(phaseAt(sequence, elapsed), replay, PATH, POST_SCORE_RACK);
@@ -236,8 +241,8 @@ describe('buildLaneScene — the deck', () => {
 
   it('keeps the terminal positions visible for the whole hold', () => {
     const replay = accepted(fullRackReplay());
-    const sequence = { replay };
-    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const sequence = { replay, path: PATH };
+    const end = PATH_DURATION_MS + DECK_DURATION_S * 1000;
 
     const atTerminal = buildLaneScene(phaseAt(sequence, end), replay, PATH, POST_SCORE_RACK);
     const midHold = buildLaneScene(
@@ -305,8 +310,8 @@ describe('buildLaneScene — standing_pin_ids is not read until the handoff', ()
     // The strongest form of the claim: vary the rack wildly and every scene
     // before the terminal-to-static transition must be byte-identical.
     const replay = accepted(fullRackReplay());
-    const sequence = { replay };
-    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const sequence = { replay, path: PATH };
+    const end = PATH_DURATION_MS + DECK_DURATION_S * 1000;
     const racks = [[], [1, 2, 3], [5, 9, 10], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]];
 
     for (let elapsed = 0; elapsed < end + TERMINAL_HOLD_MS; elapsed += 50) {
@@ -321,8 +326,8 @@ describe('buildLaneScene — standing_pin_ids is not read until the handoff', ()
 
   it('does read it immediately after the hold ends', () => {
     const replay = accepted(fullRackReplay());
-    const sequence = { replay };
-    const after = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000 + TERMINAL_HOLD_MS;
+    const sequence = { replay, path: PATH };
+    const after = PATH_DURATION_MS + DECK_DURATION_S * 1000 + TERMINAL_HOLD_MS;
     const phase = phaseAt(sequence, after);
 
     expect(buildLaneScene(phase, replay, PATH, [1, 2, 3]).pins).toEqual({
@@ -356,8 +361,8 @@ describe('buildLaneScene — second ball and fresh rack', () => {
   it('hands back to the fresh ten only after the sequence completes', () => {
     const replay = accepted(partialRackReplay());
     const freshRack = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-    const sequence = { replay };
-    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const sequence = { replay, path: PATH };
+    const end = PATH_DURATION_MS + DECK_DURATION_S * 1000;
 
     const duringHold = buildLaneScene(
       phaseAt(sequence, end + TERMINAL_HOLD_MS / 2),
@@ -497,8 +502,8 @@ describe('buildLaneScene — v4 threshold crossings', () => {
 
   it('still holds the crossed pin through the terminal hold', () => {
     const replay = acceptedCrossing();
-    const sequence = { replay };
-    const end = TRAJECTORY_ANIMATION_DURATION_MS + DECK_DURATION_S * 1000;
+    const sequence = { replay, path: PATH };
+    const end = PATH_DURATION_MS + DECK_DURATION_S * 1000;
     const held = buildLaneScene(
       phaseAt(sequence, end + TERMINAL_HOLD_MS / 2),
       replay,

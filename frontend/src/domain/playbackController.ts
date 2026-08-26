@@ -13,9 +13,11 @@
  *
  * ## Two phases, one clock
  *
- * - **Path** — `TRAJECTORY_ANIMATION_DURATION_MS` of eased progress
- *   through the server's recorded path points. A fixed visual duration,
- *   not real ball-travel time (see `trajectoryAnimation.ts`).
+ * - **Path** — eased progress through the server's recorded path points,
+ *   over a duration derived from that same path's own final `elapsed_s`
+ *   (see `pathAnimationDurationMs` in `trajectoryAnimation.ts`) — a named
+ *   display scale of real server time, clamped to a usable range, not a
+ *   fixed number every throw shares and not real ball-travel time either.
  * - **Deck** — the collision replay, played from its own `t_s` timestamps
  *   at **1x simulation time**: one second of recorded simulation takes one
  *   second on screen. Unlike the path phase this *is* a real timing
@@ -27,9 +29,9 @@
  * existed.
  */
 
-import type { CollisionReplayResponse } from '../api/types';
+import type { CollisionReplayResponse, TrajectoryPointResponse } from '../api/types';
 import { replayDurationS } from './collisionReplay';
-import { TRAJECTORY_ANIMATION_DURATION_MS } from './trajectoryAnimation';
+import { pathAnimationDurationMs } from './trajectoryAnimation';
 
 const MS_PER_S = 1000;
 
@@ -80,6 +82,11 @@ export type PlaybackPhase =
 export const SETTLED: PlaybackPhase = { kind: 'settled' };
 
 export interface PlaybackSequence {
+  /** The completed throw's own recorded path. Its final `elapsed_s` is
+   * what `pathAnimationDurationMs` derives the path phase's duration
+   * from — see the module docstring. Empty for a settled/no-throw
+   * state, where nothing is playing anyway. */
+  path: readonly TrajectoryPointResponse[];
   /** Null when this throw has no playable deck phase. */
   replay: CollisionReplayResponse | null;
 }
@@ -90,7 +97,7 @@ export function sequenceDurationMs(sequence: PlaybackSequence): number {
   const deckMs = sequence.replay
     ? replayDurationS(sequence.replay) * MS_PER_S + TERMINAL_HOLD_MS
     : 0;
-  return TRAJECTORY_ANIMATION_DURATION_MS + deckMs;
+  return pathAnimationDurationMs(sequence.path) + deckMs;
 }
 
 /**
@@ -98,18 +105,21 @@ export function sequenceDurationMs(sequence: PlaybackSequence): number {
  * answer, no clock of its own.
  *
  * The boundary is deliberately inclusive-at-the-end for the path phase —
- * at exactly `TRAJECTORY_ANIMATION_DURATION_MS` the ball has just reached
- * the headpin plane, which is also the deck replay's own `t_s = 0`. Both
- * describe the same instant, so the handoff has no gap and no jump.
+ * at exactly this sequence's own `pathAnimationDurationMs(sequence.path)`
+ * the ball has just reached the headpin plane, which is also the deck
+ * replay's own `t_s = 0`. Both describe the same instant, so the handoff
+ * has no gap and no jump, whatever that duration happens to be for this
+ * particular throw.
  */
 export function phaseAt(sequence: PlaybackSequence, elapsedMs: number): PlaybackPhase {
-  if (elapsedMs < TRAJECTORY_ANIMATION_DURATION_MS) {
-    return { kind: 'path', progress: Math.max(0, elapsedMs) / TRAJECTORY_ANIMATION_DURATION_MS };
+  const pathMs = pathAnimationDurationMs(sequence.path);
+  if (elapsedMs < pathMs) {
+    return { kind: 'path', progress: Math.max(0, elapsedMs) / pathMs };
   }
   if (!sequence.replay) {
     return SETTLED;
   }
-  const deckMs = elapsedMs - TRAJECTORY_ANIMATION_DURATION_MS;
+  const deckMs = elapsedMs - pathMs;
   const durationS = replayDurationS(sequence.replay);
   const tS = deckMs / MS_PER_S;
   if (tS < durationS) {

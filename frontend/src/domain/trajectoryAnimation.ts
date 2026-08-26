@@ -18,17 +18,45 @@
  * late ones matches the physics that produced them, rather than treating
  * every recorded segment as if it took the same slice of the animation.
  *
- * The total playback length is still `TRAJECTORY_ANIMATION_DURATION_MS`,
- * a fixed visual constant — not real ball-travel time. Progress in [0, 1]
- * is scaled against the path's own final `elapsed_s`, so this is display
- * scaling of the server's real time, never a fabricated client clock.
+ * The path phase's own *duration* is likewise derived from the path's
+ * final `elapsed_s` (see `pathAnimationDurationMs`) rather than fixed —
+ * a throw the server simulated as taking longer plays back longer, one
+ * that reached the pins faster plays back faster. This is a deliberate,
+ * named DISPLAY SCALE of that real time (`PATH_ANIMATION_MS_PER_ELAPSED_SECOND`),
+ * clamped to a usable on-screen range — never real ball-travel time, and
+ * never a fabricated client clock: every millisecond of it still traces
+ * back to the server's own `elapsed_s`.
  */
 
 import type { GameThrowResponse, TrajectoryPointResponse } from '../api/types';
 
-/** Visual playback duration only — not calibrated to any real ball speed
- * or the throw's own `speed_at_pins_mph`. See the module docstring. */
-export const TRAJECTORY_ANIMATION_DURATION_MS = 900;
+/** Milliseconds of on-screen path-phase animation per second of the
+ * server's real, recorded `elapsed_s`. A deliberate DISPLAY scale, not a
+ * claim that playback runs at real ball-travel speed — see the module
+ * docstring. Chosen so the legal release envelope's real travel time
+ * (roughly 1.6s for the fastest legal throw to 4.2s for the slowest,
+ * house shot, per `backend/app/physics/throw.py`'s `RELEASE_BOUNDS`)
+ * maps to a comfortably snappy ~500ms-1250ms of screen time — inside the
+ * clamp below on every legal throw, which exists as a guard against a
+ * future physics change or malformed path, not a bound ordinary throws
+ * are expected to hit. */
+export const PATH_ANIMATION_MS_PER_ELAPSED_SECOND = 300;
+
+/** Floor and ceiling on the path phase's on-screen duration. */
+export const MIN_PATH_ANIMATION_MS = 400;
+export const MAX_PATH_ANIMATION_MS = 1600;
+
+/** The path phase's on-screen duration for a completed throw's `path`,
+ * derived from the server's own recorded `elapsed_s` at the final
+ * sample — never the same fixed number for every throw. An empty path
+ * (no completed throw) returns the floor; nothing schedules an
+ * animation over an empty path in practice, so this only avoids a
+ * degenerate zero/NaN duration rather than describing a real case. */
+export function pathAnimationDurationMs(path: readonly TrajectoryPointResponse[]): number {
+  const finalElapsedS = path.length > 0 ? path[path.length - 1].elapsed_s : 0;
+  const scaled = finalElapsedS * PATH_ANIMATION_MS_PER_ELAPSED_SECOND;
+  return Math.min(MAX_PATH_ANIMATION_MS, Math.max(MIN_PATH_ANIMATION_MS, scaled));
+}
 
 export interface PathPosition {
   board: number;

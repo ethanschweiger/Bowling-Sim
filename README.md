@@ -452,13 +452,19 @@ percentages, leave tracking, ball usage stats.
   initial load; if the server loses that game later while the tab stays
   open, that's caught only reactively, on the next throw/reset attempt,
   not via a continuous background check.
-- Each `path` point now carries the backend's own observed `elapsed_s`
-  (real simulation time since release), and the animation paces its
-  interpolation between points by that recorded time rather than by
-  point count. The *total* playback length is still a fixed 900ms eased
-  duration, not calibrated to the throw's own speed or true travel
-  time — `elapsed_s` scales *within* that fixed window, it does not
-  replace it.
+- Each `path` point carries the backend's own observed `elapsed_s` (real
+  simulation time since release). The animation both interpolates between
+  points by that recorded time rather than by point count, *and* derives
+  the path phase's total on-screen duration from each throw's own final
+  `elapsed_s` — a throw the server simulated as travelling longer plays
+  back longer, one that reached the pins faster plays back faster; it is
+  no longer the same fixed number for every throw. That mapping is a
+  deliberate, named display scale
+  (`PATH_ANIMATION_MS_PER_ELAPSED_SECOND` in
+  `frontend/src/domain/trajectoryAnimation.ts`), clamped to a usable
+  on-screen range (`MIN_PATH_ANIMATION_MS`-`MAX_PATH_ANIMATION_MS`) — real
+  travel time is on the order of 1.6-4.2 seconds, and this plays it back
+  in well under a second, so it is still not literal real-time playback.
 - A 10th-frame bonus ball that lands on a fresh rack after an opening
   strike displays its own plain pin count rather than a synthesized "X"
   glyph — deriving that would mean the frontend re-deriving a rack rule

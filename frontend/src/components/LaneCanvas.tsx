@@ -219,7 +219,11 @@ export function LaneCanvas({
       return;
     }
     onPlaybackStarted();
-    controller.start({ replay }, prefersReducedMotion(), onPlaybackCompleted);
+    // `action.path` (narrowed to the 'start' variant by the checks above)
+    // is this decision's own path -- the same one the path phase's
+    // duration is derived from -- rather than re-reading `latestThrowPath`
+    // out of the surrounding closure.
+    controller.start({ replay, path: action.path }, prefersReducedMotion(), onPlaybackCompleted);
   }, [latestThrowPath, onPlaybackCompleted, onPlaybackStarted, requestPending, replayCount, replay]);
 
   // What to draw is decided by `buildLaneScene` — one place, testable

@@ -4,9 +4,13 @@ import {
   decidePlaybackAction,
   easeOutCubic,
   INITIAL_PLAYBACK_STATE,
+  MAX_PATH_ANIMATION_MS,
+  MIN_PATH_ANIMATION_MS,
+  PATH_ANIMATION_MS_PER_ELAPSED_SECOND,
   planPlaybackTransition,
   initialAnimationProgress,
   interpolatePathPosition,
+  pathAnimationDurationMs,
   pathLowerIndexAtProgress,
   trajectoryEndpoint,
   type PlaybackState,
@@ -108,6 +112,80 @@ describe('pathLowerIndexAtProgress', () => {
   it('returns 0 for a path too short to have a segment', () => {
     expect(pathLowerIndexAtProgress([], 0.5)).toBe(0);
     expect(pathLowerIndexAtProgress([{ distance_ft: 0, board: 20, elapsed_s: 0 }], 0.5)).toBe(0);
+  });
+});
+
+describe('pathAnimationDurationMs', () => {
+  // The core regression this module exists to fix: the path phase's
+  // on-screen duration must come from each throw's own recorded
+  // elapsed_s, not be the same fixed number for every throw.
+  it('produces a different duration for two paths with different final elapsed_s', () => {
+    const fast = [
+      { distance_ft: 0, board: 20, elapsed_s: 0 },
+      { distance_ft: 60, board: 18, elapsed_s: 1.65 },
+    ];
+    const slow = [
+      { distance_ft: 0, board: 20, elapsed_s: 0 },
+      { distance_ft: 60, board: 18, elapsed_s: 4.17 },
+    ];
+    const fastMs = pathAnimationDurationMs(fast);
+    const slowMs = pathAnimationDurationMs(slow);
+
+    expect(slowMs).toBeGreaterThan(fastMs);
+    // Ordinary, unclamped values: this proves the difference is real
+    // scaling, not two different sides of the same clamp.
+    expect(fastMs).toBeCloseTo(1.65 * PATH_ANIMATION_MS_PER_ELAPSED_SECOND);
+    expect(slowMs).toBeCloseTo(4.17 * PATH_ANIMATION_MS_PER_ELAPSED_SECOND);
+  });
+
+  it('scales linearly with the final recorded elapsed_s inside the clamp', () => {
+    const pathWithElapsed = (elapsedS: number) => [
+      { distance_ft: 0, board: 20, elapsed_s: 0 },
+      { distance_ft: 60, board: 18, elapsed_s: elapsedS },
+    ];
+    expect(pathAnimationDurationMs(pathWithElapsed(2))).toBeCloseTo(
+      2 * PATH_ANIMATION_MS_PER_ELAPSED_SECOND,
+    );
+    expect(pathAnimationDurationMs(pathWithElapsed(3))).toBeCloseTo(
+      3 * PATH_ANIMATION_MS_PER_ELAPSED_SECOND,
+    );
+  });
+
+  it('clamps a pathologically short elapsed time to the floor', () => {
+    const nearInstant = [
+      { distance_ft: 0, board: 20, elapsed_s: 0 },
+      { distance_ft: 60, board: 18, elapsed_s: 0.05 },
+    ];
+    expect(pathAnimationDurationMs(nearInstant)).toBe(MIN_PATH_ANIMATION_MS);
+  });
+
+  it('clamps a pathologically long elapsed time to the ceiling', () => {
+    const glacial = [
+      { distance_ft: 0, board: 20, elapsed_s: 0 },
+      { distance_ft: 60, board: 18, elapsed_s: 30 },
+    ];
+    expect(pathAnimationDurationMs(glacial)).toBe(MAX_PATH_ANIMATION_MS);
+  });
+
+  it('returns the floor for an empty path', () => {
+    expect(pathAnimationDurationMs([])).toBe(MIN_PATH_ANIMATION_MS);
+  });
+
+  it('stays inside the clamp for the full legal release-speed envelope', () => {
+    // 1.648s (fastest legal release) to 4.165s (slowest) -- the real
+    // house-shot range from backend/app/physics/simulate.py's
+    // simulate_throw across RELEASE_BOUNDS. Every legal throw's duration
+    // should land here on its own, not because the clamp caught it.
+    const fastest = pathAnimationDurationMs([
+      { distance_ft: 0, board: 20, elapsed_s: 0 },
+      { distance_ft: 60, board: 18, elapsed_s: 1.648 },
+    ]);
+    const slowest = pathAnimationDurationMs([
+      { distance_ft: 0, board: 20, elapsed_s: 0 },
+      { distance_ft: 60, board: 18, elapsed_s: 4.165 },
+    ]);
+    expect(fastest).toBeGreaterThan(MIN_PATH_ANIMATION_MS);
+    expect(slowest).toBeLessThan(MAX_PATH_ANIMATION_MS);
   });
 });
 
