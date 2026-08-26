@@ -74,15 +74,37 @@ def test_legacy_throw_route_uses_the_same_dependency_and_keeps_legacy_default_be
     same get_game_service dependency -- overriding it redirects
     LEGACY_GAME_ID into the override's own service, and the route's own
     lazily-created-shared-game behavior (get_or_create) still works
-    against that substituted service."""
+    against that substituted service.
+
+    Compares default_game_service's own LEGACY_GAME_ID entry by identity
+    before and after, rather than asserting it's absent: other test files
+    in this suite (test_throws.py's reset_lane fixture) legitimately call
+    default_game_service.get_or_create(LEGACY_GAME_ID) too, so that entry
+    may already exist before this test ever runs, depending on file/test
+    order within one pytest process -- combining files in a specific
+    order (as the project's own required verification commands do) can
+    make that happen before this test does. Whether it exists already or
+    not, the property this test actually needs to prove is that this
+    request left it completely untouched: identical object identity
+    before and after proves exactly that, in either case. Asserting
+    absence outright was never a guarantee the override working
+    correctly could make on its own -- it depended on default_game_service
+    never having been touched by anything else in the same process,
+    which this suite doesn't promise.
+    """
     test_service = GameService()
     monkeypatch.setitem(app.dependency_overrides, get_game_service, lambda: test_service)
+
+    real_session_before = default_game_service._repository.get(LEGACY_GAME_ID)
 
     response = client.post("/api/v1/simulations/throws", json=THROW_PAYLOAD)
     assert response.status_code == 200
 
     assert test_service.get_game(LEGACY_GAME_ID) is not None
-    assert LEGACY_GAME_ID not in default_game_service._repository._games
+    # Whatever the real default_game_service held for LEGACY_GAME_ID
+    # before this request (None, or some earlier test's own session) is
+    # exactly what it still holds after -- this request never touched it.
+    assert default_game_service._repository.get(LEGACY_GAME_ID) is real_session_before
 
 
 def test_game_service_and_default_game_service_still_use_in_memory_repository():
