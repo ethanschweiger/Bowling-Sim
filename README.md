@@ -452,10 +452,13 @@ percentages, leave tracking, ball usage stats.
   initial load; if the server loses that game later while the tab stays
   open, that's caught only reactively, on the next throw/reset attempt,
   not via a continuous background check.
-- The trajectory animation's timing is visual only (a fixed 900ms eased
-  duration), not calibrated to the throw's own speed or travel time —
-  `path` points are recorded at fixed downlane-*distance* steps, not
-  fixed time steps, so there's no per-point timestamp to animate against.
+- Each `path` point now carries the backend's own observed `elapsed_s`
+  (real simulation time since release), and the animation paces its
+  interpolation between points by that recorded time rather than by
+  point count. The *total* playback length is still a fixed 900ms eased
+  duration, not calibrated to the throw's own speed or true travel
+  time — `elapsed_s` scales *within* that fixed window, it does not
+  replace it.
 - A 10th-frame bonus ball that lands on a fresh rack after an opening
   strike displays its own plain pin count rather than a synthesized "X"
   glyph — deriving that would mean the frontend re-deriving a rack rule

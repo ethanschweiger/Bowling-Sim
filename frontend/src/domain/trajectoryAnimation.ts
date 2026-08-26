@@ -7,11 +7,21 @@
  * computed, not a second physics simulation: it interpolates *between*
  * the exact points `path` already contains, and never invents, decays,
  * or recalculates a trajectory of its own. `path` points are recorded at
- * fixed downlane-distance steps (`STEP_FT` in
- * `backend/app/physics/simulate.py`), not at fixed time steps — there is
- * no per-point timestamp to animate against. So "progress" here is a
- * fraction of the path's own point sequence over one fixed, documented
- * visual playback duration, not a reproduction of real ball-travel time.
+ * fixed downlane-distance steps (`PATH_SAMPLE_FT` in
+ * `backend/app/physics/simulate.py`), so they are unevenly spaced in
+ * *time* — the ball covers each foot more slowly as it decelerates, so
+ * later samples sit further apart in `elapsed_s` than earlier ones even
+ * though they're the same distance apart. Each point now carries that
+ * real, server-observed `elapsed_s`, so "progress" is mapped through
+ * those recorded time fractions, not through raw index position: a
+ * ball's on-screen pace through the fast early samples and the slower
+ * late ones matches the physics that produced them, rather than treating
+ * every recorded segment as if it took the same slice of the animation.
+ *
+ * The total playback length is still `TRAJECTORY_ANIMATION_DURATION_MS`,
+ * a fixed visual constant — not real ball-travel time. Progress in [0, 1]
+ * is scaled against the path's own final `elapsed_s`, so this is display
+ * scaling of the server's real time, never a fabricated client clock.
  */
 
 import type { GameThrowResponse, TrajectoryPointResponse } from '../api/types';
@@ -25,10 +35,40 @@ export interface PathPosition {
   distanceFt: number;
 }
 
+/** The index of the recorded path point that starts the segment
+ * containing a normalized `progress`'s target simulation time — the
+ * boundary between "fully behind the ball" and "currently interpolating"
+ * samples. `progress` is scaled against the path's own final `elapsed_s`
+ * to get that target time, then this scans for the two recorded points
+ * whose `elapsed_s` straddle it; the path is monotonically increasing in
+ * `elapsed_s` (a server invariant — see `simulate_throw`), so one forward
+ * scan suffices, with no assumption of even time or index spacing.
+ *
+ * Exported so `LaneCanvas`'s partial-polyline draw and
+ * `interpolatePathPosition`'s own segment lookup agree on exactly the
+ * same boundary — computing it twice by different rules is exactly how
+ * the drawn line and the interpolated ball position could disagree. */
+export function pathLowerIndexAtProgress(path: readonly TrajectoryPointResponse[], progress: number): number {
+  if (path.length < 2) {
+    return 0;
+  }
+  const clamped = Math.max(0, Math.min(1, progress));
+  const targetElapsedS = clamped * path[path.length - 1].elapsed_s;
+
+  let lowerIndex = 0;
+  while (lowerIndex < path.length - 2 && path[lowerIndex + 1].elapsed_s <= targetElapsedS) {
+    lowerIndex += 1;
+  }
+  return lowerIndex;
+}
+
 /** Interpolates a position along `path` at a normalized `progress` in
- * [0, 1] — 0 is exactly the first recorded point, 1 is exactly the last,
- * everything between is a straight line between the two nearest recorded
- * points. `progress` outside [0, 1] clamps to the nearer endpoint. */
+ * [0, 1] — 0 is exactly the first recorded point, 1 is exactly the last.
+ * `progress` is mapped through each point's real `elapsed_s` rather than
+ * its index (see `pathLowerIndexAtProgress`), then linearly interpolated
+ * between the two recorded points that straddle the resulting target
+ * simulation time. `progress` outside [0, 1] clamps to the nearer
+ * endpoint. */
 export function interpolatePathPosition(path: readonly TrajectoryPointResponse[], progress: number): PathPosition {
   if (path.length === 0) {
     return { board: 0, distanceFt: 0 };
@@ -38,12 +78,15 @@ export function interpolatePathPosition(path: readonly TrajectoryPointResponse[]
   }
 
   const clamped = Math.max(0, Math.min(1, progress));
-  const scaled = clamped * (path.length - 1);
-  const lowerIndex = Math.floor(scaled);
-  const upperIndex = Math.min(lowerIndex + 1, path.length - 1);
-  const localT = scaled - lowerIndex;
+  const targetElapsedS = clamped * path[path.length - 1].elapsed_s;
+  const lowerIndex = pathLowerIndexAtProgress(path, clamped);
   const lower = path[lowerIndex];
-  const upper = path[upperIndex];
+  const upper = path[lowerIndex + 1];
+
+  const segmentDurationS = upper.elapsed_s - lower.elapsed_s;
+  // A zero-duration segment shouldn't occur in a real server path, but
+  // guards against dividing by zero rather than producing NaN.
+  const localT = segmentDurationS > 0 ? (targetElapsedS - lower.elapsed_s) / segmentDurationS : 1;
 
   return {
     board: lower.board + (upper.board - lower.board) * localT,

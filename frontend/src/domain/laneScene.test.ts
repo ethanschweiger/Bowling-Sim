@@ -83,9 +83,9 @@ function partialRackReplay(): CollisionReplayResponse {
 }
 
 const PATH: readonly TrajectoryPointResponse[] = [
-  { distance_ft: 0, board: 28 },
-  { distance_ft: 30, board: 22 },
-  { distance_ft: 60, board: 17 },
+  { distance_ft: 0, board: 28, elapsed_s: 0 },
+  { distance_ft: 30, board: 22, elapsed_s: 1.5 },
+  { distance_ft: 60, board: 17, elapsed_s: 3 },
 ];
 
 // Deliberately disagrees with every replay above: pin 1 is gone and pins 5

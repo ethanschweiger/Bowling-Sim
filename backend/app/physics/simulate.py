@@ -232,11 +232,22 @@ DISTANCE_EPSILON_FT = 1e-9
 BOARD_DECIMALS = 3
 DISTANCE_DECIMALS = 2
 
+# Same idea for elapsed simulation time: milliseconds-equivalent precision
+# on the one accumulated `elapsed_s` value, rounded once when a sample is
+# recorded rather than independently at each consumer.
+TIME_DECIMALS = 3
+
 
 @dataclass(frozen=True)
 class TrajectoryPoint:
     distance_ft: float
     board: float
+    # Real accumulated simulation time (seconds since release) at the
+    # moment this sample was recorded — observed from the same `dt` the
+    # integration loop already advances by, never a second timing model.
+    # Defaulted so existing direct constructions (fixtures, tests built
+    # before this field existed) keep working unchanged.
+    elapsed_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -264,6 +275,11 @@ class TerminalState:
     heading_deg: float
     speed_mph: float
     reached_pin_deck: bool
+    # Unrounded accumulated simulation time at this endpoint — the same
+    # canonical source `elapsed_s` on the final recorded `TrajectoryPoint`
+    # is a rounded view of. Defaulted for the same backward-compatibility
+    # reason as `TrajectoryPoint.elapsed_s`.
+    elapsed_s: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -358,8 +374,9 @@ def simulate_throw(
         return launch_board + ft_to_boards(offset_ft)
 
     board = board_from_offset(lateral_offset_ft)
-    path = [TrajectoryPoint(distance_ft=0.0, board=round(board, BOARD_DECIMALS))]
+    path = [TrajectoryPoint(distance_ft=0.0, board=round(board, BOARD_DECIMALS), elapsed_s=0.0)]
     distance = 0.0
+    elapsed_s = 0.0
     steps = 0
     length_ft = lane_condition.length_ft
     max_steps = step_cap_for(length_ft, active_step_ft)
@@ -389,6 +406,9 @@ def simulate_throw(
 
         friction = lane_condition.friction_at(distance, board)
         dt = this_step_ft / forward_velocity_fps  # ft / (ft/s) = s — consistent units throughout
+        # The same dt every velocity update below already uses — observed
+        # simulation time, not a second clock invented for display.
+        elapsed_s += dt
 
         forward_velocity_fps = max(
             0.0, forward_velocity_fps - friction * FORWARD_DRAG * forward_velocity_fps * dt
@@ -461,6 +481,7 @@ def simulate_throw(
                 TrajectoryPoint(
                     distance_ft=round(distance, DISTANCE_DECIMALS),
                     board=round(board, BOARD_DECIMALS),
+                    elapsed_s=round(elapsed_s, TIME_DECIMALS),
                 )
             )
             while next_sample_ft <= distance + DISTANCE_EPSILON_FT:
@@ -478,6 +499,7 @@ def simulate_throw(
         heading_deg=entry_angle,
         speed_mph=fps_to_mph(forward_velocity_fps),
         reached_pin_deck=distance >= length_ft - pin_deck_tolerance_for(active_step_ft),
+        elapsed_s=elapsed_s,
     )
 
     return SimulationResult(

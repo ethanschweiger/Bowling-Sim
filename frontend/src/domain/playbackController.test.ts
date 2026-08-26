@@ -514,8 +514,8 @@ describe('preloaded mount lifecycle', () => {
   // the defect actually lived.
 
   const PATH = [
-    { distance_ft: 0, board: 28 },
-    { distance_ft: 60, board: 17 },
+    { distance_ft: 0, board: 28, elapsed_s: 0 },
+    { distance_ft: 60, board: 17, elapsed_s: 3 },
   ];
   const PRELOADED: PlaybackState = { latestThrowPath: PATH, isBusy: false, replayCount: 0 };
 

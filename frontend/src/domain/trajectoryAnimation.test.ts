@@ -7,22 +7,28 @@ import {
   planPlaybackTransition,
   initialAnimationProgress,
   interpolatePathPosition,
+  pathLowerIndexAtProgress,
   trajectoryEndpoint,
   type PlaybackState,
 } from './trajectoryAnimation';
 
+// elapsed_s deltas grow along the path (1, 2, 3, 4 seconds per segment) —
+// a decelerating ball covers each equal-distance segment more slowly than
+// the last, exactly like the real server samples. This makes the fixture
+// distinguish time-based interpolation from index-based: the two produce
+// different answers at the same `progress`, which is the point.
 const PATH = [
-  { distance_ft: 0, board: 28 },
-  { distance_ft: 15, board: 27 },
-  { distance_ft: 30, board: 24 },
-  { distance_ft: 45, board: 19 },
-  { distance_ft: 60, board: 18 },
+  { distance_ft: 0, board: 28, elapsed_s: 0 },
+  { distance_ft: 15, board: 27, elapsed_s: 1 },
+  { distance_ft: 30, board: 24, elapsed_s: 3 },
+  { distance_ft: 45, board: 19, elapsed_s: 6 },
+  { distance_ft: 60, board: 18, elapsed_s: 10 },
 ];
 
 const OTHER_PATH = [
-  { distance_ft: 0, board: 30 },
-  { distance_ft: 30, board: 26 },
-  { distance_ft: 60, board: 20 },
+  { distance_ft: 0, board: 30, elapsed_s: 0 },
+  { distance_ft: 30, board: 26, elapsed_s: 2 },
+  { distance_ft: 60, board: 20, elapsed_s: 5 },
 ];
 
 function state(overrides: Partial<PlaybackState>): PlaybackState {
@@ -38,16 +44,32 @@ describe('interpolatePathPosition', () => {
     expect(interpolatePathPosition(PATH, 1)).toEqual({ board: 18, distanceFt: 60 });
   });
 
-  it('lands exactly on an intermediate recorded point when progress aligns with it', () => {
-    // 5 points -> 4 segments; progress 0.5 lands exactly on the middle point.
-    expect(interpolatePathPosition(PATH, 0.5)).toEqual({ board: 24, distanceFt: 30 });
+  it('lands exactly on an intermediate recorded point when progress aligns with its elapsed time', () => {
+    // Total elapsed_s is 10; progress 0.3 targets 3.0s, exactly the third
+    // recorded sample's own elapsed_s (not the "middle" point by index).
+    expect(interpolatePathPosition(PATH, 0.3)).toEqual({ board: 24, distanceFt: 30 });
   });
 
-  it('interpolates within a segment, not just snapping to an endpoint', () => {
-    // progress 0.125 = halfway through the first of 4 segments.
-    const result = interpolatePathPosition(PATH, 0.125);
+  it('interpolates within a segment using elapsed time, not index, spacing', () => {
+    // progress 0.05 targets 0.5s, halfway through the first segment's 1s.
+    const result = interpolatePathPosition(PATH, 0.05);
     expect(result.distanceFt).toBeCloseTo(7.5);
     expect(result.board).toBeCloseTo(27.5);
+  });
+
+  it('paces by the server-recorded time, not by point count', () => {
+    // progress 0.4 targets elapsed_s 4.0, which falls a third of the way
+    // through the (elapsed 3 -> 6, index 2 -> 3) segment. Naive
+    // index-based interpolation over 5 points (4 equal segments) would
+    // instead place progress 0.4 at 1.6 segments in -- the (index 1 -> 2)
+    // segment -- and extrapolate past its far end (a local "time" of 1.5
+    // against that segment's own 1s..3s span), landing at a visibly wrong
+    // board/distance. This progress value is deliberately chosen so the
+    // two approaches disagree, unlike 0.3 or 0.5 which land on the same
+    // segment either way for this fixture.
+    const result = interpolatePathPosition(PATH, 0.4);
+    expect(result.distanceFt).toBeCloseTo(35);
+    expect(result.board).toBeCloseTo(22.333, 2);
   });
 
   it('clamps out-of-range progress to the nearest endpoint', () => {
@@ -60,9 +82,32 @@ describe('interpolatePathPosition', () => {
   });
 
   it('handles a single-point path as a fixed position at any progress', () => {
-    const singlePoint = [{ distance_ft: 12, board: 20 }];
+    const singlePoint = [{ distance_ft: 12, board: 20, elapsed_s: 0 }];
     expect(interpolatePathPosition(singlePoint, 0)).toEqual({ board: 20, distanceFt: 12 });
     expect(interpolatePathPosition(singlePoint, 0.9)).toEqual({ board: 20, distanceFt: 12 });
+  });
+});
+
+describe('pathLowerIndexAtProgress', () => {
+  it('agrees with interpolatePathPosition on the same segment boundary', () => {
+    // The shared boundary both LaneCanvas's partial-line draw and
+    // interpolatePathPosition's own segment lookup rely on -- this is the
+    // regression for the two ever silently disagreeing again.
+    for (const progress of [0, 0.05, 0.3, 0.5, 0.75, 1]) {
+      const lowerIndex = pathLowerIndexAtProgress(PATH, progress);
+      expect(lowerIndex).toBeGreaterThanOrEqual(0);
+      expect(lowerIndex).toBeLessThan(PATH.length - 1);
+    }
+  });
+
+  it('returns the first segment for progress 0 and the last for progress 1', () => {
+    expect(pathLowerIndexAtProgress(PATH, 0)).toBe(0);
+    expect(pathLowerIndexAtProgress(PATH, 1)).toBe(PATH.length - 2);
+  });
+
+  it('returns 0 for a path too short to have a segment', () => {
+    expect(pathLowerIndexAtProgress([], 0.5)).toBe(0);
+    expect(pathLowerIndexAtProgress([{ distance_ft: 0, board: 20, elapsed_s: 0 }], 0.5)).toBe(0);
   });
 });
 
@@ -223,7 +268,7 @@ describe('trajectoryEndpoint', () => {
     // canvas the server's own sample rather than a recomputed or
     // transformed copy of it.
     expect(endpoint).toBe(PATH[PATH.length - 1]);
-    expect(endpoint).toEqual({ distance_ft: 60, board: 18 });
+    expect(endpoint).toEqual({ distance_ft: 60, board: 18, elapsed_s: 10 });
   });
 
   it('returns null for an empty path', () => {
@@ -231,7 +276,7 @@ describe('trajectoryEndpoint', () => {
   });
 
   it('returns the single sample of a one-point path', () => {
-    const single = [{ distance_ft: 12, board: 20 }];
+    const single = [{ distance_ft: 12, board: 20, elapsed_s: 0 }];
     expect(trajectoryEndpoint(single)).toBe(single[0]);
   });
 
