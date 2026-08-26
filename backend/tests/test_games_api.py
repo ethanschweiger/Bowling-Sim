@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.api.dependencies import get_game_service
 from app.api.routes.games import TRUNCATED_TRAJECTORY_DETAIL
 from app.games.service import (
     GameService,
@@ -312,14 +313,14 @@ def test_game_scoped_throw_and_reset_write_back_through_the_service(monkeypatch)
     through GameService.throw_in_game/reset_game (and therefore a
     repository write-back), not a direct session.throw()/reset() call
     that would silently skip it for a future persistent repository.
-    Exercises a temporary spy-wrapped GameService swapped into the games
-    route module for this test only -- default_game_service (used by the
-    rest of the suite) is never touched."""
-    import app.api.routes.games as games_route
-
+    Exercises a temporary spy-wrapped GameService substituted through
+    the get_game_service FastAPI dependency for this test only --
+    default_game_service (used by the rest of the suite) is never
+    touched. monkeypatch.setitem cleans the override up automatically
+    at teardown, the same as it would any other dict entry."""
     spy = _SpyRepository(InMemoryGameSessionRepository())
     temp_service = GameService(repository=spy)
-    monkeypatch.setattr(games_route, "default_game_service", temp_service)
+    monkeypatch.setitem(app.dependency_overrides, get_game_service, lambda: temp_service)
 
     created = client.post("/api/v1/games", json={})
     game_id = created.json()["game_id"]
