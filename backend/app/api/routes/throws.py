@@ -15,14 +15,15 @@ New clients should use `POST /api/v1/games` to get their own game, then
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.dependencies import get_game_service
 from app.api.routes.games import (
     pinfall_to_response,
     snapshot_to_game_state,
     truncated_trajectory_http_error,
 )
-from app.games.service import GameCompleteError, default_game_service
+from app.games.service import GameCompleteError, GameService
 from app.models.schemas import (
     ReleaseValues,
     ThrowRequest,
@@ -40,9 +41,15 @@ router = APIRouter(prefix="/simulations", tags=["simulations (deprecated)"])
 LEGACY_GAME_ID = "legacy-default"
 
 
+# See app/api/routes/games.py's identical comment above create_game for
+# why this Depends(...) default silences ruff's B008 rather than
+# avoiding it -- FastAPI's own dependency-injection convention, not a
+# real mutable-default bug.
 @router.post("/throws", response_model=ThrowResponse, deprecated=True)
-def create_throw(request: ThrowRequest) -> ThrowResponse:
-    session = default_game_service.get_or_create(LEGACY_GAME_ID)
+def create_throw(
+    request: ThrowRequest, service: GameService = Depends(get_game_service)  # noqa: B008
+) -> ThrowResponse:
+    session = service.get_or_create(LEGACY_GAME_ID)
 
     ball = BALL_CATALOG.get(request.ball_id)
     if ball is None:
@@ -63,7 +70,7 @@ def create_throw(request: ThrowRequest) -> ThrowResponse:
     # shared game exists; this is still the one place its mutation gets
     # written back through the repository.
     try:
-        result, pinfall, snapshot = default_game_service.throw_in_game(
+        result, pinfall, snapshot = service.throw_in_game(
             session,
             simulate=lambda condition: simulate_throw(ball, actual_throw, condition),
             resolve_pinfall=lambda sim_result, standing_ids: DEFAULT_PINFALL_MODEL.resolve(

@@ -10,6 +10,7 @@ docstring in `app/games/service.py` for the policy these tests pin.
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.dependencies import get_game_service
 from app.games.service import (
     DEFAULT_MAX_GAMES,
     GameService,
@@ -148,13 +149,13 @@ def test_retained_games_keep_independent_lane_and_score_state_after_a_sibling_is
 def test_evicted_game_returns_404_through_the_api(monkeypatch):
     """The API-level shape of eviction: exactly the existing "unknown
     game_id" 404, with no new error shape or code path. Exercises a
-    temporary, tightly capped `GameService` swapped into the games route
-    module for this test only -- `default_game_service` (used by the rest
-    of the suite, at its real 1000-game cap) is never touched."""
-    import app.api.routes.games as games_route
-
+    temporary, tightly capped `GameService` substituted through the
+    get_game_service FastAPI dependency for this test only --
+    `default_game_service` (used by the rest of the suite, at its real
+    1000-game cap) is never touched. monkeypatch.setitem cleans the
+    override up automatically at teardown."""
     temp_service = GameService(max_games=1)
-    monkeypatch.setattr(games_route, "default_game_service", temp_service)
+    monkeypatch.setitem(app.dependency_overrides, get_game_service, lambda: temp_service)
 
     first = client.post("/api/v1/games", json={})
     assert first.status_code == 201

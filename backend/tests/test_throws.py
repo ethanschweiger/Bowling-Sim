@@ -3,6 +3,7 @@ from dataclasses import asdict
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.dependencies import get_game_service
 from app.api.routes.games import TRUNCATED_TRAJECTORY_DETAIL
 from app.api.routes.throws import LEGACY_GAME_ID
 from app.games.service import (
@@ -183,12 +184,13 @@ def test_legacy_throw_route_writes_back_through_the_same_service_path(monkeypatc
     same write-back path the game-scoped route uses -- not a direct
     session.throw() call that would silently skip a future persistent
     repository's put(). get_or_create still ensures the shared game
-    exists; this only checks what happens after."""
-    import app.api.routes.throws as throws_route
-
+    exists; this only checks what happens after. Substitutes a
+    spy-wrapped GameService through the get_game_service FastAPI
+    dependency, cleaned up automatically at teardown via
+    monkeypatch.setitem."""
     spy = _SpyRepository(InMemoryGameSessionRepository())
     temp_service = GameService(repository=spy)
-    monkeypatch.setattr(throws_route, "default_game_service", temp_service)
+    monkeypatch.setitem(app.dependency_overrides, get_game_service, lambda: temp_service)
 
     response = client.post("/api/v1/simulations/throws", json=VALID_PAYLOAD)
 

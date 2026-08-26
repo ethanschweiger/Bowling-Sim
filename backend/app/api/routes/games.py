@@ -12,13 +12,14 @@ released (see `app.games.service`'s "Durable snapshots").
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.dependencies import get_game_service
 from app.games.service import (
     GameCompleteError,
+    GameService,
     GameStateSnapshot,
     UnknownGameError,
-    default_game_service,
 )
 from app.models.schemas import (
     CollisionReplayResponse,
@@ -153,9 +154,19 @@ def snapshot_to_game_state(snapshot: GameStateSnapshot) -> GameStateResponse:
     )
 
 
+# Ruff's flake8-bugbear flags `Depends(...)` as a mutable/impure default
+# argument (B008) -- correct advice in general, but FastAPI's own
+# dependency-injection convention *is* exactly this: `Depends(...)` in a
+# parameter default, evaluated once per request by FastAPI itself, never
+# at function-definition time. Every route below silences the same
+# false positive for the same reason -- see this comment for why, rather
+# than repeating the explanation at each occurrence.
 @router.post("", response_model=CreateGameResponse, status_code=201)
-def create_game(request: CreateGameRequest) -> CreateGameResponse:
-    session = default_game_service.create_game(oil_pattern=request.oil_pattern)
+def create_game(
+    request: CreateGameRequest,
+    service: GameService = Depends(get_game_service),  # noqa: B008
+) -> CreateGameResponse:
+    session = service.create_game(oil_pattern=request.oil_pattern)
     snapshot = session.current_snapshot()
     return CreateGameResponse(
         game_id=session.game_id,
@@ -165,9 +176,11 @@ def create_game(request: CreateGameRequest) -> CreateGameResponse:
 
 
 @router.get("/{game_id}", response_model=GameStatusResponse)
-def get_game(game_id: str) -> GameStatusResponse:
+def get_game(
+    game_id: str, service: GameService = Depends(get_game_service)  # noqa: B008
+) -> GameStatusResponse:
     try:
-        session = default_game_service.get_game(game_id)
+        session = service.get_game(game_id)
     except UnknownGameError:
         raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
@@ -180,9 +193,13 @@ def get_game(game_id: str) -> GameStatusResponse:
 
 
 @router.post("/{game_id}/throws", response_model=GameThrowResponse)
-def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
+def create_game_throw(
+    game_id: str,
+    request: ThrowRequest,
+    service: GameService = Depends(get_game_service),  # noqa: B008
+) -> GameThrowResponse:
     try:
-        session = default_game_service.get_game(game_id)
+        session = service.get_game(game_id)
     except UnknownGameError:
         raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
@@ -210,7 +227,7 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
     # written back through the repository afterward -- see that method's
     # own docstring.
     try:
-        result, pinfall, snapshot = default_game_service.throw_in_game(
+        result, pinfall, snapshot = service.throw_in_game(
             session,
             simulate=lambda condition: simulate_throw(ball, actual_throw, condition),
             resolve_pinfall=lambda sim_result, standing_ids: DEFAULT_PINFALL_MODEL.resolve(
@@ -242,16 +259,18 @@ def create_game_throw(game_id: str, request: ThrowRequest) -> GameThrowResponse:
 
 
 @router.post("/{game_id}/reset", response_model=GameResetResponse)
-def reset_game(game_id: str) -> GameResetResponse:
+def reset_game(
+    game_id: str, service: GameService = Depends(get_game_service)  # noqa: B008
+) -> GameResetResponse:
     try:
-        session = default_game_service.get_game(game_id)
+        session = service.get_game(game_id)
     except UnknownGameError:
         raise HTTPException(status_code=404, detail=f"Unknown game_id '{game_id}'") from None
 
     # Routed through GameService.reset_game so the mutated session is
     # written back through the repository afterward -- see that method's
     # own docstring.
-    condition, snapshot = default_game_service.reset_game(session)
+    condition, snapshot = service.reset_game(session)
     return GameResetResponse(
         game_id=game_id,
         lane_condition_version=condition.version,
