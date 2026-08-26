@@ -40,7 +40,13 @@ def test_throw_request_seed_accepts_and_serializes_none():
 
 def test_frame_state_response_score_accepts_and_serializes_none():
     frame = FrameStateResponse(
-        number=1, rolls=[10], is_strike=True, is_spare=False, is_complete=True, score=None
+        number=1,
+        rolls=[10],
+        is_strike=True,
+        is_spare=False,
+        is_complete=True,
+        score=None,
+        roll_symbols=["X"],
     )
     assert frame.score is None
     assert '"score":null' in frame.model_dump_json()
@@ -51,7 +57,13 @@ def test_frame_state_response_score_accepts_and_serializes_none():
 
 def test_game_state_response_nullable_fields_accept_and_serialize_none():
     unresolved_frame = FrameStateResponse(
-        number=1, rolls=[3], is_strike=False, is_spare=False, is_complete=False, score=None
+        number=1,
+        rolls=[3],
+        is_strike=False,
+        is_spare=False,
+        is_complete=False,
+        score=None,
+        roll_symbols=["3"],
     )
     state = GameStateResponse(
         standing_pin_ids=[1, 2, 3],
@@ -80,7 +92,13 @@ def test_game_state_response_nullable_fields_also_accept_a_real_int():
     # The alias must not have silently made these fields int-only or
     # accidentally optional-only; both sides of the union still work.
     resolved_frame = FrameStateResponse(
-        number=1, rolls=[10], is_strike=True, is_spare=False, is_complete=True, score=10
+        number=1,
+        rolls=[10],
+        is_strike=True,
+        is_spare=False,
+        is_complete=True,
+        score=10,
+        roll_symbols=["X"],
     )
     state = GameStateResponse(
         standing_pin_ids=[],

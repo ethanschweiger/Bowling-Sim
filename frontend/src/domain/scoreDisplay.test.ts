@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FrameStateResponse } from '../api/types';
-import { describeStandingPins, formatScore, frameCellSymbols, rollSymbol } from './scoreDisplay';
+import { describeStandingPins, formatScore, frameCellSymbols } from './scoreDisplay';
 
 function frame(overrides: Partial<FrameStateResponse>): FrameStateResponse {
   return {
@@ -10,53 +10,83 @@ function frame(overrides: Partial<FrameStateResponse>): FrameStateResponse {
     is_spare: false,
     is_complete: false,
     score: null,
+    roll_symbols: [],
     ...overrides,
   };
 }
 
-describe('rollSymbol', () => {
-  it('shows a dash for a miss', () => {
-    expect(rollSymbol(0)).toBe('-');
-  });
-
-  it('shows the plain pin count otherwise', () => {
-    expect(rollSymbol(7)).toBe('7');
-  });
-});
-
 describe('frameCellSymbols', () => {
-  it('marks a strike as a single X', () => {
-    expect(frameCellSymbols(frame({ rolls: [10], is_strike: true, is_complete: true }))).toEqual(['X']);
-  });
-
-  it('marks a spare on the second roll', () => {
-    expect(frameCellSymbols(frame({ rolls: [7, 3], is_spare: true, is_complete: true }))).toEqual(['7', '/']);
-  });
-
-  it('shows a miss-then-spare as dash then slash', () => {
-    expect(frameCellSymbols(frame({ rolls: [0, 10], is_spare: true, is_complete: true }))).toEqual(['-', '/']);
-  });
-
-  it('leaves an open frame as plain numbers', () => {
-    expect(frameCellSymbols(frame({ rolls: [4, 3], is_complete: true, score: 7 }))).toEqual(['4', '3']);
-  });
-
-  it('shows a frame still waiting on ball 2 as just the first roll', () => {
-    expect(frameCellSymbols(frame({ rolls: [6] }))).toEqual(['6']);
-  });
-
-  it('marks only the first roll of a tenth-frame strike sequence as X', () => {
-    // The bonus balls' own fresh-rack status is a rack rule this module
-    // deliberately doesn't re-derive — see the module docstring.
+  it('renders exactly the server-provided roll_symbols, in order', () => {
     expect(
-      frameCellSymbols(frame({ number: 10, rolls: [10, 7, 2], is_strike: true, is_complete: true })),
-    ).toEqual(['X', '7', '2']);
+      frameCellSymbols(
+        frame({ rolls: [10], is_strike: true, is_complete: true, roll_symbols: ['X'] }),
+      ),
+    ).toEqual(['X']);
   });
 
-  it("marks the tenth frame's spare bonus ball as its own plain number", () => {
+  it('renders a spare pair as the server provided it', () => {
     expect(
-      frameCellSymbols(frame({ number: 10, rolls: [6, 4, 8], is_spare: true, is_complete: true })),
-    ).toEqual(['6', '/', '8']);
+      frameCellSymbols(
+        frame({ rolls: [7, 3], is_spare: true, is_complete: true, roll_symbols: ['7', '/'] }),
+      ),
+    ).toEqual(['7', '/']);
+  });
+
+  it('renders a miss-then-spare as dash then slash, straight from the server', () => {
+    expect(
+      frameCellSymbols(
+        frame({ rolls: [0, 10], is_spare: true, is_complete: true, roll_symbols: ['-', '/'] }),
+      ),
+    ).toEqual(['-', '/']);
+  });
+
+  it('renders an open frame as plain numbers', () => {
+    expect(
+      frameCellSymbols(
+        frame({ rolls: [4, 3], is_complete: true, score: 7, roll_symbols: ['4', '3'] }),
+      ),
+    ).toEqual(['4', '3']);
+  });
+
+  it('renders a frame still waiting on ball 2 as just the first roll', () => {
+    expect(frameCellSymbols(frame({ rolls: [6], roll_symbols: ['6'] }))).toEqual(['6']);
+  });
+
+  it(
+    "renders the tenth frame's fresh-rack bonus strikes as X -- the case this " +
+      'feature exists for',
+    () => {
+      // Before server-owned roll_symbols existed, a tenth-frame bonus ball
+      // landing on a fresh rack after an opening strike rendered as its own
+      // plain pin count, because this module derived glyphs from
+      // is_strike/is_spare alone -- which can't tell a second fresh-rack
+      // strike apart from an ordinary roll. It is now pure pass-through of
+      // the server's own symbols.
+      expect(
+        frameCellSymbols(
+          frame({
+            number: 10,
+            rolls: [10, 10, 4],
+            is_strike: true,
+            is_complete: true,
+            roll_symbols: ['X', 'X', '4'],
+          }),
+        ),
+      ).toEqual(['X', 'X', '4']);
+    },
+  );
+
+  it('renders exactly what roll_symbols says, even if it disagreed with is_strike/is_spare', () => {
+    // Proves this is pass-through, not derivation: a deliberately
+    // inconsistent fixture still returns roll_symbols unchanged, never a
+    // value recomputed from is_strike/is_spare.
+    expect(
+      frameCellSymbols(frame({ rolls: [10], is_strike: true, roll_symbols: ['7'] })),
+    ).toEqual(['7']);
+  });
+
+  it('renders an empty array for a frame with no rolls yet', () => {
+    expect(frameCellSymbols(frame({}))).toEqual([]);
   });
 });
 

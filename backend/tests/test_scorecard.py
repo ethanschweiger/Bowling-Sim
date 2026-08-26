@@ -5,7 +5,7 @@ bonuses staying unresolved (not zero), and bounded totals.
 
 import pytest
 
-from app.scoring.scorecard import Scorecard, ScorecardError
+from app.scoring.scorecard import Scorecard, ScorecardError, frame_roll_symbols
 
 
 def _roll_all(card: Scorecard, pins_sequence) -> None:
@@ -101,6 +101,104 @@ def test_tenth_frame_open_permits_no_bonus_roll():
 
     with pytest.raises(ScorecardError):
         card.add_roll(0)  # open frame 10 gets no bonus ball at all
+
+
+# --- frame_roll_symbols: the traditional scorecard notation --------------
+#
+# The motivating case (see README): a tenth-frame bonus ball landing on a
+# fresh rack after an opening strike must show `X`, not a plain pin count.
+# `Frame.is_strike`/`Frame.is_spare` alone can't express this -- they only
+# describe frame 10's first rack -- so every case here is checked directly
+# against `frame_roll_symbols`, and the ones reachable through a real
+# `Scorecard` are cross-checked against `Frame.roll_symbols` too.
+
+
+def test_a_single_strike_frame_is_marked_x():
+    assert frame_roll_symbols((10,)) == ("X",)
+
+
+def test_an_open_frame_shows_plain_pin_counts():
+    assert frame_roll_symbols((3, 4)) == ("3", "4")
+
+
+def test_a_spare_marks_only_its_second_roll():
+    assert frame_roll_symbols((6, 4)) == ("6", "/")
+
+
+def test_a_miss_then_spare_marks_the_first_roll_as_a_dash():
+    # The conventional "- /" notation: ball 1 is a genuine 0-count roll,
+    # not merely "not a strike", so it gets the miss symbol, even though
+    # it's also the first half of a spare pair.
+    assert frame_roll_symbols((0, 10)) == ("-", "/")
+
+
+def test_a_double_miss_shows_two_dashes():
+    assert frame_roll_symbols((0, 0)) == ("-", "-")
+
+
+def test_tenth_frame_turkey_marks_every_roll_x():
+    # The exact case this feature exists for: the second and third rolls
+    # each clear their own fresh rack by themselves, not just the first.
+    assert frame_roll_symbols((10, 10, 10)) == ("X", "X", "X")
+
+
+def test_tenth_frame_strike_then_open_pair_marks_only_the_first_roll_x():
+    # 10, 3, 2: ball 2 and 3 share a fresh rack but don't clear it (5
+    # total) -- an ordinary open pair after the opening strike's bonus,
+    # no slash.
+    assert frame_roll_symbols((10, 3, 2)) == ("X", "3", "2")
+
+
+def test_tenth_frame_strike_then_spare_style_pair_marks_the_third_roll_slash():
+    # The traditional "X 5 /" tenth-frame line: ball 2 and 3 share the
+    # fresh rack the opening strike earned and clear it together.
+    assert frame_roll_symbols((10, 5, 5)) == ("X", "5", "/")
+
+
+def test_tenth_frame_spare_then_bonus_strike():
+    # 5, 5, 10: the spare's own bonus ball is against a fresh rack, so a
+    # full clear there is a genuine third X, not a plain "10".
+    assert frame_roll_symbols((5, 5, 10)) == ("5", "/", "X")
+
+
+def test_tenth_frame_open_gets_no_bonus_symbol():
+    assert frame_roll_symbols((3, 4)) == ("3", "4")
+
+
+def test_an_in_progress_frames_lone_roll_is_not_prematurely_marked():
+    # Only one ball has landed; nothing here can know yet whether it will
+    # become a spare, so it must show its own plain count, not a guess.
+    assert frame_roll_symbols((5,)) == ("5",)
+
+
+def test_frame_roll_symbols_never_returns_more_symbols_than_rolls_thrown():
+    for rolls in ((), (7,), (10,), (6, 4), (10, 5, 5)):
+        assert len(frame_roll_symbols(rolls)) == len(rolls)
+
+
+def test_real_scorecard_exposes_the_strike_bonus_symbol_on_a_live_frame():
+    # Cross-checks the pure function above against an actual Scorecard's
+    # Frame.roll_symbols, for the exact motivating scenario: an opening
+    # tenth-frame strike followed by a second strike on the fresh bonus
+    # rack. Before this feature the frontend derived glyphs from
+    # `is_strike`/`is_spare` alone and would have shown "10", not "X",
+    # for that second roll.
+    card = Scorecard()
+    _roll_all(card, [0] * 18)
+    card.add_roll(10)  # frame 10, ball 1: strike
+    card.add_roll(10)  # ball 2, fresh rack: also a strike
+    card.add_roll(4)  # ball 3, another fresh rack
+
+    tenth = card.frames[9]
+    assert tenth.rolls == (10, 10, 4)
+    assert tenth.roll_symbols == ("X", "X", "4")
+
+
+def test_real_scorecard_frame_roll_symbols_matches_the_pure_function():
+    card = Scorecard()
+    _roll_all(card, [10, 7, 3, 4, 2] + [0] * 12 + [6, 4, 5])
+    for frame in card.frames:
+        assert frame.roll_symbols == frame_roll_symbols(frame.rolls)
 
 
 def test_illegal_frame_total_raises_and_leaves_state_unchanged():

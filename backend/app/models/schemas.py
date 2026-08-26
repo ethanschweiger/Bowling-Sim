@@ -217,6 +217,10 @@ class FrameStateResponse(BaseModel):
     is_spare: bool
     is_complete: bool
     score: NullableInt  # cumulative through this frame; None if unresolved
+    # One traditional scorecard symbol per entry in `rolls` -- `X`/`/`/`-`/
+    # the plain pin count -- server-derived so the frontend never has to
+    # infer rack rules (see `app.scoring.scorecard.frame_roll_symbols`).
+    roll_symbols: list[str]
 
 
 class GameStateResponse(BaseModel):

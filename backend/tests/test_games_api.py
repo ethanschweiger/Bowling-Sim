@@ -240,6 +240,91 @@ def test_throw_after_game_completion_returns_409_and_reset_recovers():
     assert after_reset.status_code == 200
 
 
+def _force_roll(session, pins_knocked):
+    """Forces one roll's exact pinfall count through a real `GameSession`,
+    the same `simulate`/`resolve_pinfall` injection
+    `test_throw_after_game_completion_returns_409_and_reset_recovers` uses
+    -- lets these tests drive the scorecard into an exact frame/roll shape
+    without hunting for a real release that happens to land it."""
+    ball = BALL_CATALOG["house_ball"]
+    throw = Throw()
+
+    def simulate(condition):
+        return simulate_throw(ball, throw, condition)
+
+    def resolve(_sim_result, standing_ids):
+        fallen = tuple(sorted(standing_ids)[:pins_knocked])
+        return PinfallResult(
+            pins_knocked=pins_knocked,
+            model_id="t",
+            limitations="",
+            fallen_pin_ids=fallen,
+        )
+
+    return session.throw(simulate=simulate, resolve_pinfall=resolve)
+
+
+def test_tenth_frame_double_strike_bonus_reports_x_not_a_plain_count():
+    """The motivating README case: a bonus ball on a fresh rack after an
+    opening tenth-frame strike must report `X`, not the raw pin count.
+    Before this feature the frontend derived glyphs from
+    `is_strike`/`is_spare` alone, which can't distinguish a second
+    fresh-rack strike from an ordinary roll — this is exactly the gap
+    the server-owned symbols close."""
+    game = _create_game()
+    game_id = game["game_id"]
+    session = default_game_service.get_game(game_id)
+
+    for _ in range(9):
+        _force_roll(session, 10)  # frames 1-9: all strikes
+    _force_roll(session, 10)  # frame 10, ball 1: strike
+    _force_roll(session, 10)  # frame 10, ball 2: strike on the fresh bonus rack
+    _force_roll(session, 4)  # frame 10, ball 3: an ordinary roll on its own fresh rack
+
+    status = client.get(f"/api/v1/games/{game_id}").json()
+    tenth = status["game_state"]["frames"][9]
+    assert tenth["rolls"] == [10, 10, 4]
+    assert tenth["roll_symbols"] == ["X", "X", "4"]
+
+
+def test_frame_symbols_reflect_strike_spare_open_and_miss_via_the_api():
+    game = _create_game()
+    game_id = game["game_id"]
+    session = default_game_service.get_game(game_id)
+
+    _force_roll(session, 10)  # frame 1: strike
+    _force_roll(session, 6)  # frame 2, ball 1
+    _force_roll(session, 4)  # frame 2, ball 2: spare (6 + 4)
+    _force_roll(session, 3)  # frame 3, ball 1
+    _force_roll(session, 4)  # frame 3, ball 2: open (3 + 4)
+    _force_roll(session, 0)  # frame 4, ball 1: miss
+    _force_roll(session, 0)  # frame 4, ball 2: miss
+
+    frames = client.get(f"/api/v1/games/{game_id}").json()["game_state"]["frames"]
+    assert frames[0]["roll_symbols"] == ["X"]
+    assert frames[1]["roll_symbols"] == ["6", "/"]
+    assert frames[2]["roll_symbols"] == ["3", "4"]
+    assert frames[3]["roll_symbols"] == ["-", "-"]
+
+
+def test_roll_symbols_reset_cleanly_and_stay_consistent_across_get():
+    game = _create_game()
+    game_id = game["game_id"]
+    throw_body = client.post(
+        f"/api/v1/games/{game_id}/throws", json={**THROW_PAYLOAD, "seed": 3}
+    ).json()
+    # A real throw always populates one symbol per roll in every frame it
+    # touches — the field is never silently absent from a real response.
+    for frame in throw_body["game_state"]["frames"]:
+        assert len(frame["roll_symbols"]) == len(frame["rolls"])
+
+    reset_body = client.post(f"/api/v1/games/{game_id}/reset").json()
+    assert reset_body["game_state"]["frames"] == []
+
+    status = client.get(f"/api/v1/games/{game_id}").json()
+    assert status["game_state"] == reset_body["game_state"]
+
+
 def test_get_unknown_game_returns_404():
     response = client.get("/api/v1/games/does-not-exist")
     assert response.status_code == 404

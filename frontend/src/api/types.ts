@@ -193,6 +193,11 @@ export interface FrameStateResponse {
   is_complete: boolean;
   /** Cumulative score through this frame; null if a bonus it needs hasn't landed yet. */
   score: number | null;
+  /** One traditional scoresheet symbol per entry in `rolls`, same length
+   * and order: `X`/`/`/`-`/the plain pin count. Server-derived so the
+   * frontend never has to infer rack rules -- see
+   * `backend/app/scoring/scorecard.py`'s `frame_roll_symbols`. */
+  roll_symbols: string[];
 }
 
 export interface GameStateResponse {
