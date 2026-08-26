@@ -437,10 +437,13 @@ percentages, leave tracking, ball usage stats.
   `POST /api/v1/games/legacy-default/reset`.
 - `database_url` exists in config for the v3 milestone. A SQLAlchemy
   table schema, an Alembic migration, row-value/SQL-statement helpers,
-  and an opt-in `Engine`/session factory (`app/db/session.py`) exist for
-  it now, but nothing opens a database engine or connection at runtime,
-  there is still no database-backed `GameSessionRepository`, and games
-  still live in memory only.
+  an opt-in `Engine`/session factory (`app/db/session.py`), and now a
+  concrete `SqlAlchemyGameSessionRepository` adapter
+  (`app/db/sql_repository.py`) all exist for it, but none of it is
+  wired into app startup or `GameService`: `default_game_service` still
+  uses `InMemoryGameSessionRepository` by default, nothing opens a
+  database engine or connection at runtime, and games still live in
+  memory only.
 - The frontend has no chart suite, accounts, or persistence. Its ball and
   oil-pattern catalogs are fixed at startup — no adding, editing, or
   persisting either. A saved `game_id` is proactively checked once, at
