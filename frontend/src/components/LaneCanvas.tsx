@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GameThrowResponse, ThrowRequest } from '../api/types';
-import { createLaneProjection, type LaneDistanceBounds } from '../domain/laneProjection';
+import { createLaneProjection } from '../domain/laneProjection';
 import { LANE_ORIENTATION_DESCRIPTION, LANE_ORIENTATION_LABELS } from '../domain/laneOrientation';
 import { BOARD_COUNT, LANE_LENGTH_FT, PIN_DECK_LAYOUT } from '../domain/pinDeckLayout';
 import { describeStandingPins } from '../domain/scoreDisplay';
 import { describeLatestThrow } from '../domain/throwSummary';
 import { ShotAnalysis } from './ShotAnalysis';
-import {
-  acceptReplay,
-  replayDistanceExtentFt,
-} from '../domain/collisionReplay';
+import { acceptReplay } from '../domain/collisionReplay';
 import { buildLaneScene, type LaneScene } from '../domain/laneScene';
 import {
   PlaybackController,
@@ -130,22 +127,6 @@ export function LaneCanvas({
     [latestThrow],
   );
 
-  // One viewport for this throw's entire sequence, spanning both ends of
-  // the accepted replay's recorded extent. Held for the whole sequence —
-  // path, initial rack, intermediate frames, terminal frame, and the
-  // static rack afterwards — so nothing rescales mid-playback and no
-  // recorded position gets pinned to either edge at a distance it doesn't
-  // actually hold. Undefined (the default lane geometry) whenever there's
-  // no playable replay, so ordinary static drawing is pixel-identical to
-  // what it has always been.
-  const viewportBounds = useMemo(() => {
-    if (!replay) {
-      return undefined;
-    }
-    const extent = replayDistanceExtentFt(replay);
-    return { minDistanceFt: extent.minFt, maxDistanceFt: extent.maxFt };
-  }, [replay]);
-
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
@@ -255,8 +236,8 @@ export function LaneCanvas({
       latestThrow?.path ?? null,
       standingPinIds,
     );
-    draw(canvas, size, latestThrow, scene, viewportBounds);
-  }, [size, standingPinIds, latestThrow, phase, replay, viewportBounds]);
+    draw(canvas, size, latestThrow, scene);
+  }, [size, standingPinIds, latestThrow, phase, replay]);
 
   const standingSummary = describeStandingPins(standingPinIds);
   const throwSummary = describeLatestThrow(latestThrow);
@@ -293,7 +274,6 @@ function draw(
   cssSize: { width: number; height: number },
   latestThrow: GameThrowResponse | null,
   scene: LaneScene,
-  viewportBounds: LaneDistanceBounds | undefined,
 ): void {
   const progress = scene.pathProgress;
   const ctx = canvas.getContext('2d');
@@ -318,7 +298,11 @@ function draw(
     trajectory: style.getPropertyValue('--color-trajectory').trim(),
   };
 
-  const projection = createLaneProjection(cssSize.width, cssSize.height, undefined, viewportBounds);
+  // Keep the drawing projection fixed to the standard lane geometry. Replay
+  // bodies can slide beyond the pin deck during the server's post-impact run;
+  // letting that transient extent resize this projection makes the visible
+  // 60-foot lane collapse into a short strip after a throw.
+  const projection = createLaneProjection(cssSize.width, cssSize.height);
   const pinRadius = Math.max(5, cssSize.width * PIN_RADIUS_FRACTION);
 
   // Lane surface (boards 1..39) and gutters (either side) as two rects.

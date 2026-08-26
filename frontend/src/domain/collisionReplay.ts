@@ -448,12 +448,11 @@ export function acceptReplay(
 /**
  * How far downlane, in feet, this replay's furthest recorded body reaches.
  *
- * The canvas needs it to choose one viewport that contains the whole
- * accepted sequence — path, initial rack, intermediate frames, and the
- * terminal frame — so no recorded position has to be clamped into a
- * different on-screen coordinate than the one it actually describes.
- * Bodies routinely end up well past the pin deck: the solver runs for two
- * seconds and pins slide into the pit.
+ * Available to callers that need to inspect the full recorded post-impact
+ * extent. The lane canvas deliberately keeps its standard 60-foot projection
+ * stable instead of resizing around this value; bodies routinely end up well
+ * past the pin deck because the solver runs for two seconds and pins slide
+ * into the pit.
  */
 export function replayMaxDistanceFt(replay: CollisionReplayResponse): number {
   return replayDistanceExtentFt(replay).maxFt;
@@ -469,11 +468,9 @@ export interface ReplayDistanceExtent {
  * Both ends of this replay's downlane extent.
  *
  * Two-sided on purpose. Bodies can be driven *back* toward the bowler by a
- * collision — recorded `y_in` goes negative — and a viewport that only
- * grew at its far edge would clamp such a body onto the foul-line edge,
- * painting it at a coordinate it never held. That is the same class of
- * error as the far-edge clamp, just at the other end, so the canvas sizes
- * its viewport from both values.
+ * collision — recorded `y_in` goes negative. Returning both ends keeps this
+ * helper honest for any caller that needs the full extent instead of a
+ * far-edge-only shortcut.
  */
 export function replayDistanceExtentFt(replay: CollisionReplayResponse): ReplayDistanceExtent {
   let minY = Infinity;
