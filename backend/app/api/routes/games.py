@@ -144,6 +144,7 @@ def snapshot_to_game_state(snapshot: GameStateSnapshot) -> GameStateResponse:
                 is_spare=frame.is_spare,
                 is_complete=frame.is_complete,
                 score=frame.score,
+                roll_symbols=list(frame.roll_symbols),
             )
             for frame in snapshot.frames
         ],

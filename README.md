@@ -465,10 +465,6 @@ percentages, leave tracking, ball usage stats.
   on-screen range (`MIN_PATH_ANIMATION_MS`-`MAX_PATH_ANIMATION_MS`) — real
   travel time is on the order of 1.6-4.2 seconds, and this plays it back
   in well under a second, so it is still not literal real-time playback.
-- A 10th-frame bonus ball that lands on a fresh rack after an opening
-  strike displays its own plain pin count rather than a synthesized "X"
-  glyph — deriving that would mean the frontend re-deriving a rack rule
-  this project keeps server-side. See `frontend/src/domain/scoreDisplay.ts`.
 - The lane canvas's board spacing and its last stretch of downlane
   distance are both deliberately exaggerated for legibility, not drawn to
   true physical scale.

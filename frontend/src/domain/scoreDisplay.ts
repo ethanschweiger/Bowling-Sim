@@ -5,17 +5,17 @@
  * whether the next ball gets a fresh rack, or whether the game is over —
  * every one of those is read directly off a flag or number the server
  * already computed (`is_strike`, `is_spare`, `score`, `is_complete`,
- * `total_score`, `is_game_complete`). See the root README's "Treat FastAPI
- * as authoritative" note.
+ * `total_score`, `is_game_complete`, `roll_symbols`). See the root
+ * README's "Treat FastAPI as authoritative" note.
  *
- * The one deliberately incomplete corner: traditional scoresheet notation
- * marks a *later* bonus ball as "X" when it lands on a rack that a fresh
- * strike left standing (e.g. the 10th frame's second or third ball, after
- * an opening strike). Telling which bonus ball faced a fresh rack is a
- * rack rule, not a formatting one, so this module doesn't derive it — a
- * fresh-rack bonus ball is shown as its own plain pin count instead of a
- * synthesized "X". Every number shown is still exactly what the server
- * returned; only that one decorative glyph is intentionally left plain.
+ * Traditional scoresheet notation marks a *later* bonus ball as "X" when
+ * it lands on a rack that a fresh strike left standing (e.g. the 10th
+ * frame's second or third ball, after an opening strike) — telling which
+ * bonus ball faced a fresh rack is a rack rule, not a formatting one, so
+ * this module doesn't derive it itself. `roll_symbols` is the server's own
+ * answer to exactly that, one symbol per roll in `rolls`, and
+ * `frameCellSymbols` renders it directly rather than reconstructing
+ * strike/spare glyphs from `rolls`/`is_strike`/`is_spare`.
  */
 
 import type { FrameStateResponse } from '../api/types';
@@ -35,22 +35,14 @@ export function describeStandingPins(standingPinIds: readonly number[]): string 
 
 const EMPTY_SCORE_DISPLAY = '—'; // em dash
 
-/** A single roll's plain pin count, with the scoresheet convention of a
- * dash for a miss (0 pins), same as any printed scoresheet uses. */
-export function rollSymbol(pins: number): string {
-  return pins === 0 ? '-' : String(pins);
-}
-
-/** One display symbol per roll in the frame, in order. See the module
- * docstring for exactly which glyphs are (and aren't) derived. */
+/** One display symbol per roll in the frame, in order — the server's own
+ * `roll_symbols`, rendered as-is. Not a derivation: this module never
+ * reconstructs `X`/`/` from `rolls`/`is_strike`/`is_spare` itself, so a
+ * bonus ball landing on a fresh rack (e.g. the 10th frame's second or
+ * third ball, after an opening strike) shows the server's own `X` rather
+ * than a plain pin count. */
 export function frameCellSymbols(frame: FrameStateResponse): string[] {
-  const symbols = frame.rolls.map(rollSymbol);
-  if (frame.is_strike) {
-    symbols[0] = 'X';
-  } else if (frame.is_spare && symbols.length > 1) {
-    symbols[1] = '/';
-  }
-  return symbols;
+  return frame.roll_symbols;
 }
 
 /** A resolved score as a string, or an em dash while it's still null

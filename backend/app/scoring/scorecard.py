@@ -62,10 +62,63 @@ from dataclasses import dataclass
 FRAME_COUNT = 10
 MAX_PINS = 10
 
+# Traditional bowling scorecard notation for one roll — see
+# `frame_roll_symbols` for how each is chosen.
+STRIKE_SYMBOL = "X"
+SPARE_SYMBOL = "/"
+MISS_SYMBOL = "-"
+
 
 class ScorecardError(Exception):
     """Raised by `Scorecard.add_roll` for any illegal roll. The scorecard
     is left exactly as it was before the call."""
+
+
+def frame_roll_symbols(rolls: tuple[int, ...]) -> tuple[str, ...]:
+    """The traditional scorecard notation for each roll already recorded
+    in one frame: `STRIKE_SYMBOL` for a roll that clears a fresh rack by
+    itself, `SPARE_SYMBOL` for the second roll of a pair that clears a
+    fresh rack together, `MISS_SYMBOL` for a zero-count roll, and the
+    plain pin count (as a string) otherwise.
+
+    A pure function of the roll sequence alone — it re-derives which
+    rack each roll was thrown against by walking the same fresh-rack /
+    rack-continues structure `_layout_tenth_frame` already encodes,
+    rather than reading `Frame.is_strike`/`Frame.is_spare`. Those two
+    flags describe only frame 10's *first* rack (a strike on ball 1, or
+    a ball-1+ball-2 spare); they say nothing about a fresh rack reached
+    *later* in frame 10 — ball 2 after an opening strike, or ball 3
+    after two opening strikes — which is exactly the case the frontend
+    used to render as a plain pin count instead of `X`. Frames 1-9 have
+    only ever one rack, so the same walk handles them uniformly, with no
+    frame-number branch anywhere in this function.
+
+    Never invents a symbol for a roll that hasn't been thrown yet: an
+    in-progress frame's own rolls (as many as have actually landed) get
+    exactly that many symbols back, no more, no placeholder for a ball
+    not yet rolled.
+    """
+    symbols: list[str] = []
+    i = 0
+    n = len(rolls)
+    while i < n:
+        first = rolls[i]
+        if first == MAX_PINS:
+            # Clears this fresh rack by itself.
+            symbols.append(STRIKE_SYMBOL)
+            i += 1
+            continue
+        if i + 1 < n and first + rolls[i + 1] == MAX_PINS:
+            # This roll and the next one together clear the fresh rack
+            # they share — a spare, whichever position in the frame it
+            # falls at. Consumes both; the pair is resolved together.
+            symbols.append(MISS_SYMBOL if first == 0 else str(first))
+            symbols.append(SPARE_SYMBOL)
+            i += 2
+            continue
+        symbols.append(MISS_SYMBOL if first == 0 else str(first))
+        i += 1
+    return tuple(symbols)
 
 
 @dataclass(frozen=True)
@@ -76,6 +129,9 @@ class Frame:
     is_spare: bool
     is_complete: bool        # this frame has thrown every roll it owns (not necessarily scored yet)
     score: int | None     # cumulative total through this frame, or None if unresolved
+    # One traditional scorecard symbol per entry in `rolls`, same length
+    # and order — see `frame_roll_symbols`.
+    roll_symbols: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -223,6 +279,7 @@ def _build_frames(rolls: list[int]) -> tuple[Frame, ...]:
                 is_spare=raw.is_spare,
                 is_complete=raw.is_complete,
                 score=score,
+                roll_symbols=frame_roll_symbols(raw.rolls),
             )
         )
     return tuple(frames)
