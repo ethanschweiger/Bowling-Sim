@@ -1,12 +1,13 @@
 # Local development image only -- runs the existing FastAPI app exactly as
 # `README.md`'s "Run" section does, inside a container instead of a venv.
-# Not a production image: no multi-stage build or health check. Those
-# belong to the separate, later production/deployment milestone (see the
-# root README's "Future architecture constraints"), which also needs a
-# stable persistence layer this app doesn't have yet. The final runtime
-# process does run as a dedicated unprivileged user (below) -- narrower
-# in scope than a full production hardening pass, but worth doing on its
-# own regardless of when that later milestone lands.
+# Not a production image: no multi-stage build. That belongs to the
+# separate, later production/deployment milestone (see the root README's
+# "Future architecture constraints"), which also needs a stable
+# persistence layer this app doesn't have yet. The final runtime process
+# does run as a dedicated unprivileged user and reports its own container
+# health via HEALTHCHECK (both below) -- narrower in scope than a full
+# production hardening pass, but worth doing on their own regardless of
+# when that later milestone lands.
 #
 # Built with the repository root as context (see docker-compose.yml), so
 # every COPY source path below is relative to the repo root, not this
@@ -65,5 +66,24 @@ COPY --chown=backend:backend backend/alembic.ini ./alembic.ini
 USER backend:backend
 
 EXPOSE 8000
+
+# Probes this same process's own GET /health -- see app/main.py's own
+# docstring for the exact response shape in each storage mode; any 2xx
+# status counts healthy, anything else (a non-2xx response, a refused
+# connection, a timeout) counts unhealthy. Uses only urllib from Python's
+# standard library, already present in this image -- no curl, no new
+# package. Runs as the USER already set above (backend:backend, not
+# root): urllib.request.urlopen needs no elevated privilege to open an
+# outbound connection to a port it isn't binding.
+#   --interval=30s: how often Docker re-probes once running.
+#   --timeout=3s: this app answers /health in milliseconds even when
+#     checking SQL connectivity, so 3s is generous, not tight.
+#   --start-period=5s: a brief grace window while Uvicorn boots, so a
+#     slow first request doesn't immediately count as a real failure.
+#   --retries=3: three consecutive failures (not one) before Docker
+#     reports the container unhealthy, so a single transient blip
+#     doesn't flip the status.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["python", "-c", "import sys, urllib.request\ntry:\n    urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\nexcept Exception:\n    sys.exit(1)"]
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

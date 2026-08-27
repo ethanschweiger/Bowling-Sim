@@ -208,6 +208,14 @@ path below) runs as a dedicated unprivileged user (`backend`, stable
 UID/GID `1000:1000`), not root — a narrower hardening step on its own,
 not a claim that this image is otherwise production-ready.
 
+The backend image also declares its own `HEALTHCHECK`, probing
+`GET /health` (stdlib `urllib` only, no curl) — `docker compose ps` and
+`docker inspect` report the backend container `healthy`/`unhealthy`
+alongside `db`'s own existing healthcheck, in either storage mode. Not
+automatic recovery or an orchestrator restart policy, just a status
+Docker itself can observe and `depends_on: condition: service_healthy`
+could gate on, the same way the overlay already gates on `db`'s.
+
 By default (no `-f` flags beyond the implicit `docker-compose.yml`),
 Docker adds no persistence: a backend container restart or rebuild loses
 every in-memory game, exactly like restarting the process natively, and
