@@ -60,5 +60,14 @@ services:
 # further flags) leaves this volume, and the games it holds, intact
 # across a stack restart; only `docker compose down -v` removes it. See
 # README.md for exactly that distinction.
+#
+# `name:` is explicit and matches the logical key exactly -- without it,
+# Compose project-prefixes the engine-level volume name (e.g.
+# `<project>_bowling_sim_postgres_data`), so `docker volume ls`/`docker
+# volume rm` would need that prefix even though nothing here or in
+# README.md ever documents or uses it. Pinning the name keeps the two in
+# sync regardless of which directory or `-p`/COMPOSE_PROJECT_NAME this
+# overlay is run under.
 volumes:
   bowling_sim_postgres_data:
+    name: bowling_sim_postgres_data
