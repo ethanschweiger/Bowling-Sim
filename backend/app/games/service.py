@@ -201,6 +201,11 @@ class GameStateSnapshot:
     """
 
     lane_condition_version: int
+    # The registry id (a key of SUPPORTED_OIL_PATTERNS, e.g. "house" or
+    # "challenge") this game was created with -- not the LaneCondition's
+    # own spec.name, which is a display string ("Challenge Pattern"), not
+    # a value POST /api/v1/games would accept back as oil_pattern.
+    oil_pattern: str
     standing_pin_ids: frozenset[int]
     # Frame is itself an immutable frozen dataclass — safe to hold indefinitely.
     frames: tuple[Frame, ...]
@@ -220,6 +225,11 @@ class GameSessionRecord:
     """
 
     game_id: str
+    # The registry id this game was created with -- see GameStateSnapshot's
+    # identical field for why this is the registry key, not spec.name.
+    # Immutable for the game's life, exactly like initial_condition: reset()
+    # returns to this same pattern, it never changes it.
+    oil_pattern: str
     # The condition this game started with — what a restored session's own
     # reset() must return to, exactly like a freshly created game's would.
     initial_condition: LaneCondition
@@ -240,9 +250,18 @@ class GameSession:
     observable sense — nothing could have mutated it in place.)
     """
 
-    def __init__(self, game_id: str, initial_condition: LaneCondition):
+    def __init__(self, game_id: str, initial_condition: LaneCondition, oil_pattern: str):
         self.game_id = game_id
         self._initial_condition = initial_condition
+        # The registry id `initial_condition` was built from (e.g. "house"),
+        # not derived from `initial_condition` itself -- a LaneCondition
+        # only carries a display-facing spec.name, not the registry key a
+        # future POST /api/v1/games would accept back. Required, not
+        # defaulted: every construction site (GameService.create_game,
+        # get_or_create's factory, from_record) already knows this game's
+        # pattern id at the moment it builds the LaneCondition, so there is
+        # no honest default to fall back to here.
+        self.oil_pattern = oil_pattern
         self.lane = LaneSession(initial_condition)
         self._scorecard = Scorecard()
         self._rack = Rack.full()
@@ -254,6 +273,7 @@ class GameSession:
         next_frame_number, next_ball_number = self._scorecard.next_roll_position()
         return GameStateSnapshot(
             lane_condition_version=self.lane.condition.version,
+            oil_pattern=self.oil_pattern,
             standing_pin_ids=self._rack.standing_ids,
             frames=self._scorecard.frames,
             total_score=self._scorecard.total_score,
@@ -347,6 +367,7 @@ class GameSession:
         with self._lock:
             return GameSessionRecord(
                 game_id=self.game_id,
+                oil_pattern=self.oil_pattern,
                 initial_condition=self._initial_condition,
                 current_condition=self.lane.condition,
                 rolls=self._scorecard.rolls,
@@ -364,12 +385,30 @@ class GameSession:
         like a freshly created game's own reset would.
 
         Raises `ScorecardError` for an illegal stored roll sequence (via
-        `Scorecard.from_rolls`) or `RackError` for invalid stored standing
-        pin IDs (via `Rack`'s own constructor) — the same exceptions a
-        live game would have raised making the same illegal moves, before
-        this method returns anything.
+        `Scorecard.from_rolls`), `RackError` for invalid stored standing
+        pin IDs (via `Rack`'s own constructor), or `ValueError` for a
+        stored `oil_pattern` that isn't (or, via a schema change, no
+        longer is) a `SUPPORTED_OIL_PATTERNS` key — the same exceptions a
+        live game would have raised making the same illegal moves, or
+        `create_game`/`get_or_create` would have raised rejecting the
+        same id outright. `record_from_payload` only checks that a stored
+        `oil_pattern` is *a string*, not that it names a real pattern
+        (see that module's "Where validation lives"); this is the one
+        place that checks the latter, so a corrupted or stale stored
+        record can't silently rebuild a session `GameStateResponse`
+        would then fail to serialize. Checked before this method returns
+        anything, or touches `_scorecard`/`_rack` — no other check here
+        depends on `oil_pattern`, so there is no reason to build a
+        partial session before this one runs.
         """
-        session = cls(game_id=record.game_id, initial_condition=record.initial_condition)
+        if record.oil_pattern not in SUPPORTED_OIL_PATTERNS:
+            raise ValueError(f"Unsupported oil_pattern '{record.oil_pattern}'")
+
+        session = cls(
+            game_id=record.game_id,
+            initial_condition=record.initial_condition,
+            oil_pattern=record.oil_pattern,
+        )
         scorecard = Scorecard.from_rolls(record.rolls)
         rack = Rack(standing_ids=record.standing_pin_ids)
         session.lane.reset_to(record.current_condition)
@@ -586,7 +625,9 @@ class GameService:
             raise ValueError(f"Unsupported oil_pattern '{oil_pattern}'")
 
         session = GameSession(
-            game_id=game_id or uuid.uuid4().hex, initial_condition=build_condition()
+            game_id=game_id or uuid.uuid4().hex,
+            initial_condition=build_condition(),
+            oil_pattern=oil_pattern,
         )
         self._repository.put(session)
         return session
@@ -611,7 +652,9 @@ class GameService:
             build_condition = SUPPORTED_OIL_PATTERNS.get(oil_pattern)
             if build_condition is None:
                 raise ValueError(f"Unsupported oil_pattern '{oil_pattern}'")
-            return GameSession(game_id=game_id, initial_condition=build_condition())
+            return GameSession(
+                game_id=game_id, initial_condition=build_condition(), oil_pattern=oil_pattern
+            )
 
         return self._repository.get_or_put(game_id, factory)
 

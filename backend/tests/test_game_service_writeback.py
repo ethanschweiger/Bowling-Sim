@@ -120,7 +120,9 @@ def test_throw_in_game_returns_exactly_what_session_throw_returns():
     service, _spy = _spy_service()
     session = service.create_game()
 
-    direct_session = GameSession(game_id="reference", initial_condition=session.lane.condition)
+    direct_session = GameSession(
+        game_id="reference", initial_condition=session.lane.condition, oil_pattern="house"
+    )
     # Same scripted inputs against an independent, identically-conditioned
     # session, called directly (not through the service) -- proves
     # throw_in_game doesn't alter the result it hands back.

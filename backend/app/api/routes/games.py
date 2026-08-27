@@ -11,6 +11,7 @@ released (see `app.games.service`'s "Durable snapshots").
 """
 
 from dataclasses import asdict
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -134,7 +135,18 @@ def snapshot_to_game_state(snapshot: GameStateSnapshot) -> GameStateResponse:
     deprecated legacy route), so the contract can't drift between them.
     Pure mapping over already-immutable data; touches no session state.
     """
+    # snapshot.oil_pattern is a plain str -- GameSession.__init__ takes any
+    # str, by design (see its own docstring), so mypy can't narrow it to
+    # this Literal on its own. The cast is safe because every live
+    # GameSession's oil_pattern was already checked against
+    # SUPPORTED_OIL_PATTERNS before the session could exist: create_game
+    # and get_or_create's factory both validate it (raising ValueError
+    # otherwise), and GameSession.from_record now does too -- see that
+    # method's own docstring. Nothing constructs a GameSession any other
+    # way.
+    oil_pattern = cast(Literal["house", "challenge"], snapshot.oil_pattern)
     return GameStateResponse(
+        oil_pattern=oil_pattern,
         standing_pin_ids=sorted(snapshot.standing_pin_ids),
         frames=[
             FrameStateResponse(
