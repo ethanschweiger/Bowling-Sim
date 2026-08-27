@@ -27,6 +27,7 @@ function throwResponse(overrides: Partial<GameThrowResponse>): GameThrowResponse
     },
     lane_condition_version: 1,
     game_state: {
+      oil_pattern: 'house',
       standing_pin_ids: [3, 5, 6, 7, 8, 9, 10],
       frames: [],
       total_score: null,

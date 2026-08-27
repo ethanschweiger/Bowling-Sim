@@ -4,6 +4,17 @@
   gap: 0.75rem;
 }
 
+.oilPatternLabel {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.oilPatternValue {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
 .tableScroll {
   overflow-x: auto;
   border-radius: 0.5rem;

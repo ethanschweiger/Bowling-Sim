@@ -15,6 +15,7 @@ import {
   canPlayLoadedGame,
   fetchOilPatternCatalog,
   isOilPatternSelectable,
+  oilPatternDisplayName,
   oilPatternIdForNewGame,
   pickDefaultOilPatternId,
 } from './domain/oilPatternCatalog';
@@ -464,7 +465,10 @@ function App() {
             <h2 id="scorecard-heading" className={styles.panelHeading}>
               Scorecard
             </h2>
-            <ScoreboardPanel gameState={game.gameState} />
+            <ScoreboardPanel
+              gameState={game.gameState}
+              oilPatternName={oilPatternDisplayName(oilPatternCatalog, game.gameState.oil_pattern)}
+            />
           </section>
         </main>
       )}

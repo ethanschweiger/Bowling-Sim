@@ -5,6 +5,7 @@ import {
   DEFAULT_OIL_PATTERN_ID,
   fetchOilPatternCatalog,
   isOilPatternSelectable,
+  oilPatternDisplayName,
   oilPatternIdForNewGame,
   pickDefaultOilPatternId,
   resetOilPatternCatalogForTests,
@@ -119,6 +120,33 @@ describe('oilPatternIdForNewGame', () => {
 
   it('omits for an empty catalog', () => {
     expect(oilPatternIdForNewGame([], 'house')).toBeUndefined();
+  });
+});
+
+describe('oilPatternDisplayName', () => {
+  const catalog = [pattern('house', 'House Shot'), pattern('challenge', 'Challenge Pattern')];
+
+  it('returns the catalog name for house', () => {
+    expect(oilPatternDisplayName(catalog, 'house')).toBe('House Shot');
+  });
+
+  it('returns the catalog name for challenge', () => {
+    expect(oilPatternDisplayName(catalog, 'challenge')).toBe('Challenge Pattern');
+  });
+
+  // The active task's own required regression: a failed catalog load must
+  // not block displaying a *loaded* game's pattern -- the raw id is a
+  // truthful fallback, not silence or a crash.
+  it('falls back to the raw id when the catalog failed to load', () => {
+    expect(oilPatternDisplayName(null, 'challenge')).toBe('challenge');
+  });
+
+  it('falls back to the raw id when the catalog loaded but omits this id', () => {
+    expect(oilPatternDisplayName(catalog, 'sport')).toBe('sport');
+  });
+
+  it('falls back to the raw id for an empty catalog', () => {
+    expect(oilPatternDisplayName([], 'house')).toBe('house');
   });
 });
 
