@@ -103,6 +103,35 @@ HOUSE_SHOT_SPEC = OilPatternSpec(
     total_volume_ml=22.0,
 )
 
+# A less forgiving "challenge" pattern -- shorter and flatter than the
+# house shot, with a much steeper center-to-edge falloff. Modeling
+# assumptions, stated explicitly since this isn't a certified USBC
+# pattern either:
+#   - 34 feet long with a 3-foot taper: shorter and with a more abrupt
+#     transition into the dry back end than the house shot's 40 ft / 6 ft
+#     -- friction stays low for most of the pattern's length, then rises
+#     sharply rather than easing in.
+#   - A 6:1 volume ratio between the peak (center) boards and the boards
+#     at the pattern's outer edge -- double the house shot's 3:1, so a
+#     miss outside the pattern finds far less oil, and therefore far more
+#     hook, than the same miss would on the house shot.
+#   - A narrower carrying width (10-30 center, 5-35 total) than the house
+#     shot's (8-32, 3-37), leaving less margin either side of center.
+#   - 24 mL total volume, in line with a typical sport-style pattern
+#     (most run in the low-to-mid 20s of mL, similar to or slightly above
+#     a house shot despite covering less lane).
+# The grid built from this spec sums to exactly `total_volume_ml`, same
+# as HOUSE_SHOT_SPEC -- see LaneCondition._build.
+CHALLENGE_PATTERN_SPEC = OilPatternSpec(
+    name="Challenge Pattern",
+    length_ft=34.0,
+    taper_ft=3.0,
+    center_boards=(10, 30),
+    total_boards=(5, 35),
+    pattern_ratio=6.0,
+    total_volume_ml=24.0,
+)
+
 
 def _lateral_factor(board: int, spec: OilPatternSpec) -> float:
     """0..1 shape multiplier for a board: 1.0 across the center boards,
@@ -174,6 +203,10 @@ class LaneCondition:
     @staticmethod
     def house_shot(temperature_f: float = REFERENCE_TEMPERATURE_F) -> LaneCondition:
         return LaneCondition._build(HOUSE_SHOT_SPEC, temperature_f=temperature_f)
+
+    @staticmethod
+    def challenge_pattern(temperature_f: float = REFERENCE_TEMPERATURE_F) -> LaneCondition:
+        return LaneCondition._build(CHALLENGE_PATTERN_SPEC, temperature_f=temperature_f)
 
     @staticmethod
     def _build(

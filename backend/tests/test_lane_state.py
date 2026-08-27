@@ -1,9 +1,35 @@
+import pytest
+
 from app.physics.ball import BALL_CATALOG
-from app.physics.lane import LaneCondition, apply_wear
+from app.physics.lane import CHALLENGE_PATTERN_SPEC, HOUSE_SHOT_SPEC, LaneCondition, apply_wear
 from app.physics.simulate import TrajectoryPoint, simulate_throw
 from app.physics.throw import Throw
 
 STRAIGHT_DOWN_BOARD_20 = [TrajectoryPoint(distance_ft=float(ft), board=20.0) for ft in range(0, 33)]
+
+
+def test_challenge_pattern_builds_a_valid_fresh_lane_condition():
+    fresh = LaneCondition.challenge_pattern()
+    assert fresh.spec == CHALLENGE_PATTERN_SPEC
+
+    # The grid built from a spec sums to exactly that spec's total_volume_ml
+    # -- see LaneCondition._build's own docstring claim, same conservation
+    # property HOUSE_SHOT_SPEC's grid already holds.
+    grid_total = sum(sum(row) for row in fresh.oil_grid)
+    assert grid_total == pytest.approx(CHALLENGE_PATTERN_SPEC.total_volume_ml)
+
+    # A genuinely different pattern, not the house shot under a new name:
+    # different spec, and therefore a different grid.
+    house = LaneCondition.house_shot()
+    assert fresh.spec != house.spec
+    assert fresh.oil_grid != house.oil_grid
+
+
+def test_challenge_pattern_is_shorter_and_steeper_edged_than_the_house_shot():
+    # Pins the two modeling choices the pattern is actually named for:
+    # shorter reach down the lane, and a steeper center-to-edge falloff.
+    assert CHALLENGE_PATTERN_SPEC.length_ft < HOUSE_SHOT_SPEC.length_ft
+    assert CHALLENGE_PATTERN_SPEC.pattern_ratio > HOUSE_SHOT_SPEC.pattern_ratio
 
 
 def test_a_throw_changes_lane_state():

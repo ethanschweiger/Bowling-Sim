@@ -10,6 +10,7 @@ from app.games.service import (
 )
 from app.main import app
 from app.physics.ball import BALL_CATALOG
+from app.physics.lane import CHALLENGE_PATTERN_SPEC, HOUSE_SHOT_SPEC
 from app.physics.pinfall import PinfallResult
 from app.physics.simulate import SimulationResult, TerminalState, TrajectoryPoint, simulate_throw
 from app.physics.throw import Throw
@@ -42,6 +43,25 @@ def test_create_game_returns_id_and_initial_version():
 def test_unsupported_oil_pattern_is_rejected():
     response = client.post("/api/v1/games", json={"oil_pattern": "sport"})
     assert response.status_code == 422  # not yet a supported pattern
+
+
+def test_omitted_oil_pattern_defaults_to_house():
+    body = _create_game()
+    session = default_game_service.get_game(body["game_id"])
+    assert session.lane.condition.spec.name == "House Shot"
+
+
+def test_challenge_oil_pattern_is_accepted_and_builds_the_challenge_lane_condition():
+    response = client.post("/api/v1/games", json={"oil_pattern": "challenge"})
+    assert response.status_code == 201
+    body = response.json()
+    assert body["lane_condition_version"] == 1
+
+    session = default_game_service.get_game(body["game_id"])
+    assert session.lane.condition.spec.name == "Challenge Pattern"
+    assert session.lane.condition.spec == CHALLENGE_PATTERN_SPEC
+    # A genuinely different pattern, not the house shot under a new id.
+    assert session.lane.condition.spec != HOUSE_SHOT_SPEC
 
 
 def test_unknown_game_id_returns_404_for_throws_and_reset():

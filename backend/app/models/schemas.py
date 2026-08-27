@@ -256,9 +256,11 @@ class ThrowResponse(BaseModel):
 class CreateGameRequest(BaseModel):
     # A plain string field (not just a bare literal in the URL) so a future
     # named-pattern selection or a temperature setting is an additive field
-    # here, not a route/contract change. Only "house" exists this milestone.
-    oil_pattern: Literal["house"] = Field(
-        "house", description="Only 'house' is selectable this milestone."
+    # here, not a route/contract change. See
+    # `app.games.service.SUPPORTED_OIL_PATTERNS` for the authoritative,
+    # single source of which ids are actually selectable.
+    oil_pattern: Literal["house", "challenge"] = Field(
+        "house", description="'house' (default) or 'challenge'."
     )
 
 
@@ -374,8 +376,7 @@ class OilPatternCatalogResponse(BaseModel):
 
     The same registry `POST /api/v1/games` validates `oil_pattern`
     against, so anything listed here is creatable and anything absent is
-    a 422 on create. Only the house shot is modeled today; named-pattern
-    selection stays deferred.
+    a 422 on create.
     """
 
     patterns: list[OilPatternResponse]
