@@ -82,8 +82,16 @@ export function isOilPatternSelectable(
  * optional next-game selector, so its failure must never take the loaded
  * game's own controls down with it. An earlier version of this gate also
  * required the oil-pattern catalog, which turned one optional selector's
- * fetch failure into a total app block; `oilPatternCatalog` is
- * intentionally absent from this signature so that cannot recur.
+ * fetch failure into a total app block.
+ *
+ * Extracting the rule here and testing it directly guards against a
+ * regression *inside this function* — but that guard is only as strong as
+ * every call site actually routing through it. This repo has no
+ * component-render test infrastructure (no React Testing Library/jsdom),
+ * so nothing would catch a future edit that left this function alone and
+ * instead re-inlined an oil-pattern check directly into `App.tsx`'s
+ * `isReady` expression or its `<main>` render condition. See the comment
+ * at that call site.
  */
 export function canPlayLoadedGame(hasGame: boolean, hasBallCatalog: boolean): boolean {
   return hasGame && hasBallCatalog;

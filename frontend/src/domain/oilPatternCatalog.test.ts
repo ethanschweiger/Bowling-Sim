@@ -73,19 +73,15 @@ describe('isOilPatternSelectable', () => {
 describe('canPlayLoadedGame', () => {
   // The rejected-attempt regression, stated directly: an oil-pattern
   // catalog failure must not gate the loaded game's own surface. This
-  // function takes no oil-pattern argument at all, so a future edit
-  // cannot quietly reintroduce that coupling without changing its
-  // signature and failing to compile here.
+  // function's own tests guard against a regression *inside
+  // canPlayLoadedGame itself* -- but that guard only holds as long as
+  // every call site actually routes through it. Nothing here (and no
+  // test anywhere in this repo, which has no component-render test
+  // infrastructure -- see `App.tsx`'s own comment at its `isReady` call
+  // site) would catch a future edit that bypassed this function entirely
+  // and re-inlined an oil-pattern check directly into App.tsx instead.
   it('is true once the game and ball catalog are loaded', () => {
     expect(canPlayLoadedGame(true, true)).toBe(true);
-  });
-
-  it('stays true regardless of oil-pattern catalog state (it takes no such argument)', () => {
-    // Whatever happened to the oil-pattern catalog -- loaded, empty, or
-    // failed outright -- these are the only two inputs that decide
-    // whether throws, reset, the lane, and the scoreboard render.
-    expect(canPlayLoadedGame(true, true)).toBe(true);
-    expect(canPlayLoadedGame.length).toBe(2);
   });
 
   it('is false without a game', () => {

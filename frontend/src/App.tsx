@@ -345,6 +345,13 @@ function App() {
   // Gameplay needs exactly two things: the game itself and the server's
   // ball list. The oil-pattern catalog is deliberately excluded — see
   // `canPlayLoadedGame`, which owns that rule and its regression test.
+  //
+  // Route any future change to this readiness rule through
+  // `canPlayLoadedGame` (and its test) rather than inlining a new
+  // condition here or on the `<main>` render guard below: this repo has
+  // no component-render test infrastructure, so nothing would catch a
+  // regression re-inlined directly at either of those two spots instead
+  // of going through the function.
   const isReady = canPlayLoadedGame(game !== null, ballCatalog !== null);
 
   return (
