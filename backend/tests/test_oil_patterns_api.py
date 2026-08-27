@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.api.routes.oil_patterns import _PATTERN_DESCRIPTION
 from app.games.service import SUPPORTED_OIL_PATTERNS
 from app.main import app
-from app.physics.lane import HOUSE_SHOT_SPEC, LaneCondition
+from app.physics.lane import CHALLENGE_PATTERN_SPEC, HOUSE_SHOT_SPEC, LaneCondition
 
 client = TestClient(app)
 
@@ -39,6 +39,13 @@ def test_includes_house():
     assert by_id["house"]["name"] == "House Shot"
 
 
+def test_includes_challenge():
+    by_id = {pattern["id"]: pattern for pattern in _catalog()}
+
+    assert "challenge" in by_id
+    assert by_id["challenge"]["name"] == "Challenge Pattern"
+
+
 def test_ids_are_unique():
     ids = [pattern["id"] for pattern in _catalog()]
 
@@ -57,6 +64,17 @@ def test_the_house_spec_matches_house_shot_spec_exactly():
     assert tuple(published["total_boards"]) == HOUSE_SHOT_SPEC.total_boards
     assert published["pattern_ratio"] == HOUSE_SHOT_SPEC.pattern_ratio
     assert published["total_volume_ml"] == HOUSE_SHOT_SPEC.total_volume_ml
+
+
+def test_the_challenge_spec_matches_challenge_pattern_spec_exactly():
+    published = next(pattern for pattern in _catalog() if pattern["id"] == "challenge")["spec"]
+
+    assert published["length_ft"] == CHALLENGE_PATTERN_SPEC.length_ft
+    assert published["taper_ft"] == CHALLENGE_PATTERN_SPEC.taper_ft
+    assert tuple(published["center_boards"]) == CHALLENGE_PATTERN_SPEC.center_boards
+    assert tuple(published["total_boards"]) == CHALLENGE_PATTERN_SPEC.total_boards
+    assert published["pattern_ratio"] == CHALLENGE_PATTERN_SPEC.pattern_ratio
+    assert published["total_volume_ml"] == CHALLENGE_PATTERN_SPEC.total_volume_ml
 
 
 def test_every_pattern_has_usable_display_text():
@@ -113,11 +131,11 @@ def test_omitting_oil_pattern_still_defaults_to_house():
     assert response.status_code == 201
 
 
-def test_the_registry_still_has_exactly_one_pattern():
-    """Documents the current scope directly: this milestone publishes the
-    catalog, it does not add a second pattern. A registry addition should
-    make this fail loudly rather than pass unnoticed."""
-    assert list(SUPPORTED_OIL_PATTERNS) == ["house"]
+def test_the_registry_now_has_exactly_two_patterns_in_declared_order():
+    """Documents the current scope directly: this milestone adds exactly
+    one second pattern ('challenge') after 'house'. A further registry
+    change should make this fail loudly rather than pass unnoticed."""
+    assert list(SUPPORTED_OIL_PATTERNS) == ["house", "challenge"]
 
 
 def test_the_catalog_endpoint_is_read_only():

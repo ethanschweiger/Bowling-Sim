@@ -36,6 +36,12 @@ _PATTERN_DESCRIPTION: dict[str, str] = {
         "misses inside hold, and misses outside hook back. The pattern this "
         "simulator models by default."
     ),
+    "challenge": (
+        "Less forgiving than the house shot: a shorter pattern with a much "
+        "steeper drop-off from center to edge, so a miss outside the "
+        "pattern finds far less oil, and far more hook, than the same miss "
+        "would on the house shot."
+    ),
 }
 
 

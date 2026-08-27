@@ -1,18 +1,17 @@
 /**
- * Where the oil-pattern notice's data comes from.
+ * Where the selectable oil-pattern list comes from, and which pattern a
+ * new game starts with.
  *
  * The backend owns the pattern catalog. `GET /api/v1/oil-patterns`
  * publishes the same supported-pattern registry `POST /api/v1/games`
  * validates `oil_pattern` against, so anything this module hands the UI
- * is a pattern a game can actually be created with.
- *
- * Only one pattern exists today, and the UI has no control to pick a
- * different one — see `BallSelect`'s non-interactive pattern notice — but
- * the *text* is server-owned rather than a local copy, so it cannot
- * disagree with what the backend actually models. There is deliberately
- * no local fallback pattern to fall back on for the same reason
- * `ballCatalog.ts` has none: a stale hardcoded description is worse than
- * no description.
+ * is a pattern a game can actually be created with. Mirrors
+ * `ballCatalog.ts`'s shape exactly, for the same reasons: there is
+ * deliberately no local fallback catalog or hardcoded pattern id except
+ * the *preference* below, and that preference is checked against the
+ * fetched list before it is used. A stale hardcoded list or description
+ * is worse than none: it can disagree with the server and offer an id a
+ * create-game request would reject with a 422.
  */
 
 import { getOilPatterns } from '../api/client';
@@ -46,9 +45,75 @@ export function resetOilPatternCatalogForTests(): void {
   catalogPromise = null;
 }
 
-/** The pattern the UI's non-interactive notice describes: the first the
- * server published, since nothing lets a player choose among more than
- * one yet. Returns null for an empty catalog rather than inventing one. */
-export function primaryOilPattern(patterns: readonly OilPatternResponse[]): OilPatternResponse | null {
-  return patterns[0] ?? null;
+/** The pattern a new game starts with unless the player picks otherwise:
+ * the forgiving house shot, the same default `POST /api/v1/games` itself
+ * falls back to when `oil_pattern` is omitted. Only a preference — if the
+ * server ever stops publishing it, `pickDefaultOilPatternId` falls back
+ * rather than selecting an id the server does not offer. */
+export const DEFAULT_OIL_PATTERN_ID = 'house';
+
+/** Which pattern id to select when the catalog arrives: the preferred one
+ * when the server actually returned it, otherwise the first pattern it
+ * did return. Returns null for an empty catalog, which leaves the UI with
+ * nothing selectable rather than inventing an id. */
+export function pickDefaultOilPatternId(patterns: readonly OilPatternResponse[]): string | null {
+  if (patterns.some((pattern) => pattern.id === DEFAULT_OIL_PATTERN_ID)) {
+    return DEFAULT_OIL_PATTERN_ID;
+  }
+  return patterns[0]?.id ?? null;
+}
+
+/** True when `patternId` is one the server published. The new-game path
+ * checks this before submitting, so a stale selection can never be sent. */
+export function isOilPatternSelectable(
+  patterns: readonly OilPatternResponse[],
+  patternId: string | null,
+): boolean {
+  return patternId !== null && patterns.some((pattern) => pattern.id === patternId);
+}
+
+/**
+ * Whether the main gameplay surface (lane, throw/reset controls,
+ * scoreboard, stale-game recovery) can render.
+ *
+ * Deliberately a function of the game and the *ball* catalog only. A
+ * throw must name a `ball_id` the server published, so gameplay genuinely
+ * depends on that catalog — but the oil-pattern catalog feeds only the
+ * optional next-game selector, so its failure must never take the loaded
+ * game's own controls down with it. An earlier version of this gate also
+ * required the oil-pattern catalog, which turned one optional selector's
+ * fetch failure into a total app block.
+ *
+ * Extracting the rule here and testing it directly guards against a
+ * regression *inside this function* — but that guard is only as strong as
+ * every call site actually routing through it. This repo has no
+ * component-render test infrastructure (no React Testing Library/jsdom),
+ * so nothing would catch a future edit that left this function alone and
+ * instead re-inlined an oil-pattern check directly into `App.tsx`'s
+ * `isReady` expression or its `<main>` render condition. See the comment
+ * at that call site.
+ */
+export function canPlayLoadedGame(hasGame: boolean, hasBallCatalog: boolean): boolean {
+  return hasGame && hasBallCatalog;
+}
+
+/**
+ * The `oil_pattern` id a new-game request should carry, or `undefined` to
+ * omit the field entirely and let the server apply its own `house`
+ * default.
+ *
+ * Deliberately total over a *failed* catalog load, not just an empty one:
+ * `patterns` is null whenever `fetchOilPatternCatalog()` rejected, and
+ * that case must still produce a usable new-game request rather than
+ * blocking recovery. An id the server never published is likewise
+ * dropped rather than sent, since it would only earn a 422.
+ */
+export function oilPatternIdForNewGame(
+  patterns: readonly OilPatternResponse[] | null,
+  patternId: string | null,
+): string | undefined {
+  if (!patterns || !isOilPatternSelectable(patterns, patternId)) {
+    return undefined;
+  }
+  return patternId ?? undefined;
 }

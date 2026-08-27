@@ -4,13 +4,20 @@ import type { BallResponse, GameStateResponse, GameThrowResponse, OilPatternResp
 import styles from './App.module.css';
 import { BallSelect } from './components/BallSelect';
 import { LaneCanvas } from './components/LaneCanvas';
+import { OilPatternSelect } from './components/OilPatternSelect';
 import { ReleaseControls } from './components/ReleaseControls';
 import { ReleaseSeedControl } from './components/ReleaseSeedControl';
 import { ScoreboardPanel } from './components/ScoreboardPanel';
 import { StaleGameNotice } from './components/StaleGameNotice';
 import { ThrowControls, type ThrowStatus } from './components/ThrowControls';
 import { fetchBallCatalog, isSelectable, pickDefaultBallId } from './domain/ballCatalog';
-import { fetchOilPatternCatalog, primaryOilPattern } from './domain/oilPatternCatalog';
+import {
+  canPlayLoadedGame,
+  fetchOilPatternCatalog,
+  isOilPatternSelectable,
+  oilPatternIdForNewGame,
+  pickDefaultOilPatternId,
+} from './domain/oilPatternCatalog';
 import { bootstrapGame, classifyThrowFailure, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
 import { defaultReleaseValues, type ReleaseFieldId } from './domain/releaseFields';
 import { parseReleaseSeed } from './domain/releaseSeed';
@@ -47,9 +54,12 @@ function App() {
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [ballId, setBallId] = useState<string | null>(null);
   // Same reasoning as the ball catalog above: server-owned, no local
-  // fallback, starts empty until a catalog response fills it.
+  // fallback, starts empty until a catalog response fills it. `oilPatternId`
+  // is only ever read when a *new* game is created (see handleStartNewGame)
+  // — it has no effect on the currently active game.
   const [oilPatternCatalog, setOilPatternCatalog] = useState<OilPatternResponse[] | null>(null);
   const [oilPatternError, setOilPatternError] = useState<string | null>(null);
+  const [oilPatternId, setOilPatternId] = useState<string | null>(null);
   const [releaseValues, setReleaseValues] = useState(defaultReleaseValues());
   const [releaseSeed, setReleaseSeed] = useState('');
   const [latestThrow, setLatestThrow] = useState<GameThrowResponse | null>(null);
@@ -173,6 +183,10 @@ function App() {
           return;
         }
         setOilPatternCatalog(patterns);
+        // Only ever select an id the server actually returned.
+        setOilPatternId((current) =>
+          isOilPatternSelectable(patterns, current) ? current : pickDefaultOilPatternId(patterns),
+        );
       },
       (error: unknown) => {
         if (!mountedRef.current) {
@@ -294,7 +308,15 @@ function App() {
     setPresentationLock(true);
     setStatus({ kind: 'loading', label: 'Starting a new game' });
     try {
-      const result = await startNewGame();
+      // Only sent when it's actually one the server published; otherwise
+      // omitted so the server falls back to its own default ("house"),
+      // exactly like the initial bootstrap create already does. This
+      // covers a failed catalog load (`oilPatternCatalog === null`), so
+      // new-game recovery stays usable in that state.
+      const result = await startNewGame(
+        undefined,
+        oilPatternIdForNewGame(oilPatternCatalog, oilPatternId),
+      );
       if (!mountedRef.current) {
         return;
       }
@@ -320,9 +342,17 @@ function App() {
 
   const isBusy = status.kind === 'loading';
   const isStale = staleGameMessage !== null;
-  // The controls need the game, the server's ball list, and the
-  // server's oil-pattern catalog.
-  const isReady = game !== null && ballCatalog !== null && oilPatternCatalog !== null;
+  // Gameplay needs exactly two things: the game itself and the server's
+  // ball list. The oil-pattern catalog is deliberately excluded — see
+  // `canPlayLoadedGame`, which owns that rule and its regression test.
+  //
+  // Route any future change to this readiness rule through
+  // `canPlayLoadedGame` (and its test) rather than inlining a new
+  // condition here or on the `<main>` render guard below: this repo has
+  // no component-render test infrastructure, so nothing would catch a
+  // regression re-inlined directly at either of those two spots instead
+  // of going through the function.
+  const isReady = canPlayLoadedGame(game !== null, ballCatalog !== null);
 
   return (
     <div className={styles.page}>
@@ -355,7 +385,9 @@ function App() {
           </button>
         </div>
       )}
-      {!isReady && !initError && !catalogError && !oilPatternError && (
+      {/* Not gated on oilPatternError: that failure leaves the game fully
+          playable, so it must not keep showing "Loading your game…". */}
+      {!isReady && !initError && !catalogError && (
         <p aria-live="polite" className={styles.loadingText}>
           Loading your game…
         </p>
@@ -372,9 +404,21 @@ function App() {
                 options={ballCatalog}
                 value={ballId ?? ''}
                 onChange={setBallId}
-                pattern={primaryOilPattern(oilPatternCatalog)}
                 disabled={isBusy || isStale || presentationLocked}
               />
+              {/* Omitted entirely when the catalog didn't load: there is
+                  nothing truthful to offer, and the error banner above
+                  already carries the failure and its Retry. A new game
+                  started in this state simply omits `oil_pattern` and
+                  gets the server's "house" default. */}
+              {oilPatternCatalog && (
+                <OilPatternSelect
+                  options={oilPatternCatalog}
+                  value={oilPatternId ?? ''}
+                  onChange={setOilPatternId}
+                  disabled={isBusy || presentationLocked}
+                />
+              )}
               <ReleaseControls
                 values={releaseValues}
                 onChange={handleReleaseChange}

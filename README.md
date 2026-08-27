@@ -268,16 +268,22 @@ order. An unknown `ball_id` on a throw is a 404.
 
 ```bash
 curl http://localhost:8000/api/v1/oil-patterns
-# {"patterns": [ {"id": "house", "name": "House Shot",
+# {"patterns": [
+#   {"id": "house", "name": "House Shot",
 #    "description": "Forgiving, with the oil concentrated in the middle …",
 #    "spec": {"length_ft": 40.0, "taper_ft": 6.0, "center_boards": [8, 32],
 #             "total_boards": [3, 37], "pattern_ratio": 3.0,
-#             "total_volume_ml": 22.0}} ] }
+#             "total_volume_ml": 22.0}},
+#   {"id": "challenge", "name": "Challenge Pattern",
+#    "description": "Less forgiving than the house shot …",
+#    "spec": {"length_ft": 34.0, "taper_ft": 3.0, "center_boards": [10, 30],
+#             "total_boards": [5, 35], "pattern_ratio": 6.0,
+#             "total_volume_ml": 24.0}} ] }
 ```
 
 Read-only, and the authority on which `oil_pattern` values
-`POST /api/v1/games` accepts. Only `house` exists today; an unsupported
-value on create is a 422.
+`POST /api/v1/games` accepts. `house` (the default) and `challenge` both
+exist today; an unsupported value on create is a 422.
 
 ### Create a game
 
@@ -390,11 +396,16 @@ percentages, leave tracking, ball usage stats.
 - `mass_lbs` and `radius_in` are on the `Ball` model but unused in this
   milestone's trajectory calculation: mass cancels out of simple Coulomb
   friction, and every catalog ball shares the same regulation radius.
-- The house shot's length, taper, volume ratio, and 22 mL total are a
-  reasoned assumption, not a certified USBC pattern; named-pattern
-  selection is deferred (`POST /games`'s `oil_pattern` only accepts
-  `"house"` today, though `GET /api/v1/oil-patterns` already publishes
-  whatever the registry supports).
+- The house shot's and challenge pattern's length, taper, volume ratio,
+  and total volume are reasoned assumptions, not certified USBC patterns.
+  `POST /games`'s `oil_pattern` accepts `"house"` (the default) or
+  `"challenge"` — both entries in the same registry
+  `GET /api/v1/oil-patterns` publishes, and the frontend's oil-pattern
+  picker offers exactly this same catalog for the *next* new game — with
+  no other named-pattern selection or temperature setting yet. The
+  picker has no effect on a game already in progress: the API never
+  echoes back which pattern an existing game was created with, so the
+  client has no way to describe that after the fact.
 - The board width (1.05 in) and the lane-temperature friction adjustment
   (±10% max, linear, 72°F reference) are stated modeling constants, not
   measured or derived.

@@ -168,10 +168,14 @@ from app.physics.rack import Rack
 from app.physics.simulate import SimulationResult
 from app.scoring.scorecard import Frame, Scorecard
 
-# The only pattern selectable this milestone. A future named-pattern
-# selection just adds more entries here (and to the request schema's
-# Literal) — the route contract doesn't change.
-SUPPORTED_OIL_PATTERNS = {"house": LaneCondition.house_shot}
+# The patterns selectable via `oil_pattern`. A future named-pattern
+# addition just adds another entry here (and to the request schema's
+# Literal) — the route contract doesn't change. Declaration order is the
+# order `GET /api/v1/oil-patterns` publishes them in.
+SUPPORTED_OIL_PATTERNS = {
+    "house": LaneCondition.house_shot,
+    "challenge": LaneCondition.challenge_pattern,
+}
 
 
 class UnknownGameError(Exception):

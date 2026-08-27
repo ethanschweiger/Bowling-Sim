@@ -126,9 +126,17 @@ export async function classifyThrowFailure(gameId: string, originalError: unknow
 /** Unconditionally starts a brand new game and makes it this browser's
  * saved one — the "Start a new game" recovery action for a confirmed-
  * stale saved game_id. Never reads the old id; always overwrites it (or
- * writes one for the first time) on success. */
-export async function startNewGame(store: GameIdStore = defaultStore()): Promise<BootResult> {
-  const created = await createGame();
+ * writes one for the first time) on success.
+ *
+ * `oilPatternId` is the player's own selection from the oil-pattern
+ * catalog (see `domain/oilPatternCatalog.ts`); omit it (or pass undefined)
+ * to let the server fall back to its own default, exactly as the initial
+ * bootstrap create already does. */
+export async function startNewGame(
+  store: GameIdStore = defaultStore(),
+  oilPatternId?: string,
+): Promise<BootResult> {
+  const created = await createGame(oilPatternId ? { oil_pattern: oilPatternId } : {});
   store.setItem(GAME_ID_STORAGE_KEY, created.game_id);
   return { gameId: created.game_id, laneConditionVersion: created.lane_condition_version, gameState: created.game_state };
 }

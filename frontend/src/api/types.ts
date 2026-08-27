@@ -212,8 +212,11 @@ export interface GameStateResponse {
 }
 
 export interface CreateGameRequest {
-  /** Only "house" is selectable this milestone. */
-  oil_pattern?: 'house';
+  /** Any id `GET /api/v1/oil-patterns` published, same as `ball_id` above
+   * is validated only against the ball catalog. Omit to default to
+   * "house"; an unrecognized id is a 422, same as an unknown ball_id
+   * is a 404. */
+  oil_pattern?: string;
 }
 
 export interface CreateGameResponse {

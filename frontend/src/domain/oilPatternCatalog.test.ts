@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OilPatternResponse } from '../api/types';
-import { fetchOilPatternCatalog, primaryOilPattern, resetOilPatternCatalogForTests } from './oilPatternCatalog';
+import {
+  canPlayLoadedGame,
+  DEFAULT_OIL_PATTERN_ID,
+  fetchOilPatternCatalog,
+  isOilPatternSelectable,
+  oilPatternIdForNewGame,
+  pickDefaultOilPatternId,
+  resetOilPatternCatalogForTests,
+} from './oilPatternCatalog';
 
 function pattern(id: string, name = id): OilPatternResponse {
   return {
@@ -32,15 +40,85 @@ afterEach(() => {
   resetOilPatternCatalogForTests();
 });
 
-describe('primaryOilPattern', () => {
-  it('returns the first published pattern', () => {
-    expect(primaryOilPattern([pattern('house', 'House Shot'), pattern('sport')])).toEqual(
-      pattern('house', 'House Shot'),
-    );
+describe('pickDefaultOilPatternId', () => {
+  it('prefers the house pattern when the server published it', () => {
+    expect(pickDefaultOilPatternId([pattern('challenge'), pattern('house')])).toBe(DEFAULT_OIL_PATTERN_ID);
+  });
+
+  it('falls back to the first published pattern when house is absent', () => {
+    expect(pickDefaultOilPatternId([pattern('challenge'), pattern('sport')])).toBe('challenge');
   });
 
   it('returns null for an empty catalog rather than inventing one', () => {
-    expect(primaryOilPattern([])).toBeNull();
+    expect(pickDefaultOilPatternId([])).toBeNull();
+  });
+});
+
+describe('isOilPatternSelectable', () => {
+  const catalog = [pattern('house'), pattern('challenge')];
+
+  it('is true for a published id', () => {
+    expect(isOilPatternSelectable(catalog, 'challenge')).toBe(true);
+  });
+
+  it('is false for an id the server did not publish', () => {
+    expect(isOilPatternSelectable(catalog, 'sport')).toBe(false);
+  });
+
+  it('is false for null', () => {
+    expect(isOilPatternSelectable(catalog, null)).toBe(false);
+  });
+});
+
+describe('canPlayLoadedGame', () => {
+  // The rejected-attempt regression, stated directly: an oil-pattern
+  // catalog failure must not gate the loaded game's own surface. This
+  // function's own tests guard against a regression *inside
+  // canPlayLoadedGame itself* -- but that guard only holds as long as
+  // every call site actually routes through it. Nothing here (and no
+  // test anywhere in this repo, which has no component-render test
+  // infrastructure -- see `App.tsx`'s own comment at its `isReady` call
+  // site) would catch a future edit that bypassed this function entirely
+  // and re-inlined an oil-pattern check directly into App.tsx instead.
+  it('is true once the game and ball catalog are loaded', () => {
+    expect(canPlayLoadedGame(true, true)).toBe(true);
+  });
+
+  it('is false without a game', () => {
+    expect(canPlayLoadedGame(false, true)).toBe(false);
+  });
+
+  it('is false without the ball catalog, which a throw genuinely needs', () => {
+    expect(canPlayLoadedGame(true, false)).toBe(false);
+  });
+});
+
+describe('oilPatternIdForNewGame', () => {
+  const catalog = [pattern('house'), pattern('challenge')];
+
+  it('sends a selected id the server published', () => {
+    expect(oilPatternIdForNewGame(catalog, 'challenge')).toBe('challenge');
+  });
+
+  // The rejected-attempt regression: a failed oil-pattern catalog load
+  // (patterns === null) must still yield a usable new-game request rather
+  // than blocking recovery. `undefined` here means the field is omitted
+  // entirely, so the server applies its own "house" default.
+  it('falls back to omitting oil_pattern when the catalog failed to load', () => {
+    expect(oilPatternIdForNewGame(null, 'challenge')).toBeUndefined();
+    expect(oilPatternIdForNewGame(null, null)).toBeUndefined();
+  });
+
+  it('omits an id the server never published rather than sending a 422', () => {
+    expect(oilPatternIdForNewGame(catalog, 'sport')).toBeUndefined();
+  });
+
+  it('omits when nothing is selected yet', () => {
+    expect(oilPatternIdForNewGame(catalog, null)).toBeUndefined();
+  });
+
+  it('omits for an empty catalog', () => {
+    expect(oilPatternIdForNewGame([], 'house')).toBeUndefined();
   });
 });
 
