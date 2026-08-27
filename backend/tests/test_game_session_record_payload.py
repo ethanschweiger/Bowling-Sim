@@ -77,6 +77,22 @@ def test_round_trips_a_fresh_game():
     assert restored.lane.condition == session.lane.condition
 
 
+def test_round_trip_preserves_the_oil_pattern_id():
+    """The specific field this task adds: a full session -> record ->
+    payload -> JSON -> payload -> record -> session round trip must not
+    lose or default away which pattern the game was created with."""
+    session = GameService().create_game(oil_pattern="challenge")
+    restored = _round_trip(session)
+
+    assert restored.oil_pattern == "challenge"
+    assert restored.current_snapshot().oil_pattern == "challenge"
+
+    # And reset() on the restored session still returns to that same
+    # pattern -- it never quietly reverts to the house default.
+    restored.reset()
+    assert restored.current_snapshot().oil_pattern == "challenge"
+
+
 def test_round_trips_a_worn_partial_rack_game():
     session = GameService().create_game()
     _scripted_throw(session, 3, (1, 2, 3))
@@ -152,7 +168,14 @@ def test_payload_preserves_lane_condition_details_exactly():
 
 @pytest.mark.parametrize(
     "missing_key",
-    ["game_id", "initial_condition", "current_condition", "rolls", "standing_pin_ids"],
+    [
+        "game_id",
+        "oil_pattern",
+        "initial_condition",
+        "current_condition",
+        "rolls",
+        "standing_pin_ids",
+    ],
 )
 def test_from_payload_rejects_a_missing_required_key(missing_key):
     session = GameService().create_game()
@@ -223,6 +246,15 @@ def test_from_payload_rejects_a_non_str_game_id():
     payload["game_id"] = 12345
 
     with pytest.raises(GameSessionPayloadError, match="game_id"):
+        record_from_payload(payload)
+
+
+def test_from_payload_rejects_a_non_str_oil_pattern():
+    session = GameService().create_game()
+    payload = record_to_payload(session.to_record())
+    payload["oil_pattern"] = 12345
+
+    with pytest.raises(GameSessionPayloadError, match="oil_pattern"):
         record_from_payload(payload)
 
 

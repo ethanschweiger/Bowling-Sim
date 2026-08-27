@@ -403,9 +403,13 @@ percentages, leave tracking, ball usage stats.
   `GET /api/v1/oil-patterns` publishes, and the frontend's oil-pattern
   picker offers exactly this same catalog for the *next* new game — with
   no other named-pattern selection or temperature setting yet. The
-  picker has no effect on a game already in progress: the API never
-  echoes back which pattern an existing game was created with, so the
-  client has no way to describe that after the fact.
+  picker has no effect on a game already in progress: a created game's
+  `oil_pattern` is fixed for its life (`reset()` returns to that same
+  pattern, it never changes it), and `game_state.oil_pattern` reports it
+  on every read — create, `GET /api/v1/games/{id}`, throw, and reset
+  alike — so a client can always describe which pattern a loaded game is
+  using, not only the one it just created. The frontend does not yet
+  display this field.
 - The board width (1.05 in) and the lane-temperature friction adjustment
   (±10% max, linear, 72°F reference) are stated modeling constants, not
   measured or derived.

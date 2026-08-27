@@ -66,6 +66,7 @@ def test_game_state_response_nullable_fields_accept_and_serialize_none():
         roll_symbols=["3"],
     )
     state = GameStateResponse(
+        oil_pattern="house",
         standing_pin_ids=[1, 2, 3],
         frames=[unresolved_frame],
         total_score=None,
@@ -101,6 +102,7 @@ def test_game_state_response_nullable_fields_also_accept_a_real_int():
         roll_symbols=["X"],
     )
     state = GameStateResponse(
+        oil_pattern="house",
         standing_pin_ids=[],
         frames=[resolved_frame],
         total_score=10,

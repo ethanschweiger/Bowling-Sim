@@ -181,7 +181,9 @@ def test_get_or_put_holds_the_lock_for_its_entire_check_then_store_sequence():
 
     repository.get_or_put(
         "some-id",
-        lambda: GameSession(game_id="some-id", initial_condition=LaneCondition.house_shot()),
+        lambda: GameSession(
+            game_id="some-id", initial_condition=LaneCondition.house_shot(), oil_pattern="house"
+        ),
     )
 
     assert counting_lock.enter_count == 1

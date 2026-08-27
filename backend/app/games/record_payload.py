@@ -214,6 +214,7 @@ def record_to_payload(record: GameSessionRecord) -> dict[str, Any]:
     """
     return {
         "game_id": record.game_id,
+        "oil_pattern": record.oil_pattern,
         "initial_condition": _lane_condition_to_payload(record.initial_condition),
         "current_condition": _lane_condition_to_payload(record.current_condition),
         "rolls": list(record.rolls),
@@ -233,6 +234,7 @@ def record_from_payload(payload: Mapping[str, Any]) -> GameSessionRecord:
         raise GameSessionPayloadError(f"payload must be an object, got {payload!r}")
     return GameSessionRecord(
         game_id=_as_str(_require(payload, "game_id", "payload"), "payload.game_id"),
+        oil_pattern=_as_str(_require(payload, "oil_pattern", "payload"), "payload.oil_pattern"),
         initial_condition=_lane_condition_from_payload(
             _require(payload, "initial_condition", "payload"), "payload.initial_condition"
         ),

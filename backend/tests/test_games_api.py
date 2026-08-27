@@ -64,6 +64,41 @@ def test_challenge_oil_pattern_is_accepted_and_builds_the_challenge_lane_conditi
     assert session.lane.condition.spec != HOUSE_SHOT_SPEC
 
 
+def test_created_game_state_reports_the_house_default_oil_pattern():
+    body = _create_game()
+    assert body["game_state"]["oil_pattern"] == "house"
+
+
+def test_challenge_oil_pattern_is_reported_in_game_state_on_every_read():
+    """The registry id a game was created with must come back out of
+    `game_state.oil_pattern` -- not only from the create response `Codex`
+    could already see, but from every later read of the same game: GET, a
+    throw, and a reset alike. Regression this guards: an earlier version
+    of this feature would have reported it on create and silently omitted
+    it (or reported the wrong pattern) everywhere else."""
+    create_response = client.post("/api/v1/games", json={"oil_pattern": "challenge"})
+    assert create_response.status_code == 201
+    game = create_response.json()
+    game_id = game["game_id"]
+    assert game["game_state"]["oil_pattern"] == "challenge"
+
+    get_body = client.get(f"/api/v1/games/{game_id}").json()
+    assert get_body["game_state"]["oil_pattern"] == "challenge"
+
+    throw_body = client.post(
+        f"/api/v1/games/{game_id}/throws", json={**THROW_PAYLOAD, "seed": 3}
+    ).json()
+    assert throw_body["game_state"]["oil_pattern"] == "challenge"
+
+    reset_body = client.post(f"/api/v1/games/{game_id}/reset").json()
+    assert reset_body["game_state"]["oil_pattern"] == "challenge"
+
+    # reset() returns to the same pattern the game was created with, not
+    # back to the house default.
+    after_reset_get = client.get(f"/api/v1/games/{game_id}").json()
+    assert after_reset_get["game_state"]["oil_pattern"] == "challenge"
+
+
 def test_unknown_game_id_returns_404_for_throws_and_reset():
     throw_response = client.post("/api/v1/games/does-not-exist/throws", json=THROW_PAYLOAD)
     assert throw_response.status_code == 404

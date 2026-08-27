@@ -229,6 +229,11 @@ class GameStateResponse(BaseModel):
     throw should look like, without re-deriving any ten-pin rule
     client-side."""
 
+    # The registry id (see app.games.service.SUPPORTED_OIL_PATTERNS) this
+    # game was created with -- and, since it's read from GameSession's own
+    # immutable oil_pattern, the same value on every read of the same game:
+    # create, GET, throw, and reset all publish it through this one shape.
+    oil_pattern: Literal["house", "challenge"]
     standing_pin_ids: list[int]
     frames: list[FrameStateResponse]
     # cumulative through the most recently resolved frame; None if nothing resolved yet

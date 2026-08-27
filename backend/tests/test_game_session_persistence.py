@@ -141,6 +141,7 @@ def test_from_record_rejects_an_illegal_stored_roll_sequence():
     valid_record = session.to_record()
     illegal_record = GameSessionRecord(
         game_id=valid_record.game_id,
+        oil_pattern=valid_record.oil_pattern,
         initial_condition=valid_record.initial_condition,
         current_condition=valid_record.current_condition,
         rolls=(5, 6),  # frame 1: 5 + 6 exceeds 10 pins
@@ -151,11 +152,33 @@ def test_from_record_rejects_an_illegal_stored_roll_sequence():
         GameSession.from_record(illegal_record)
 
 
+def test_from_record_rejects_an_unsupported_stored_oil_pattern():
+    """A stored `oil_pattern` that isn't a `SUPPORTED_OIL_PATTERNS` key
+    (a corrupted or stale record -- create_game/get_or_create can never
+    produce a live GameSession with one) must still be rejected here,
+    not silently accepted only to fail later trying to serialize a
+    GameStateResponse."""
+    session = GameService().create_game()
+    valid_record = session.to_record()
+    illegal_record = GameSessionRecord(
+        game_id=valid_record.game_id,
+        oil_pattern="sport",  # not yet a supported pattern
+        initial_condition=valid_record.initial_condition,
+        current_condition=valid_record.current_condition,
+        rolls=valid_record.rolls,
+        standing_pin_ids=valid_record.standing_pin_ids,
+    )
+
+    with pytest.raises(ValueError, match="sport"):
+        GameSession.from_record(illegal_record)
+
+
 def test_from_record_rejects_invalid_stored_standing_pin_ids():
     session = GameService().create_game()
     valid_record = session.to_record()
     illegal_record = GameSessionRecord(
         game_id=valid_record.game_id,
+        oil_pattern=valid_record.oil_pattern,
         initial_condition=valid_record.initial_condition,
         current_condition=valid_record.current_condition,
         rolls=valid_record.rolls,
