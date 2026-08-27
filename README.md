@@ -458,11 +458,17 @@ percentages, leave tracking, ball usage stats.
   all exist for it. `GAME_STORAGE_MODE` (default `memory`) can now opt
   a running app into that adapter (`app.api.dependencies.get_game_service`
   builds it when set to `sql`), but this is wiring and tests, not a
-  production deployment: no migrations run at startup, no connection
-  health check, no retry, no accounts/ownership, and no Docker Postgres
-  service. The default app is unchanged — nothing opens a database
-  engine or connection unless `sql` mode is explicitly configured, and
-  even then only once a request actually resolves the dependency.
+  production deployment: no migrations run at startup, no retry, no
+  accounts/ownership, and no Docker Postgres service. The default app is
+  unchanged — nothing opens a database engine or connection unless `sql`
+  mode is explicitly configured, and even then only once a request
+  actually resolves the dependency or calls `GET /health`. In `sql` mode,
+  `GET /health` now attempts one lightweight `SELECT 1` connectivity
+  check and reports it: `{"status": "ok", "database": "ok"}` (HTTP 200)
+  if it succeeds, or `{"status": "degraded", "database": "unreachable"}`
+  (HTTP 503) if it doesn't — never an unhandled exception either way. In
+  the default `memory` mode, `/health` is unchanged: `{"status": "ok"}`,
+  HTTP 200, no engine ever built.
 - The frontend has no chart suite, accounts, or persistence. Its ball and
   oil-pattern catalogs are fixed at startup — no adding, editing, or
   persisting either. A saved `game_id` is proactively checked once, at
