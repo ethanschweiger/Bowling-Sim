@@ -202,6 +202,12 @@ without starting anything). If port 8000 or 5173 is already in use, a
 native (non-Docker) `uvicorn`/`vite` process from the `Setup`/`Run` steps
 is the usual cause.
 
+The backend's Uvicorn process (and any `docker compose exec backend ...`
+command run against it, including the in-container Alembic migration
+path below) runs as a dedicated unprivileged user (`backend`, stable
+UID/GID `1000:1000`), not root — a narrower hardening step on its own,
+not a claim that this image is otherwise production-ready.
+
 By default (no `-f` flags beyond the implicit `docker-compose.yml`),
 Docker adds no persistence: a backend container restart or rebuild loses
 every in-memory game, exactly like restarting the process natively, and
