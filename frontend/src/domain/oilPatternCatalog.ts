@@ -71,3 +71,41 @@ export function isOilPatternSelectable(
 ): boolean {
   return patternId !== null && patterns.some((pattern) => pattern.id === patternId);
 }
+
+/**
+ * Whether the main gameplay surface (lane, throw/reset controls,
+ * scoreboard, stale-game recovery) can render.
+ *
+ * Deliberately a function of the game and the *ball* catalog only. A
+ * throw must name a `ball_id` the server published, so gameplay genuinely
+ * depends on that catalog — but the oil-pattern catalog feeds only the
+ * optional next-game selector, so its failure must never take the loaded
+ * game's own controls down with it. An earlier version of this gate also
+ * required the oil-pattern catalog, which turned one optional selector's
+ * fetch failure into a total app block; `oilPatternCatalog` is
+ * intentionally absent from this signature so that cannot recur.
+ */
+export function canPlayLoadedGame(hasGame: boolean, hasBallCatalog: boolean): boolean {
+  return hasGame && hasBallCatalog;
+}
+
+/**
+ * The `oil_pattern` id a new-game request should carry, or `undefined` to
+ * omit the field entirely and let the server apply its own `house`
+ * default.
+ *
+ * Deliberately total over a *failed* catalog load, not just an empty one:
+ * `patterns` is null whenever `fetchOilPatternCatalog()` rejected, and
+ * that case must still produce a usable new-game request rather than
+ * blocking recovery. An id the server never published is likewise
+ * dropped rather than sent, since it would only earn a 422.
+ */
+export function oilPatternIdForNewGame(
+  patterns: readonly OilPatternResponse[] | null,
+  patternId: string | null,
+): string | undefined {
+  if (!patterns || !isOilPatternSelectable(patterns, patternId)) {
+    return undefined;
+  }
+  return patternId ?? undefined;
+}

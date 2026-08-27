@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OilPatternResponse } from '../api/types';
 import {
+  canPlayLoadedGame,
   DEFAULT_OIL_PATTERN_ID,
   fetchOilPatternCatalog,
   isOilPatternSelectable,
+  oilPatternIdForNewGame,
   pickDefaultOilPatternId,
   resetOilPatternCatalogForTests,
 } from './oilPatternCatalog';
@@ -65,6 +67,62 @@ describe('isOilPatternSelectable', () => {
 
   it('is false for null', () => {
     expect(isOilPatternSelectable(catalog, null)).toBe(false);
+  });
+});
+
+describe('canPlayLoadedGame', () => {
+  // The rejected-attempt regression, stated directly: an oil-pattern
+  // catalog failure must not gate the loaded game's own surface. This
+  // function takes no oil-pattern argument at all, so a future edit
+  // cannot quietly reintroduce that coupling without changing its
+  // signature and failing to compile here.
+  it('is true once the game and ball catalog are loaded', () => {
+    expect(canPlayLoadedGame(true, true)).toBe(true);
+  });
+
+  it('stays true regardless of oil-pattern catalog state (it takes no such argument)', () => {
+    // Whatever happened to the oil-pattern catalog -- loaded, empty, or
+    // failed outright -- these are the only two inputs that decide
+    // whether throws, reset, the lane, and the scoreboard render.
+    expect(canPlayLoadedGame(true, true)).toBe(true);
+    expect(canPlayLoadedGame.length).toBe(2);
+  });
+
+  it('is false without a game', () => {
+    expect(canPlayLoadedGame(false, true)).toBe(false);
+  });
+
+  it('is false without the ball catalog, which a throw genuinely needs', () => {
+    expect(canPlayLoadedGame(true, false)).toBe(false);
+  });
+});
+
+describe('oilPatternIdForNewGame', () => {
+  const catalog = [pattern('house'), pattern('challenge')];
+
+  it('sends a selected id the server published', () => {
+    expect(oilPatternIdForNewGame(catalog, 'challenge')).toBe('challenge');
+  });
+
+  // The rejected-attempt regression: a failed oil-pattern catalog load
+  // (patterns === null) must still yield a usable new-game request rather
+  // than blocking recovery. `undefined` here means the field is omitted
+  // entirely, so the server applies its own "house" default.
+  it('falls back to omitting oil_pattern when the catalog failed to load', () => {
+    expect(oilPatternIdForNewGame(null, 'challenge')).toBeUndefined();
+    expect(oilPatternIdForNewGame(null, null)).toBeUndefined();
+  });
+
+  it('omits an id the server never published rather than sending a 422', () => {
+    expect(oilPatternIdForNewGame(catalog, 'sport')).toBeUndefined();
+  });
+
+  it('omits when nothing is selected yet', () => {
+    expect(oilPatternIdForNewGame(catalog, null)).toBeUndefined();
+  });
+
+  it('omits for an empty catalog', () => {
+    expect(oilPatternIdForNewGame([], 'house')).toBeUndefined();
   });
 });
 

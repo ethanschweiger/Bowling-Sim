@@ -11,7 +11,13 @@ import { ScoreboardPanel } from './components/ScoreboardPanel';
 import { StaleGameNotice } from './components/StaleGameNotice';
 import { ThrowControls, type ThrowStatus } from './components/ThrowControls';
 import { fetchBallCatalog, isSelectable, pickDefaultBallId } from './domain/ballCatalog';
-import { fetchOilPatternCatalog, isOilPatternSelectable, pickDefaultOilPatternId } from './domain/oilPatternCatalog';
+import {
+  canPlayLoadedGame,
+  fetchOilPatternCatalog,
+  isOilPatternSelectable,
+  oilPatternIdForNewGame,
+  pickDefaultOilPatternId,
+} from './domain/oilPatternCatalog';
 import { bootstrapGame, classifyThrowFailure, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
 import { defaultReleaseValues, type ReleaseFieldId } from './domain/releaseFields';
 import { parseReleaseSeed } from './domain/releaseSeed';
@@ -304,12 +310,13 @@ function App() {
     try {
       // Only sent when it's actually one the server published; otherwise
       // omitted so the server falls back to its own default ("house"),
-      // exactly like the initial bootstrap create already does.
-      const requestedOilPatternId =
-        oilPatternCatalog && isOilPatternSelectable(oilPatternCatalog, oilPatternId)
-          ? (oilPatternId ?? undefined)
-          : undefined;
-      const result = await startNewGame(undefined, requestedOilPatternId);
+      // exactly like the initial bootstrap create already does. This
+      // covers a failed catalog load (`oilPatternCatalog === null`), so
+      // new-game recovery stays usable in that state.
+      const result = await startNewGame(
+        undefined,
+        oilPatternIdForNewGame(oilPatternCatalog, oilPatternId),
+      );
       if (!mountedRef.current) {
         return;
       }
@@ -335,9 +342,10 @@ function App() {
 
   const isBusy = status.kind === 'loading';
   const isStale = staleGameMessage !== null;
-  // The controls need the game, the server's ball list, and the
-  // server's oil-pattern catalog.
-  const isReady = game !== null && ballCatalog !== null && oilPatternCatalog !== null;
+  // Gameplay needs exactly two things: the game itself and the server's
+  // ball list. The oil-pattern catalog is deliberately excluded — see
+  // `canPlayLoadedGame`, which owns that rule and its regression test.
+  const isReady = canPlayLoadedGame(game !== null, ballCatalog !== null);
 
   return (
     <div className={styles.page}>
@@ -370,13 +378,15 @@ function App() {
           </button>
         </div>
       )}
-      {!isReady && !initError && !catalogError && !oilPatternError && (
+      {/* Not gated on oilPatternError: that failure leaves the game fully
+          playable, so it must not keep showing "Loading your game…". */}
+      {!isReady && !initError && !catalogError && (
         <p aria-live="polite" className={styles.loadingText}>
           Loading your game…
         </p>
       )}
 
-      {isReady && game && ballCatalog && oilPatternCatalog && (
+      {isReady && game && ballCatalog && (
         <main className={styles.main}>
           <section aria-labelledby="controls-heading" className={styles.controlsPanel}>
             <h2 id="controls-heading" className={styles.panelHeading}>
@@ -389,12 +399,19 @@ function App() {
                 onChange={setBallId}
                 disabled={isBusy || isStale || presentationLocked}
               />
-              <OilPatternSelect
-                options={oilPatternCatalog}
-                value={oilPatternId ?? ''}
-                onChange={setOilPatternId}
-                disabled={isBusy || presentationLocked}
-              />
+              {/* Omitted entirely when the catalog didn't load: there is
+                  nothing truthful to offer, and the error banner above
+                  already carries the failure and its Retry. A new game
+                  started in this state simply omits `oil_pattern` and
+                  gets the server's "house" default. */}
+              {oilPatternCatalog && (
+                <OilPatternSelect
+                  options={oilPatternCatalog}
+                  value={oilPatternId ?? ''}
+                  onChange={setOilPatternId}
+                  disabled={isBusy || presentationLocked}
+                />
+              )}
               <ReleaseControls
                 values={releaseValues}
                 onChange={handleReleaseChange}
