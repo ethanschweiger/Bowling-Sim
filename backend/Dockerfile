@@ -23,6 +23,19 @@ RUN pip install --no-cache-dir -r requirements.txt
 # only). Keeps the image and every rebuild smaller and faster.
 COPY backend/app ./app
 
+# alembic.ini's script_location (%(here)s/alembic) resolves relative to
+# alembic.ini's own location, and alembic/env.py inserts its own parent
+# directory onto sys.path to import app.core.config/app.db.schema -- both
+# resolve correctly here because alembic.ini lands at /app/alembic.ini,
+# alembic/ lands at /app/alembic, and app/ (copied above) is already at
+# /app/app. This does not run the migration itself -- see README.md's
+# "SQL-mode overlay (opt-in)" section for the explicit `alembic upgrade
+# head` command run against a live container, same as the pre-existing
+# host-side path; nothing here or in this image's CMD applies it
+# automatically.
+COPY backend/alembic ./alembic
+COPY backend/alembic.ini ./alembic.ini
+
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

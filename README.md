@@ -225,11 +225,20 @@ exists — it is only read when explicitly passed with `-f`.
 docker compose -f docker-compose.yml -f docker-compose.sql.yml up --build -d
 
 # Apply the existing Alembic migration explicitly (never automatic) --
-# run from the host, once `db` reports healthy (docker compose ps).
+# once `db` reports healthy (docker compose ps). Either of these is
+# equally valid; pick whichever fits what's already set up.
+
+# Option A -- from the host, no container changes needed.
 # settings.database_url already defaults to postgresql://bowling:bowling@localhost:5432/bowling_sim,
 # matching this overlay's exposed port and dummy credentials, so no
 # DATABASE_URL override is needed for this host-side command.
 cd backend && .venv/bin/alembic upgrade head && cd ..
+
+# Option B -- from inside the running backend container, no host venv
+# needed. The image's own DATABASE_URL (the overlay's container-network
+# postgresql://bowling:bowling@db:5432/bowling_sim) is already set, so no
+# override is needed here either.
+docker compose -f docker-compose.yml -f docker-compose.sql.yml exec backend alembic upgrade head
 
 # Confirm the backend can actually reach the database.
 curl http://localhost:8000/health   # {"status":"ok","database":"ok"}
