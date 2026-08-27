@@ -201,6 +201,11 @@ export interface FrameStateResponse {
 }
 
 export interface GameStateResponse {
+  /** The registry id (see `OilPatternResponse.id`) this game was created
+   * with -- fixed for the game's life; `reset()` always returns to this
+   * same pattern, never a different one. Reported on every read: create,
+   * `GET /api/v1/games/{id}`, throw, and reset alike, not only on create. */
+  oil_pattern: 'house' | 'challenge';
   standing_pin_ids: number[];
   frames: FrameStateResponse[];
   /** Cumulative through the most recently resolved frame; null if nothing resolved yet. */

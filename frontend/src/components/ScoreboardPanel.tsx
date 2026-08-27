@@ -6,6 +6,13 @@ const FRAME_NUMBERS = Array.from({ length: 10 }, (_, i) => i + 1);
 
 interface ScoreboardPanelProps {
   gameState: GameStateResponse;
+  /** The loaded game's oil pattern, already resolved to a display name --
+   * see `domain/oilPatternCatalog.ts`'s `oilPatternDisplayName` for how
+   * the caller derives this (the server catalog's name when available,
+   * falling back to the raw `gameState.oil_pattern` id otherwise). This
+   * component only renders the string it's given; it does not know about
+   * the catalog itself. */
+  oilPatternName: string;
 }
 
 /** The ten-frame scoresheet. Every cell is either a frame the server has
@@ -13,11 +20,14 @@ interface ScoreboardPanelProps {
  * frame (a plain dash) — there's no separate "empty state" component,
  * because a brand new game's `frames: []` is just this same table with
  * all ten columns in that not-yet-played state. */
-export function ScoreboardPanel({ gameState }: ScoreboardPanelProps) {
+export function ScoreboardPanel({ gameState, oilPatternName }: ScoreboardPanelProps) {
   const frameByNumber = new Map(gameState.frames.map((frame) => [frame.number, frame]));
 
   return (
     <div className={styles.wrapper}>
+      <p className={styles.oilPatternLabel}>
+        Lane: <span className={styles.oilPatternValue}>{oilPatternName}</span>
+      </p>
       <div className={styles.tableScroll}>
         <table className={styles.table}>
           <caption className={styles.caption}>Scorecard</caption>

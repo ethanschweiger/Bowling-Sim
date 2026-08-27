@@ -39,6 +39,7 @@ const response: GameThrowResponse = {
   },
   lane_condition_version: 4,
   game_state: {
+    oil_pattern: 'house',
     standing_pin_ids: [2, 4, 7],
     frames: [],
     total_score: null,

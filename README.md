@@ -408,8 +408,10 @@ percentages, leave tracking, ball usage stats.
   pattern, it never changes it), and `game_state.oil_pattern` reports it
   on every read — create, `GET /api/v1/games/{id}`, throw, and reset
   alike — so a client can always describe which pattern a loaded game is
-  using, not only the one it just created. The frontend does not yet
-  display this field.
+  using, not only the one it just created. The frontend displays it
+  read-only next to the scorecard, resolved to the catalog's own display
+  name when available and falling back to the raw id otherwise; there is
+  still no way to change an existing game's pattern.
 - The board width (1.05 in) and the lane-temperature friction adjustment
   (±10% max, linear, 72°F reference) are stated modeling constants, not
   measured or derived.

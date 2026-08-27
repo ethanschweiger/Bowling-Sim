@@ -117,3 +117,27 @@ export function oilPatternIdForNewGame(
   }
   return patternId ?? undefined;
 }
+
+/**
+ * The human-readable name for `patternId` (a *loaded* game's own
+ * `game_state.oil_pattern`, not a selection) -- e.g. "Challenge Pattern"
+ * for "challenge". Reads the name from the server's own catalog when it's
+ * available, since the catalog is the only source of truth for what a
+ * pattern is called; never invents or hardcodes one locally.
+ *
+ * Falls back to the raw id itself in two cases this function treats the
+ * same way, deliberately: a failed catalog load (`patterns` is null,
+ * exactly like `oilPatternIdForNewGame`'s own null case), and a catalog
+ * that loaded but doesn't include this id (a stale catalog, or a pattern
+ * id from a game created before the catalog last refreshed). Either way
+ * the raw id is still a truthful, if less polished, answer to "which
+ * pattern is this game using" -- unlike silently showing nothing, which
+ * would misrepresent an already-known fact as unknown.
+ */
+export function oilPatternDisplayName(
+  patterns: readonly OilPatternResponse[] | null,
+  patternId: string,
+): string {
+  const match = patterns?.find((pattern) => pattern.id === patternId);
+  return match?.name ?? patternId;
+}
