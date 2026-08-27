@@ -181,8 +181,8 @@ breaks when that count moves.
 A local-development alternative to the native `Setup`/`Run` steps above —
 runs the same backend and frontend, unmodified, as two containers instead
 of two manually-started host processes. Not a production/deployment
-setup: no database container, no persistence, no reverse proxy, no image
-publishing. See [`docker-compose.yml`](docker-compose.yml),
+setup: no reverse proxy, no image publishing, and by default no database
+container. See [`docker-compose.yml`](docker-compose.yml),
 [`backend/Dockerfile`](backend/Dockerfile), and
 [`frontend/Dockerfile`](frontend/Dockerfile).
 
@@ -202,10 +202,51 @@ without starting anything). If port 8000 or 5173 is already in use, a
 native (non-Docker) `uvicorn`/`vite` process from the `Setup`/`Run` steps
 is the usual cause.
 
+By default (no `-f` flags beyond the implicit `docker-compose.yml`),
 Docker adds no persistence: a backend container restart or rebuild loses
 every in-memory game, exactly like restarting the process natively, and
 the bounded game registry (see "Known limitations") governs it identically
 either way.
+
+### SQL-mode overlay (opt-in)
+
+[`docker-compose.sql.yml`](docker-compose.sql.yml) is a separate,
+opt-in overlay adding a local PostgreSQL container and switching the
+backend to `GAME_STORAGE_MODE=sql` against it — layered on top of, not
+instead of, the default file above. Local development only, still not a
+production setup: no backup strategy, no replication, no TLS, and
+migrations are never run automatically (see "Known limitations" for what
+`sql` mode does and doesn't do otherwise). Nothing about the default
+`docker compose up --build` workflow above changes because this file
+exists — it is only read when explicitly passed with `-f`.
+
+```bash
+# Start the backend, frontend, and a local Postgres together.
+docker compose -f docker-compose.yml -f docker-compose.sql.yml up --build -d
+
+# Apply the existing Alembic migration explicitly (never automatic) --
+# run from the host, once `db` reports healthy (docker compose ps).
+# settings.database_url already defaults to postgresql://bowling:bowling@localhost:5432/bowling_sim,
+# matching this overlay's exposed port and dummy credentials, so no
+# DATABASE_URL override is needed for this host-side command.
+cd backend && .venv/bin/alembic upgrade head && cd ..
+
+# Confirm the backend can actually reach the database.
+curl http://localhost:8000/health   # {"status":"ok","database":"ok"}
+
+# Stop the stack. Add -v to also delete the named Postgres volume
+# (bowling_sim_postgres_data) and its data; omit -v to keep the data
+# for next time.
+docker compose -f docker-compose.yml -f docker-compose.sql.yml down
+```
+
+Postgres's own healthcheck (`pg_isready`) gates the backend container's
+start — `depends_on: db: condition: service_healthy` in the overlay — so
+the backend never starts racing an unready database. `GET /health`
+still reports `{"status": "ok"}` with no `database` field at all if you
+start the default file alone; see "Known limitations" for that
+distinction. If host port 5432 is already in use (a native Postgres,
+most likely), stop that first or edit the overlay's port mapping.
 
 ## Frontend
 
@@ -458,11 +499,15 @@ percentages, leave tracking, ball usage stats.
   all exist for it. `GAME_STORAGE_MODE` (default `memory`) can now opt
   a running app into that adapter (`app.api.dependencies.get_game_service`
   builds it when set to `sql`), but this is wiring and tests, not a
-  production deployment: no migrations run at startup, no retry, no
-  accounts/ownership, and no Docker Postgres service. The default app is
-  unchanged — nothing opens a database engine or connection unless `sql`
-  mode is explicitly configured, and even then only once a request
-  actually resolves the dependency or calls `GET /health`. In `sql` mode,
+  production deployment: no migrations run at startup, no retry, and no
+  accounts/ownership. [`docker-compose.sql.yml`](docker-compose.sql.yml)
+  (see "Docker" above) adds an opt-in local Postgres container for
+  actually exercising `sql` mode — still local development only, not a
+  deployment story: no backup strategy, no replication, no TLS. The
+  default app is unchanged — nothing opens a database engine or
+  connection unless `sql` mode is explicitly configured, and even then
+  only once a request actually resolves the dependency or calls
+  `GET /health`. In `sql` mode,
   `GET /health` now attempts one lightweight `SELECT 1` connectivity
   check and reports it: `{"status": "ok", "database": "ok"}` (HTTP 200)
   if it succeeds, or `{"status": "degraded", "database": "unreachable"}`

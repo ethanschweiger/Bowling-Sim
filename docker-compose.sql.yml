@@ -1,0 +1,64 @@
+# Opt-in overlay adding a local PostgreSQL service and SQL storage mode
+# on top of docker-compose.yml's default memory-mode stack. Never read on
+# its own -- `docker compose up --build` (docker-compose.yml alone) is
+# completely unaffected by this file's existence; it only applies when
+# explicitly passed with `-f docker-compose.yml -f docker-compose.sql.yml`.
+# See README.md's "SQL-mode overlay (opt-in)" section for exact start/
+# migrate/verify/stop commands.
+#
+# Local development only, exactly like docker-compose.yml's own backend/
+# frontend services -- not a production deployment: no backup strategy,
+# no replication, no TLS, no connection pooler. `POSTGRES_PASSWORD`
+# below is a local-only dummy credential (the same `bowling`/`bowling`
+# pair backend/.env.example's DATABASE_URL default already documents),
+# never a real secret.
+#
+# Migrations are never run automatically by either service here -- see
+# `backend/app/main.py`'s own `GET /health` (a connectivity check only,
+# never a migration runner) and `alembic/env.py`'s own docstring. Apply
+# the existing migration explicitly, after `db` reports healthy, per
+# README.md.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bowling
+      POSTGRES_PASSWORD: bowling
+      POSTGRES_DB: bowling_sim
+    ports:
+      # Exposed to the host so the existing host-side Alembic setup
+      # (backend/alembic/, via settings.database_url's own existing
+      # default of postgresql://bowling:bowling@localhost:5432/bowling_sim)
+      # can apply the migration directly with no container changes --
+      # backend/Dockerfile copies only backend/app, not backend/alembic/
+      # or backend/alembic.ini, so alembic has nothing to run against
+      # from inside the backend container as built today. If host port
+      # 5432 is already in use (a native Postgres, most likely), stop
+      # that first or change the host side of this mapping.
+      - "5432:5432"
+    volumes:
+      - bowling_sim_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bowling -d bowling_sim"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    environment:
+      GAME_STORAGE_MODE: sql
+      # The Compose network's own "db" service name, not localhost --
+      # containers can't reach each other over 127.0.0.1, the same
+      # reasoning docker-compose.yml's own VITE_BACKEND_ORIGIN override
+      # already documents for the frontend -> backend link.
+      DATABASE_URL: postgresql://bowling:bowling@db:5432/bowling_sim
+    depends_on:
+      db:
+        condition: service_healthy
+
+# Named and persistent on purpose -- `docker compose down` (with no
+# further flags) leaves this volume, and the games it holds, intact
+# across a stack restart; only `docker compose down -v` removes it. See
+# README.md for exactly that distinction.
+volumes:
+  bowling_sim_postgres_data:

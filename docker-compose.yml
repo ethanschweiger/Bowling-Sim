@@ -1,9 +1,12 @@
 # Local development only -- runs the existing FastAPI backend and Vite
 # frontend exactly as documented in README.md's "Run" and "Run it
 # locally" sections, as two containers instead of two manually-started
-# host processes. No database service: nothing in this app connects to
-# one yet (see backend/app/core/config.py). See README.md's "Docker"
-# section for start/stop/rebuild commands and troubleshooting.
+# host processes. No database service here, and running this file alone
+# (`docker compose up --build`, with no -f flags) is unaffected by
+# docker-compose.sql.yml's existence -- the backend still runs in its
+# default in-memory storage mode. See README.md's "Docker" section for
+# start/stop/rebuild commands and troubleshooting, and its "SQL-mode
+# overlay (opt-in)" section for the separate, opt-in PostgreSQL stack.
 services:
   backend:
     build:
