@@ -400,8 +400,12 @@ percentages, leave tracking, ball usage stats.
   and total volume are reasoned assumptions, not certified USBC patterns.
   `POST /games`'s `oil_pattern` accepts `"house"` (the default) or
   `"challenge"` — both entries in the same registry
-  `GET /api/v1/oil-patterns` publishes — with no other named-pattern
-  selection, temperature setting, or frontend picker yet.
+  `GET /api/v1/oil-patterns` publishes, and the frontend's oil-pattern
+  picker offers exactly this same catalog for the *next* new game — with
+  no other named-pattern selection or temperature setting yet. The
+  picker has no effect on a game already in progress: the API never
+  echoes back which pattern an existing game was created with, so the
+  client has no way to describe that after the fact.
 - The board width (1.05 in) and the lane-temperature friction adjustment
   (±10% max, linear, 72°F reference) are stated modeling constants, not
   measured or derived.

@@ -143,8 +143,29 @@ describe('startNewGame', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({});
     expect(result.gameId).toBe('fresh-game');
     expect(store.getItem(GAME_ID_STORAGE_KEY)).toBe('fresh-game');
+  });
+
+  it('sends the requested oil pattern id when one is given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(CREATED_GAME, { status: 201 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const store = fakeStore();
+
+    await startNewGame(store, 'challenge');
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ oil_pattern: 'challenge' });
+  });
+
+  it('omits oil_pattern (letting the server default to house) when none is given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(CREATED_GAME, { status: 201 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const store = fakeStore();
+
+    await startNewGame(store, undefined);
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({});
   });
 });
 

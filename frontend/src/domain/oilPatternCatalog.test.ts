@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OilPatternResponse } from '../api/types';
-import { fetchOilPatternCatalog, primaryOilPattern, resetOilPatternCatalogForTests } from './oilPatternCatalog';
+import {
+  DEFAULT_OIL_PATTERN_ID,
+  fetchOilPatternCatalog,
+  isOilPatternSelectable,
+  pickDefaultOilPatternId,
+  resetOilPatternCatalogForTests,
+} from './oilPatternCatalog';
 
 function pattern(id: string, name = id): OilPatternResponse {
   return {
@@ -32,15 +38,33 @@ afterEach(() => {
   resetOilPatternCatalogForTests();
 });
 
-describe('primaryOilPattern', () => {
-  it('returns the first published pattern', () => {
-    expect(primaryOilPattern([pattern('house', 'House Shot'), pattern('sport')])).toEqual(
-      pattern('house', 'House Shot'),
-    );
+describe('pickDefaultOilPatternId', () => {
+  it('prefers the house pattern when the server published it', () => {
+    expect(pickDefaultOilPatternId([pattern('challenge'), pattern('house')])).toBe(DEFAULT_OIL_PATTERN_ID);
+  });
+
+  it('falls back to the first published pattern when house is absent', () => {
+    expect(pickDefaultOilPatternId([pattern('challenge'), pattern('sport')])).toBe('challenge');
   });
 
   it('returns null for an empty catalog rather than inventing one', () => {
-    expect(primaryOilPattern([])).toBeNull();
+    expect(pickDefaultOilPatternId([])).toBeNull();
+  });
+});
+
+describe('isOilPatternSelectable', () => {
+  const catalog = [pattern('house'), pattern('challenge')];
+
+  it('is true for a published id', () => {
+    expect(isOilPatternSelectable(catalog, 'challenge')).toBe(true);
+  });
+
+  it('is false for an id the server did not publish', () => {
+    expect(isOilPatternSelectable(catalog, 'sport')).toBe(false);
+  });
+
+  it('is false for null', () => {
+    expect(isOilPatternSelectable(catalog, null)).toBe(false);
   });
 });
 

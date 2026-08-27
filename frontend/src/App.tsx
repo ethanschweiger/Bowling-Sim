@@ -4,13 +4,14 @@ import type { BallResponse, GameStateResponse, GameThrowResponse, OilPatternResp
 import styles from './App.module.css';
 import { BallSelect } from './components/BallSelect';
 import { LaneCanvas } from './components/LaneCanvas';
+import { OilPatternSelect } from './components/OilPatternSelect';
 import { ReleaseControls } from './components/ReleaseControls';
 import { ReleaseSeedControl } from './components/ReleaseSeedControl';
 import { ScoreboardPanel } from './components/ScoreboardPanel';
 import { StaleGameNotice } from './components/StaleGameNotice';
 import { ThrowControls, type ThrowStatus } from './components/ThrowControls';
 import { fetchBallCatalog, isSelectable, pickDefaultBallId } from './domain/ballCatalog';
-import { fetchOilPatternCatalog, primaryOilPattern } from './domain/oilPatternCatalog';
+import { fetchOilPatternCatalog, isOilPatternSelectable, pickDefaultOilPatternId } from './domain/oilPatternCatalog';
 import { bootstrapGame, classifyThrowFailure, describeLaneVersion, isStaleGameError, startNewGame } from './domain/gameLifecycle';
 import { defaultReleaseValues, type ReleaseFieldId } from './domain/releaseFields';
 import { parseReleaseSeed } from './domain/releaseSeed';
@@ -47,9 +48,12 @@ function App() {
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [ballId, setBallId] = useState<string | null>(null);
   // Same reasoning as the ball catalog above: server-owned, no local
-  // fallback, starts empty until a catalog response fills it.
+  // fallback, starts empty until a catalog response fills it. `oilPatternId`
+  // is only ever read when a *new* game is created (see handleStartNewGame)
+  // — it has no effect on the currently active game.
   const [oilPatternCatalog, setOilPatternCatalog] = useState<OilPatternResponse[] | null>(null);
   const [oilPatternError, setOilPatternError] = useState<string | null>(null);
+  const [oilPatternId, setOilPatternId] = useState<string | null>(null);
   const [releaseValues, setReleaseValues] = useState(defaultReleaseValues());
   const [releaseSeed, setReleaseSeed] = useState('');
   const [latestThrow, setLatestThrow] = useState<GameThrowResponse | null>(null);
@@ -173,6 +177,10 @@ function App() {
           return;
         }
         setOilPatternCatalog(patterns);
+        // Only ever select an id the server actually returned.
+        setOilPatternId((current) =>
+          isOilPatternSelectable(patterns, current) ? current : pickDefaultOilPatternId(patterns),
+        );
       },
       (error: unknown) => {
         if (!mountedRef.current) {
@@ -294,7 +302,14 @@ function App() {
     setPresentationLock(true);
     setStatus({ kind: 'loading', label: 'Starting a new game' });
     try {
-      const result = await startNewGame();
+      // Only sent when it's actually one the server published; otherwise
+      // omitted so the server falls back to its own default ("house"),
+      // exactly like the initial bootstrap create already does.
+      const requestedOilPatternId =
+        oilPatternCatalog && isOilPatternSelectable(oilPatternCatalog, oilPatternId)
+          ? (oilPatternId ?? undefined)
+          : undefined;
+      const result = await startNewGame(undefined, requestedOilPatternId);
       if (!mountedRef.current) {
         return;
       }
@@ -361,7 +376,7 @@ function App() {
         </p>
       )}
 
-      {isReady && game && ballCatalog && (
+      {isReady && game && ballCatalog && oilPatternCatalog && (
         <main className={styles.main}>
           <section aria-labelledby="controls-heading" className={styles.controlsPanel}>
             <h2 id="controls-heading" className={styles.panelHeading}>
@@ -372,8 +387,13 @@ function App() {
                 options={ballCatalog}
                 value={ballId ?? ''}
                 onChange={setBallId}
-                pattern={primaryOilPattern(oilPatternCatalog)}
                 disabled={isBusy || isStale || presentationLocked}
+              />
+              <OilPatternSelect
+                options={oilPatternCatalog}
+                value={oilPatternId ?? ''}
+                onChange={setOilPatternId}
+                disabled={isBusy || presentationLocked}
               />
               <ReleaseControls
                 values={releaseValues}
