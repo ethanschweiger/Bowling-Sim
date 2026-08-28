@@ -46,6 +46,27 @@ COPY --chown=node:node frontend/src ./src
 
 EXPOSE 5173
 
+# Probes this same Vite dev server's own root page -- confirmed directly
+# (not assumed) that a plain GET / returns HTTP 200 with the real
+# index.html/React-refresh bootstrap, both from the host and, more to
+# the point, via Node's own fetch from inside a running container. Any
+# other status, or a connection failure, counts unhealthy. Uses only
+# Node's global `fetch` and `AbortSignal.timeout`, already built into
+# node:20-slim's runtime (available since Node 17.3) -- no curl, no new
+# package, mirroring the backend image's own urllib-only approach.
+# Runs as the USER already set above (node, not root): fetch needs no
+# elevated privilege to open an outbound connection to a port it isn't
+# binding.
+#   --interval=30s / --timeout=3s / --start-period=5s / --retries=3:
+#     the same values the backend's own healthcheck already uses --
+#     reused deliberately, not copied blindly: this dev server answered
+#     its own root page near-instantly in direct testing, the same
+#     "quick to respond even so" property the backend's own /health
+#     has, so the same generous-timeout, brief-grace-window, three-
+#     strikes reasoning applies here too.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["node", "-e", "fetch('http://127.0.0.1:5173/', { signal: AbortSignal.timeout(3000) }).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+
 # --host 0.0.0.0 is a container-only CLI flag, not a change to
 # vite.config.ts or package.json's "dev" script -- normal host-machine
 # `npm run dev` (which intentionally binds to localhost only) is

@@ -215,7 +215,10 @@ with the same caveat.
 The backend image also declares its own `HEALTHCHECK`, probing
 `GET /health` (stdlib `urllib` only, no curl) — `docker compose ps` and
 `docker inspect` report the backend container `healthy`/`unhealthy`
-alongside `db`'s own existing healthcheck, in either storage mode. Not
+alongside `db`'s own existing healthcheck, in either storage mode. The
+frontend image declares one too, probing its own dev server's root page
+(Node's global `fetch`, no curl) — `docker compose ps` reports the
+frontend container `healthy`/`unhealthy` the same way. Neither is
 automatic recovery or an orchestrator restart policy, just a status
 Docker itself can observe and `depends_on: condition: service_healthy`
 could gate on, the same way the overlay already gates on `db`'s.
