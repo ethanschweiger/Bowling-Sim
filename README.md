@@ -206,7 +206,11 @@ The backend's Uvicorn process (and any `docker compose exec backend ...`
 command run against it, including the in-container Alembic migration
 path below) runs as a dedicated unprivileged user (`backend`, stable
 UID/GID `1000:1000`), not root — a narrower hardening step on its own,
-not a claim that this image is otherwise production-ready.
+not a claim that this image is otherwise production-ready. The
+frontend's Vite dev server runs as a non-root user too — the official
+`node:20-slim` image's own existing `node` account (also UID/GID
+`1000:1000`), not a separately created one — for the same reason and
+with the same caveat.
 
 The backend image also declares its own `HEALTHCHECK`, probing
 `GET /health` (stdlib `urllib` only, no curl) — `docker compose ps` and
