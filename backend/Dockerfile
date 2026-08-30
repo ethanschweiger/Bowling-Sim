@@ -1,13 +1,6 @@
-# Local development image only -- runs the existing FastAPI app exactly as
-# `README.md`'s "Run" section does, inside a container instead of a venv.
-# Not a production image: no multi-stage build. That belongs to the
-# separate, later production/deployment milestone (see the root README's
-# "Future architecture constraints"), which also needs a stable
-# persistence layer this app doesn't have yet. The final runtime process
-# does run as a dedicated unprivileged user and reports its own container
-# health via HEALTHCHECK (both below) -- narrower in scope than a full
-# production hardening pass, but worth doing on their own regardless of
-# when that later milestone lands.
+# Local evaluation image for the FastAPI app. It includes Alembic for explicit
+# SQL migrations, runs as an unprivileged user, and exposes a healthcheck. It is
+# not an internet-facing production image.
 #
 # Built with the repository root as context (see docker-compose.yml), so
 # every COPY source path below is relative to the repo root, not this
@@ -52,7 +45,7 @@ COPY --chown=backend:backend backend/app ./app
 # resolve correctly here because alembic.ini lands at /app/alembic.ini,
 # alembic/ lands at /app/alembic, and app/ (copied above) is already at
 # /app/app. This does not run the migration itself -- see README.md's
-# "SQL-mode overlay (opt-in)" section for the explicit `alembic upgrade
+# "Persistence" section for the explicit `alembic upgrade
 # head` command run against a live container, same as the pre-existing
 # host-side path; nothing here or in this image's CMD applies it
 # automatically. Same --chown as app/ above, for the same reason.

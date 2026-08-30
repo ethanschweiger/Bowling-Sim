@@ -8,11 +8,8 @@ export default defineConfig({
   server: {
     // Local-dev-only proxy: forwards relative /api/... requests (see
     // src/api/client.ts's default, empty VITE_API_BASE_URL) to the FastAPI
-    // backend running on its documented default port (see root README's
-    // "Run"). This is the "minimal local CORS/proxy configuration" the
-    // frontend milestone allows — it needs no change to the backend at
-    // all, since the browser only ever talks to the Vite dev server, which
-    // makes the cross-origin request itself. Override the target with
+    // backend running on its documented default port. The browser talks to
+    // the Vite server, which makes the proxied request. Override the target with
     // VITE_BACKEND_ORIGIN if the backend runs somewhere else.
     proxy: {
       '/api': {

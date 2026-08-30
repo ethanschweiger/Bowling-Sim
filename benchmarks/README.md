@@ -29,9 +29,10 @@ Use `--json` for machine-readable output. For comparisons, close heavy
 background processes, keep the machine on power, and run the command at least
 three times. Report every run or the median run; do not keep only the fastest.
 
-## Latest recorded result
+## Recorded release result
 
-The checked-in result is recorded in the root README with its hardware, OS,
-Python version, workload size, and date. It is a local development-machine
-measurement, not a production capacity claim. Results vary with hardware,
-power state, interpreter, and background load.
+The root README records one release run with its hardware, OS, Python version,
+workload size, and date. Its captured stdout is in
+[`results/2026-08-30-release.txt`](results/2026-08-30-release.txt). It is a local
+development-machine measurement, not a production capacity claim. Results vary
+with hardware, power state, interpreter, and background load.

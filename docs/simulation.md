@@ -1,8 +1,8 @@
 # Simulation and collision model
 
-The simulator aims for deterministic, explainable, directionally credible ball
-motion. It is not a rigid-body solver or a fitted predictor of real bowling
-outcomes.
+The simulator produces deterministic ball motion from documented inputs and
+coefficients. It is not a rigid-body solver or a fitted predictor of real
+bowling outcomes.
 
 ## Skid, hook, and roll
 
@@ -59,10 +59,11 @@ and resolves deterministic 2D circle collisions with bounded damping and fall
 thresholds. Its output is a set of fallen pin IDs. The immutable rack validates
 and removes those pins; the scorecard receives only the count.
 
-Pin dimensions, pin weight, and coefficient of restitution are sourced from the
-USBC equipment manual. Effective collision radius, damping, and fall threshold
-are stated calibration choices. The measured regression corpus and sensitivity
-boundaries are in
+Pin dimensions, pin weight, and pin-to-pin coefficient of restitution are
+sourced from the USBC equipment manual. The planar solver also applies that
+restitution value to ball-pin contacts. Effective collision radius, damping,
+and fall threshold are hand-tuned modeling choices. The solver regression
+corpus and sensitivity checks are in
 [`backend/docs/planar-collision-calibration.md`](../backend/docs/planar-collision-calibration.md).
 
 ## Interpreting results

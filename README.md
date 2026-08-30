@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/ethanschweiger/Bowling-Sim/actions/workflows/ci.yml/badge.svg)](https://github.com/ethanschweiger/Bowling-Sim/actions/workflows/ci.yml)
 
-Full-stack bowling simulator with a numerical ball-motion model, persistent
-game state, deterministic pin collisions, and ten-pin scoring.
+Full-stack bowling simulator with numerical ball motion, game-scoped lane and
+score state, deterministic pin collisions, and ten-pin scoring.
 
 ![Bowling-Sim replaying a seeded throw](docs/assets/bowling-sim-demo.gif)
 
@@ -49,7 +49,8 @@ replay.
 
 ## Quick Start
 
-Docker Desktop or Docker Engine with Compose v2 is the only prerequisite.
+The container workflow requires Git, a browser, and Docker Desktop or Docker
+Engine with Compose v2.
 
 ```bash
 git clone https://github.com/ethanschweiger/Bowling-Sim.git
@@ -57,10 +58,11 @@ cd Bowling-Sim
 docker compose up --build
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The API and interactive
-OpenAPI docs are at [http://localhost:8000](http://localhost:8000) and
-[http://localhost:8000/docs](http://localhost:8000/docs). No `.env` file or
-database setup is required for the default in-memory mode.
+Open [http://localhost:5173](http://localhost:5173). The interactive OpenAPI
+docs are at [http://localhost:8000/docs](http://localhost:8000/docs); health is
+at [http://localhost:8000/health](http://localhost:8000/health), and application
+routes use the `/api/v1` prefix. No `.env` file or database setup is required
+for the default in-memory mode.
 
 ```bash
 docker compose down
@@ -71,17 +73,18 @@ For native Python/Node development, see
 
 ## How the Simulation Works
 
-Each release starts with forward velocity and a bounded lateral-slip reservoir
-derived from rev rate, axis rotation, axis tilt, coverstock, surface, RG, and
-differential. Low friction in the oiled heads preserves that slip (skid); rising
-friction converts it into lateral motion (hook); once it is spent, lateral
-acceleration falls to zero (roll). The phases emerge from one integration loop
-rather than from scripted distance thresholds.
+The model computes lateral slip from rev rate, axis rotation, ball radius, and
+hook potential. Coverstock, surface, RG, and differential determine hook
+potential; axis tilt changes how quickly friction converts slip into lateral
+velocity. Low friction preserves slip in the oiled heads, higher friction turns
+the ball, and lateral acceleration falls as the slip is spent. One integration
+loop produces skid, hook, and roll without fixed phase thresholds.
 
 Completed trajectories feed a separate deterministic planar collision model.
-That model updates the immutable standing-pin rack, while standard ten-pin rules
-advance the scorecard. See [docs/simulation.md](docs/simulation.md) for the model,
-coordinate conventions, calibration evidence, and sourced-versus-assumed values.
+It returns fallen-pin IDs; `GameSession` applies them to the immutable rack and
+advances the ten-pin scorecard. See [docs/simulation.md](docs/simulation.md) for
+the model, coordinate conventions, solver regression corpus, and the distinction
+between sourced inputs and modeling choices.
 
 ## Persistence
 
@@ -140,36 +143,35 @@ pin collision, scoring, lane wear, and database I/O are outside the timed region
 backend/.venv/bin/python benchmarks/benchmark_simulation.py --throws 10000
 ```
 
-Latest recorded local result:
+Recorded release run:
 
 | Environment | Workload | Median | p95 | Throughput |
 |---|---:|---:|---:|---:|
 | Apple M3, macOS 15.7.4, Python 3.9.6 | 10,000 throws | 3.517 ms | 3.721 ms | 280.8 simulations/s |
 
-Recorded August 30, 2026 with the production `0.05 ft` integration stride and
-100 warmup throws. This is a development-machine measurement of the integrator,
-not an end-to-end capacity claim. Reproduction details and caveats are in
-[benchmarks/README.md](benchmarks/README.md).
+Recorded August 30, 2026 as one local run with the production `0.05 ft`
+integration stride and 100 warmup throws. It is an integrator measurement, not
+an end-to-end capacity claim; repeat it at least three times for comparisons.
+The [recorded output](benchmarks/results/2026-08-30-release.txt), reproduction
+details, and caveats are in [benchmarks/](benchmarks/README.md).
 
 ## Design Decisions
 
 - **Server-authoritative state.** The frontend formats a completed snapshot; it
   never derives a second score, rack, or trajectory.
-- **Determinism before realism claims.** Seeds and fixed collision inputs make
-  behavior reproducible while model limitations remain explicit.
+- **Seeded outputs.** Explicit release seeds and fixed collision inputs make a
+  throw reproducible through the HTTP boundary.
 - **Pure domain layers.** Physics and scoring import neither FastAPI nor
   SQLAlchemy, keeping them directly testable.
 - **Optional persistence.** The zero-setup path stays in memory; PostgreSQL is a
   repository adapter, not a prerequisite for exploring the simulator.
-- **Feature-frozen v1 scope.** This release receives correctness, security,
-  documentation, and maintenance fixes—not new infrastructure layers.
 
 More context is in [docs/design-decisions.md](docs/design-decisions.md).
 
 ## Limitations
 
-- Ball and pin motion is a calibrated 2D approximation, not rigid-body 3D
-  physics or a predictor of real pinfall counts.
+- Ball motion and pinfall use hand-tuned 2D numerical models; they do not model
+  rigid-body 3D physics or predict real pinfall.
 - Oil patterns and release-error bounds are documented modeling assumptions,
   not certified patterns or measured bowler distributions.
 - There are no accounts, authentication, player ownership, or multiplayer turn
@@ -179,8 +181,8 @@ More context is in [docs/design-decisions.md](docs/design-decisions.md).
 - The Docker setup is for local evaluation, not an internet-facing production
   deployment.
 
-See [docs/limitations.md](docs/limitations.md) for the complete boundary of the
-model and application.
+See [docs/limitations.md](docs/limitations.md) for detailed model and application
+limits.
 
 ## Documentation
 

@@ -1,6 +1,5 @@
-# Local development image only -- runs the existing Vite dev server
-# exactly as `README.md`'s "Run it locally" documents, inside a container
-# instead of directly on the host. Not a production build/serve image.
+# Local evaluation image for the Vite dev server. It is not a production
+# build-and-serve image.
 #
 # node:20-slim (Debian-based, glibc) rather than an Alpine variant:
 # Vite's dev server pulls in esbuild's prebuilt native binary, which

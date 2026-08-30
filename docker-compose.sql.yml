@@ -3,8 +3,7 @@
 # its own -- `docker compose up --build` (docker-compose.yml alone) is
 # completely unaffected by this file's existence; it only applies when
 # explicitly passed with `-f docker-compose.yml -f docker-compose.sql.yml`.
-# See README.md's "SQL-mode overlay (opt-in)" section for exact start/
-# migrate/verify/stop commands.
+# See README.md's "Persistence" section for start and migration commands.
 #
 # Local development only, exactly like docker-compose.yml's own backend/
 # frontend services -- not a production deployment: no backup strategy,
@@ -13,11 +12,8 @@
 # pair backend/.env.example's DATABASE_URL default already documents),
 # never a real secret.
 #
-# Migrations are never run automatically by either service here -- see
-# `backend/app/main.py`'s own `GET /health` (a connectivity check only,
-# never a migration runner) and `alembic/env.py`'s own docstring. Apply
-# the existing migration explicitly, after `db` reports healthy, per
-# README.md.
+# Migrations are never run automatically. `GET /health` checks connectivity,
+# not schema version; apply the migration explicitly after `db` is healthy.
 services:
   db:
     image: postgres:16-alpine
@@ -26,15 +22,8 @@ services:
       POSTGRES_PASSWORD: bowling
       POSTGRES_DB: bowling_sim
     ports:
-      # Exposed to the host so the existing host-side Alembic setup
-      # (backend/alembic/, via settings.database_url's own existing
-      # default of postgresql://bowling:bowling@localhost:5432/bowling_sim)
-      # can apply the migration directly with no container changes --
-      # backend/Dockerfile copies only backend/app, not backend/alembic/
-      # or backend/alembic.ini, so alembic has nothing to run against
-      # from inside the backend container as built today. If host port
-      # 5432 is already in use (a native Postgres, most likely), stop
-      # that first or change the host side of this mapping.
+      # Exposed for host-side database inspection and migration tools. The
+      # backend image also contains Alembic for the README's in-container path.
       - "5432:5432"
     volumes:
       - bowling_sim_postgres_data:/var/lib/postgresql/data

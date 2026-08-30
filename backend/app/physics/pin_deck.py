@@ -30,7 +30,7 @@ is unchanged across both.
 `USBC_PIN_MAX_DIAMETER_IN` is cited for completeness but is deliberately
 **not** turned into an effective 2D collision radius *here* — a pin's real
 cross-section varies with height, and picking one number to represent it
-in a flat model is a calibration decision that belongs to whatever model
+in a flat model is a modeling decision that belongs to the model
 actually consumes it (see `collision.py`), not to this pure-geometry module.
 """
 
@@ -57,7 +57,7 @@ LANE_CENTER_BOARD = (BOARD_COUNT + 1) / 2
 # so "off the lane" means the same thing everywhere.
 GUTTER_ABS_LATERAL_IN = LANE_CENTER_BOARD * BOARD_WIDTH_IN
 
-# --- USBC reference constants for a future collision model --------------
+# --- USBC reference constants used by the collision model ----------------
 # Cited from the manual's pin dimension table: (target, minimum, maximum).
 
 USBC_PIN_WEIGHT_OZ = (56.0, 54.0, 58.0)          # 3 lb 8 oz target; 3 lb 6 oz - 3 lb 10 oz range

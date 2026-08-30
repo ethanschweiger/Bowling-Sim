@@ -8,7 +8,7 @@ as a flat circle sliding on the lane, with no height, tilt, or rotation.
 It's an accuracy improvement over a hand-tuned entry-angle rule, not a
 claim to recreate a real pin deck. Deferred 3D effects: pin tilt/toppling
 dynamics, loft, kickbacks, string pinsetters, and pinsetter placement
-variance (see README).
+variance (see `docs/limitations.md`).
 
 `resolve`/`simulate_collision` accept an optional `standing_ids`: which
 pins actually exist to be hit for this one impact (e.g. a `Rack.standing_ids`
@@ -50,16 +50,16 @@ mass directly; only the units become dimensionally honest, and "kinetic
 energy" in this module means real energy (lbf*in), not a same-named but
 dimensionally hollow proxy.
 
-## Official USBC inputs vs. calibrated parameters
+## Official USBC inputs vs. hand-tuned parameters
 
 Official, from `pin_deck.py` (sourced from the equipment specifications
-manual — see README for the verified citation with revision/access date):
+manual; see `pin_deck.py` for the citation and access date):
 pin weight, 12 in deck spacing and position, and `COLLISION_RESTITUTION`
 (the manual's own target coefficient of restitution for a pin, 0.670 —
 applied here to every collision, ball-pin and pin-pin alike, since no
 separate figure is published for either case).
 
-Calibrated — stated explicitly, not measured:
+Hand-tuned and not measured:
 
 - `PIN_EFFECTIVE_RADIUS_IN`: half the pin's widest ("belly") diameter,
   4.766 in (`pin_deck.USBC_PIN_MAX_DIAMETER_IN`). A real pin isn't a
@@ -429,14 +429,14 @@ def _simulate_collision_detail(
 
 class PlanarCollisionPinfallModel(PinfallModel):
     """Deterministic planar ball-and-pin collision model. See module
-    docstring for the unit system, official-vs-calibrated inputs, and the
+    docstring for the unit system, sourced inputs, hand-tuned values, and the
     fixed-timestep termination guarantee."""
 
     model_id = "planar-collision-2d-v1"
     LIMITATIONS = (
         "Flat 2D circles: no pin height, tilt, rotation, loft, kickbacks, "
         "or string-pinsetter/placement variance. PIN_EFFECTIVE_RADIUS_IN "
-        "and the fall-displacement threshold are stated calibration "
+        "and the fall-displacement threshold are stated modeling "
         "choices, not measured. An accuracy improvement over the "
         "entry-angle heuristic, not a claim to real pin-deck fidelity."
     )

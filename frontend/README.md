@@ -1,15 +1,15 @@
 # Bowling-Sim frontend
 
-A Vite + React + TypeScript single-page shell for the Bowling-Sim API. See
-the root [`README.md`](../README.md)'s "Frontend" section for what this
-does and doesn't do yet, its coordinate conventions, and how it talks to
-the backend — and "Run it locally" there for setup.
+A Vite + React + TypeScript client for the Bowling-Sim API. It renders the
+server-recorded trajectory, rack, and scorecard without recomputing physics or
+game state. See the root [`README.md`](../README.md#architecture) for the system
+boundary and [`docs/testing.md`](../docs/testing.md#native-development) for
+native setup.
 
-Quick start (with the backend already running — see the root README's
-"Run"):
+With the backend already running on `127.0.0.1:8000`:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 

@@ -21,11 +21,9 @@ with the next `Rack` value, the same pattern `LaneSession` already uses
 for `LaneCondition` (`reset_to`). The reusable, never-mutated
 definitions — `OilPatternSpec`/`LaneCondition.house_shot()` and
 `pin_deck.STANDARD_DECK` — stay shared across every game, exactly as
-before. All three slots (lane, scorecard, rack) are in-memory and
-per-game right now; a future move to shared storage or WebSocket-
-synchronized multiplayer changes who holds a `GameSession` (or where its
-state lives), not the collision solver, the scorecard rules, or the
-rack's own logic — none of those know a game or a session exists.
+before. All three slots are per-game. Repository adapters decide whether a
+session record stays in process memory or is written to PostgreSQL; that
+choice does not change the collision solver, scorecard rules, or rack logic.
 
 ## The throw transaction
 
@@ -88,14 +86,10 @@ implementations. `GameService` holds a repository and delegates
 every storage operation to it; it no longer knows *how* or *where*
 sessions are kept, only that a repository can look one up and store one.
 
-The point is what a persistent store needs to change: a new
-`GameSessionRepository` implementation, nothing upstream of it. `GameSession`,
-`GameStateSnapshot`, every physics/scoring module, every API route, and the
-frontend are all unaware this boundary exists — none of them ever talk to
-a repository, only to `GameService`. This milestone adds the replacement
-point only: the default still lives in memory; SQL mode stores durable
-records in PostgreSQL, while process/container restart still loses every
-in-memory game. `GameService`'s own public methods
+`GameSession`, `GameStateSnapshot`, every physics/scoring module, every API
+route, and the frontend are unaware of the selected adapter; they talk to
+`GameService`, not a repository. The default adapter lives in memory, while SQL
+mode stores durable records in PostgreSQL. `GameService`'s public methods
 (`create_game`, `get_or_create`, `get_game`) and every observable behavior
 they produce — including the bounded-registry eviction policy below — are
 unchanged; see `GameSessionRepository`'s docstring for why `get_or_create`
@@ -109,7 +103,7 @@ exact same object), which is exactly why nothing needed an explicit
 write-back call before now. A database-backed repository has no
 such shortcut — mutating a Python object in memory writes nothing to a
 database row. `throw_in_game`/`reset_game` are the point every
-game-scoped and legacy mutation now routes through so a future
+game-scoped and legacy mutation now routes through so the selected
 repository's `put` gets called after every successful mutation, not
 only after `create_game`; see "The eviction policy" below for the
 `put`-must-not-evict-on-replacement fix this write-back path depends on.
@@ -131,15 +125,9 @@ to, which `GameStateSnapshot` never carries at all.
 a serializer: `GameSessionRecord` holds live `LaneCondition` and
 `frozenset`/`tuple` values, not bytes or JSON, and nothing in this module
 imports a database driver, a file format, or a web framework. Turning a
-`GameSessionRecord` into bytes (for an actual persistent store) or back
-is a future repository implementation's job, entirely outside this
-module — the same boundary `GameSessionRepository` already draws around
-*where* a `GameSession` lives, this draws around *what it would take* to
-put one back together. `InMemoryGameSessionRepository` is still the only
-repository, still loses every session on process/container restart, and
-nothing here changes that; this only adds the piece a future durable
-repository would need in order to turn stored bytes back into a working
-`GameSession`.
+`GameSessionRecord` into database rows or back is the SQL repository's job,
+entirely outside this module. This keeps both where a session lives and how its
+record is encoded behind the repository boundary.
 
 `from_record` rebuilds a session by replaying its stored `rolls` through
 `Scorecard.from_rolls` and its stored `standing_pin_ids` through `Rack`'s
@@ -256,8 +244,8 @@ class GameSession:
         self._initial_condition = initial_condition
         # The registry id `initial_condition` was built from (e.g. "house"),
         # not derived from `initial_condition` itself -- a LaneCondition
-        # only carries a display-facing spec.name, not the registry key a
-        # future POST /api/v1/games would accept back. Required, not
+        # only carries a display-facing spec.name, not the registry key the
+        # create-game request accepts. Required, not
         # defaulted: every construction site (GameService.create_game,
         # get_or_create's factory, from_record) already knows this game's
         # pattern id at the moment it builds the LaneCondition, so there is
@@ -486,8 +474,8 @@ class GameSessionRepository(ABC):
 
 
 class InMemoryGameSessionRepository(GameSessionRepository):
-    """The only concrete `GameSessionRepository` today: a thread-safe
-    dict, bounded to at most `max_games` retained sessions. The lock here
+    """The process-local `GameSessionRepository`: a thread-safe dict,
+    bounded to at most `max_games` retained sessions. The lock here
     protects the mapping itself (get/put/evict) -- each `GameSession`'s
     own lock still covers that one game's read-simulate-record-update
     sequence, entirely separately.

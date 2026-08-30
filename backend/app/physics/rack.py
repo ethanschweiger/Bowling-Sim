@@ -4,10 +4,8 @@ over `pin_deck.STANDARD_DECK`'s ten pin IDs.
 Intentionally independent of lane oil (`LaneCondition`, `lane.py`) and of
 `Scorecard` (`app/scoring/scorecard.py`): a `Rack` only tracks *which*
 pins remain between throws. It knows nothing about oil wear, and nothing
-about frames or a running score. See "Ownership boundaries" in the README
-for how a future `GameSession` is expected to hold a lane condition, a
-scorecard, and a rack — three separate concerns, none of them each
-other's business.
+about frames or a running score. `GameSession` owns the lane condition,
+scorecard, and rack as three separate concerns.
 
 `Rack` is a genuinely immutable value: `validate_pin_ids` canonicalizes
 whatever was passed in — a caller's own mutable `set` or `list` included

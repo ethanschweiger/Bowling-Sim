@@ -1,13 +1,11 @@
 """Impact construction: turning a completed trajectory into the ball's
 state at the headpin plane.
 
-`ImpactState` is the domain boundary a future pin-collision model will
-consume. It's built once, here, from a `SimulationResult` and the `Ball`
-that produced it — never inside an HTTP route handler, and never rebuilt
-by a pinfall model from raw trajectory fields. Keeping this construction
-separate from pin-deck geometry and from pinfall resolution means a real
-collision solver can replace `pinfall.py`'s heuristic later without this
-module, or `pin_deck.py`, changing at all.
+`ImpactState` is the boundary consumed by the planar collision model. It is
+built once from a `SimulationResult` and its `Ball`, never inside an HTTP route
+handler and never reconstructed from rounded presentation fields. Keeping this
+conversion separate from pin-deck geometry and collision resolution preserves a
+single canonical impact state.
 """
 
 from dataclasses import dataclass

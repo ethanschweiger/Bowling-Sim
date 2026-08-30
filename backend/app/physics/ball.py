@@ -5,16 +5,10 @@ folds coverstock, surface, RG, and differential into one number the
 simulator uses to scale how hard the ball changes direction once it hits
 dry boards.
 
-Two properties are deliberately unused in the trajectory calculation this
-milestone, both documented rather than silently dropped:
-
-- `mass_lbs` doesn't affect deceleration. Under simple Coulomb friction,
-  `a = mu * g` — mass cancels out of `F = ma`, so a heavier ball doesn't
-  coast farther down the lane on that basis. Mass matters for momentum
-  transfer at pin impact, which isn't modeled yet (pin carry is v2+).
-- `radius_in` is unused because every ball in the catalog shares the
-  regulation diameter, so it can't yet differentiate simulated behavior.
-  It stays on the model for when custom or undersized balls matter.
+`mass_lbs` does not affect the trajectory's Coulomb-friction deceleration
+because mass cancels from `F = ma`; it does affect momentum transfer in the
+planar collision model. `radius_in` converts rotational speed into contact-patch
+surface speed and also sets the ball's collision radius.
 """
 
 from dataclasses import dataclass
@@ -80,7 +74,7 @@ class Ball:
     id: str
     name: str
     mass_lbs: float = 15.0
-    # regulation radius, ~8.6" diameter — unused this milestone, see module docstring
+    # regulation radius, ~8.6" diameter; used by trajectory and collision models
     radius_in: float = 4.29
     rg_in: float = 2.54               # radius of gyration — lower flares earlier
     differential: float = 0.045       # RG differential — higher flares more

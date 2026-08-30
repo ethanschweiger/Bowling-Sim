@@ -31,11 +31,9 @@ friction never leaves skid; a ball that exhausts its slip early rolls the
 rest of the way. The phases are what the integration does, not what it is
 told to do.
 
-This is deliberately *empirical* — accurate-enough numerical mechanics to
-produce credible, explainable motion, not a rigid-body model of a bowling
-ball. Coefficients below are stated modeling choices, not measurements;
-see "Calibration" in the README for which numbers are sourced and which
-are chosen.
+This is a hand-tuned numerical model, not a rigid-body model of a bowling
+ball. Coefficients below are modeling choices, not measurements; see
+`docs/simulation.md` for sourced inputs and stated assumptions.
 
 Everything inside the loop runs in one unit system — feet and seconds (see
 `app.physics.units`). Speed and spin are converted to ft/s and rad/s once,
@@ -69,12 +67,9 @@ boards only when they leave this function.
   arrives.
 
 Ball mass is deliberately not a term here. Under simple Coulomb friction,
-deceleration is `a = mu * g` — mass cancels out of `F = ma` because both
-the friction force and the object's inertia scale with it. A heavier ball
-does not coast further down the lane for that reason alone; where mass
-actually matters is momentum transfer at pin impact, which this milestone
-doesn't model yet (pin carry is a v2+ concern). See `ball.py` for how the
-other five ball properties are used.
+deceleration is `a = mu * g`: mass cancels out of `F = ma` because both the
+friction force and inertia scale with it. Mass enters the downstream planar
+collision model, where it affects momentum transfer to pins.
 
 This function is pure: it reads a `LaneCondition` snapshot but never
 mutates it or any shared state. Wearing the lane in from a completed throw

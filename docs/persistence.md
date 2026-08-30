@@ -1,7 +1,7 @@
 # Persistence
 
 Bowling-Sim supports a zero-setup in-memory mode and an opt-in PostgreSQL mode.
-Both expose the same API and `GameService` behavior.
+Both expose the same HTTP routes; their retention and restart behavior differ.
 
 ## In-memory mode
 

@@ -1,0 +1,11 @@
+Recorded (UTC): 2026-08-30T21:54:59+00:00
+Machine: Apple M3
+OS: Darwin 24.6.0 (arm64)
+Python: 3.9.6
+Ball: reactive_pearl
+Integration stride: 0.05 ft
+Throws: 10,000
+Warmup throws: 100
+Median simulation latency: 3.517 ms
+p95 simulation latency: 3.721 ms
+Throughput: 280.8 simulations/sec
