@@ -9,20 +9,20 @@ directly inside its own body.
 ## Storage mode
 
 `get_game_service` (via `build_configured_game_service`, below) reads
-`settings.game_storage_mode` on every call and builds the corresponding
-`GameService`:
+`settings.game_storage_mode` on every call and returns the corresponding
+process-scoped `GameService`:
 
 - `"memory"` (the default) returns the real `default_game_service`
   unchanged -- the exact same object, same behavior, as before this
   setting existed. Nothing about import, app startup, or a
   `"memory"`-mode request creates a SQLAlchemy `Engine`, opens a
   connection, begins a session, runs a migration, or queries a database.
-- `"sql"` builds a fresh `GameService` backed by
+- `"sql"` lazily builds one `GameService` backed by
   `SqlAlchemyGameSessionRepository`, using `app.db.session.build_engine`/
-  `build_session_factory` against `settings.database_url`. This is the
-  first place in the whole codebase those functions and that repository
-  are actually wired together and used by a real request -- everything
-  built before this milestone only proved each piece works in isolation.
+  `build_session_factory` against `settings.database_url`, then reuses it
+  for every request in this process. The cache is keyed by database URL so
+  a test or embedding process that deliberately changes configuration gets
+  a separate service rather than one bound to the old engine.
 - any other value raises `ValueError` -- a controlled configuration
   error, not a silent fallback to `"memory"`. `Settings.game_storage_mode`
   is typed `Literal["memory", "sql"]`, so pydantic already rejects an
@@ -32,14 +32,13 @@ directly inside its own body.
   already-constructed `settings` object directly), so an unsupported
   value fails the same clear way regardless of how it got there.
 
-Not a finished production integration: `"sql"` mode builds a fresh
-`Engine`/session factory on every call rather than reusing one across
-requests, runs no migrations, has no connection retry or health check,
-and if the configured database isn't actually reachable, a `"sql"`-mode
-request fails at connection time, not at configuration time. This
-milestone is the wiring and its tests, not production readiness -- see
-the README's own known-limitations section for what's still true
-regardless of this setting.
+Not a finished production integration: `"sql"` mode runs no migrations
+and has no connection retry; if the configured database isn't actually
+reachable, a `"sql"`-mode request fails at connection time, not at
+configuration time. Service reuse and mutation locking are process-local,
+so a future multi-worker deployment still needs database-level concurrency
+control. See the README's own known-limitations section for the remaining
+scope.
 
 ## Overriding in tests
 
@@ -54,26 +53,48 @@ including cleanup so an override never leaks into another test.
 
 from __future__ import annotations
 
+import threading
+
 from app.core.config import settings
 from app.db.session import build_engine, build_session_factory
 from app.db.sql_repository import SqlAlchemyGameSessionRepository
 from app.games.service import GameService, default_game_service
 
+_sql_services: dict[str, GameService] = {}
+_sql_services_lock = threading.Lock()
+
+
+def _get_sql_game_service(database_url: str) -> GameService:
+    """Returns the one SQL-backed service for `database_url` in this process.
+
+    The lock covers lookup and construction together. `create_engine` is
+    lazy, so this short critical section cannot block on the database and
+    prevents two first requests from escaping with different service/lock
+    registries.
+    """
+    with _sql_services_lock:
+        service = _sql_services.get(database_url)
+        if service is None:
+            engine = build_engine(database_url)
+            session_factory = build_session_factory(engine)
+            service = GameService(repository=SqlAlchemyGameSessionRepository(session_factory))
+            _sql_services[database_url] = service
+        return service
+
 
 def build_configured_game_service() -> GameService:
-    """Builds the `GameService` `settings.game_storage_mode` currently
-    selects -- see this module's own docstring for exactly what each
-    mode does. A pure function of the current settings value, callable
-    directly (by a test, or by `get_game_service` below) without going
-    through FastAPI's dependency injection machinery.
+    """Returns the process-scoped service selected by the current settings.
+
+    Callable directly (by a test, or by `get_game_service` below) without
+    going through FastAPI's dependency injection machinery. SQL service
+    construction stays lazy: this function builds no engine at import time,
+    and `create_engine` opens no connection when the service is first built.
     """
     mode = settings.game_storage_mode
     if mode == "memory":
         return default_game_service
     if mode == "sql":
-        engine = build_engine()
-        session_factory = build_session_factory(engine)
-        return GameService(repository=SqlAlchemyGameSessionRepository(session_factory))
+        return _get_sql_game_service(settings.database_url)
     raise ValueError(f"Unsupported game_storage_mode {mode!r}")
 
 

@@ -18,6 +18,8 @@ be a suite-wide regression: every other test that calls
 instead of using `default_game_service`.
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pydantic
 import pytest
 
@@ -49,9 +51,30 @@ def test_sql_mode_builds_a_service_backed_by_the_sql_repository(monkeypatch):
 
     assert isinstance(service, GameService)
     assert isinstance(service._repository, SqlAlchemyGameSessionRepository)
-    # And genuinely not the real in-memory singleton -- a fresh service,
-    # not default_game_service wearing a different label.
+    # And genuinely not the real in-memory singleton -- a separately
+    # configured process-scoped service, not default_game_service wearing a
+    # different label.
     assert service is not default_game_service
+
+
+def test_sql_mode_reuses_one_service_for_concurrent_requests(monkeypatch):
+    """The API dependency must not give first requests separate lock registries.
+
+    `create_engine` is lazy, so this remains an offline test even though it
+    exercises the real SQL service construction path.
+    """
+    database_url = "postgresql+psycopg2://probe_user:probe_pass@localhost:1/reuse_probe"
+    monkeypatch.setattr(settings, "game_storage_mode", "sql")
+    monkeypatch.setattr(settings, "database_url", database_url)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        services = list(executor.map(lambda _index: get_game_service(), range(32)))
+
+    assert len({id(service) for service in services}) == 1
+    repository = services[0]._repository
+    assert isinstance(repository, SqlAlchemyGameSessionRepository)
+    engine = repository._session_factory.kw["bind"]
+    assert engine.url.render_as_string(hide_password=False) == database_url
 
 
 def test_sql_mode_uses_the_configured_database_url(monkeypatch):

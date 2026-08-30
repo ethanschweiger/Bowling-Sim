@@ -145,7 +145,7 @@ def insert_if_absent_game_session_stmt(record: GameSessionRecord) -> PgInsert:
     overwrites an existing row's payload on conflict instead.
 
     Exists for the atomic create-if-missing path `GameService.get_or_create`
-    will need against a future persistent repository: a plain
+    will need against the persistent repository: a plain
     `SELECT` then `INSERT` (or an unconditional `upsert_game_session_stmt`)
     would either race two concurrent callers creating the same `game_id`,
     or let a later caller silently clobber an earlier one's row --

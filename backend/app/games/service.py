@@ -83,19 +83,19 @@ mid-mutation.
 `GameService` used to own its storage directly: a `dict[str, GameSession]`,
 a lock, and the eviction policy, all as its own private attributes. That
 storage is now behind `GameSessionRepository` — a small interface
-(`get`, `put`, `get_or_put`) — with `InMemoryGameSessionRepository` as the
-only implementation today. `GameService` holds a repository and delegates
+(`get`, `put`, `get_or_put`) — with in-memory and SQLAlchemy-backed
+implementations. `GameService` holds a repository and delegates
 every storage operation to it; it no longer knows *how* or *where*
 sessions are kept, only that a repository can look one up and store one.
 
-The point is what a future persistent store would need to change: a new
+The point is what a persistent store needs to change: a new
 `GameSessionRepository` implementation, nothing upstream of it. `GameSession`,
 `GameStateSnapshot`, every physics/scoring module, every API route, and the
 frontend are all unaware this boundary exists — none of them ever talk to
 a repository, only to `GameService`. This milestone adds the replacement
-point only: games still live in memory, `InMemoryGameSessionRepository`
-is still the only implementation, and process/container restart still
-loses every game exactly as before. `GameService`'s own public methods
+point only: the default still lives in memory; SQL mode stores durable
+records in PostgreSQL, while process/container restart still loses every
+in-memory game. `GameService`'s own public methods
 (`create_game`, `get_or_create`, `get_game`) and every observable behavior
 they produce — including the bounded-registry eviction policy below — are
 unchanged; see `GameSessionRepository`'s docstring for why `get_or_create`
@@ -106,7 +106,7 @@ preserve its original atomicity.
 boundary: mutating an in-memory `GameSession` in place is already enough
 for `InMemoryGameSessionRepository` to see the change (both hold the
 exact same object), which is exactly why nothing needed an explicit
-write-back call before now. A future database-backed repository has no
+write-back call before now. A database-backed repository has no
 such shortcut — mutating a Python object in memory writes nothing to a
 database row. `throw_in_game`/`reset_game` are the point every
 game-scoped and legacy mutation now routes through so a future
@@ -157,7 +157,8 @@ from __future__ import annotations
 import threading
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from app.physics.impact import require_reached_pin_deck
@@ -431,8 +432,8 @@ DEFAULT_MAX_GAMES = 1000
 class GameSessionRepository(ABC):
     """The storage boundary `GameService` reads and writes through --
     everything it needs from wherever `GameSession`s actually live.
-    `InMemoryGameSessionRepository` below is the only implementation
-    today; a future persistent store implements these same three methods
+    `InMemoryGameSessionRepository` and the SQL adapter implement these
+    same three methods; another persistent store can implement them
     without `GameService`, `GameSession`, any API route, or the frontend
     changing at all.
 
@@ -589,15 +590,56 @@ class InMemoryGameSessionRepository(GameSessionRepository):
             return session
 
 
+@dataclass
+class _MutationLockEntry:
+    semaphore: threading.Semaphore
+    users: int = 0
+
+
+class _GameMutationLocks:
+    """Exact, process-local locks for repository read-modify-write cycles.
+
+    A `GameSession` lock protects one live object, but a durable repository
+    reconstructs a different object for each read. These keyed locks sit one
+    level higher and keep the authoritative re-read, object mutation, and
+    repository write-back together. Entries are reference-counted and
+    removed after the last holder/waiter exits, so the registry does not grow
+    forever as durable game IDs accumulate.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[str, _MutationLockEntry] = {}
+        self._guard = threading.Lock()
+
+    @contextmanager
+    def hold(self, game_id: str) -> Iterator[None]:
+        with self._guard:
+            entry = self._entries.get(game_id)
+            if entry is None:
+                entry = _MutationLockEntry(semaphore=threading.Semaphore(value=1))
+                self._entries[game_id] = entry
+            entry.users += 1
+
+        try:
+            with entry.semaphore:
+                yield
+        finally:
+            with self._guard:
+                entry.users -= 1
+                if entry.users == 0:
+                    del self._entries[game_id]
+
+
 class GameService:
     """A thin orchestrator over a `GameSessionRepository`: decides which
     oil pattern builds which `GameSession` and its initial `LaneCondition`,
     translates a missing lookup into `UnknownGameError`, and writes a
     session back to the repository after `throw_in_game`/`reset_game`
-    mutate it. All storage, locking, and eviction live in the repository
-    this class holds -- see "The repository boundary" in this module's
-    own docstring, and `GameSessionRepository` for the storage interface
-    itself.
+    mutate it. Repository mapping/transaction mechanics and eviction live
+    in the repository this class holds. A service-level keyed lock spans
+    each mutation's repository re-read through write-back, because a durable
+    repository can reconstruct a separate `GameSession` (and therefore a
+    separate object lock) for every read.
     """
 
     def __init__(
@@ -610,7 +652,7 @@ class GameService:
         and test) and an `InMemoryGameSessionRepository` is built from
         `max_games`, preserving exactly the constructor signature this
         class had before the boundary existed. Passing `repository`
-        explicitly is for a future persistent-store implementation, or a
+        explicitly is for a persistent-store implementation, or a
         test that wants to inject one directly; `max_games` is ignored
         when `repository` is supplied, since capacity is that repository's
         own concern.
@@ -618,6 +660,7 @@ class GameService:
         self._repository = (
             repository if repository is not None else InMemoryGameSessionRepository(max_games)
         )
+        self._mutation_locks = _GameMutationLocks()
 
     def create_game(self, oil_pattern: str = "house", game_id: str | None = None) -> GameSession:
         build_condition = SUPPORTED_OIL_PATTERNS.get(oil_pattern)
@@ -673,17 +716,20 @@ class GameService:
         """Runs one throw transaction against an already-resolved
         `session` (from this service's own `get_game`/`get_or_create`)
         and, only once it succeeds, writes the mutated session back
-        through this service's repository -- the write-back boundary a
-        future persistent repository would need after every successful
-        mutation, so it can actually persist what an in-memory session's
-        in-place mutation already makes visible for free.
+        through this service's repository.
 
         Takes an already-resolved `session`, not a `game_id`: the caller
         (a route) already did its own `get_game`/`get_or_create` lookup
         -- often interleaved with its own validation (an unknown ball_id,
         for instance) that must still 404 in exactly the same order it
-        always has -- and this method's only job is the mutate-then-write-
-        back step, not a second lookup.
+        always has. Once inside the game-keyed mutation lock, this method
+        re-reads the repository and prefers that authoritative object when
+        one exists. That second read is essential for SQL-backed storage:
+        another request may have committed newer state after the caller's
+        initial lookup, and mutating the stale object would overwrite it.
+        An absent second read falls back to the caller's object, preserving
+        the existing in-memory eviction/race behavior rather than turning a
+        previously accepted mutation into a new `UnknownGameError`.
 
         Raises whatever `GameSession.throw` itself raises
         (`GameCompleteError`, or `TruncatedTrajectoryError` propagating
@@ -694,22 +740,29 @@ class GameService:
         is left exactly as `GameSession.throw` itself already guarantees
         on failure: completely unchanged.
         """
-        result = session.throw(simulate=simulate, resolve_pinfall=resolve_pinfall)
-        self._repository.put(session)
-        return result
+        with self._mutation_locks.hold(session.game_id):
+            stored_session = self._repository.get(session.game_id)
+            authoritative_session = stored_session if stored_session is not None else session
+            result = authoritative_session.throw(
+                simulate=simulate, resolve_pinfall=resolve_pinfall
+            )
+            self._repository.put(authoritative_session)
+            return result
 
     def reset_game(self, session: GameSession) -> tuple[LaneCondition, GameStateSnapshot]:
         """Resets an already-resolved `session` and writes the mutated
         session back through this service's repository -- see
         `throw_in_game`'s own docstring for why this takes a resolved
-        `session` rather than a `game_id`, and why write-back after a
-        mutation is this method's whole reason to exist. `GameSession.reset`
-        cannot fail, so there is no failure path here to keep `put` away
-        from -- every call reaches the write-back.
+        `session` and then re-reads it under the game-keyed mutation lock.
+        `GameSession.reset` cannot fail, so there is no failure path here
+        to keep `put` away from -- every call reaches the write-back.
         """
-        result = session.reset()
-        self._repository.put(session)
-        return result
+        with self._mutation_locks.hold(session.game_id):
+            stored_session = self._repository.get(session.game_id)
+            authoritative_session = stored_session if stored_session is not None else session
+            result = authoritative_session.reset()
+            self._repository.put(authoritative_session)
+            return result
 
 
 # One shared registry for the process. Each game inside it gets its own

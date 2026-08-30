@@ -1,6 +1,5 @@
 """Opt-in SQLAlchemy `Engine`/`Session` factory for the `game_sessions`
-table -- plumbing a future persistent `GameSessionRepository` would build
-on, not something anything in this codebase calls today.
+table, used by the SQL-backed `GameSessionRepository`.
 
 Deliberately lazy and inert: importing this module (or `app.main`, or
 `app.db`) never calls `create_engine`, opens a connection, begins a
@@ -14,20 +13,12 @@ opens a network connection until something actually executes against the
 `Engine` it returns (a `Session`, a raw `.connect()` call, and so on) --
 calling `build_engine` alone touches no network and no database.
 
-## Why this exists, and why it isn't wired in yet
+## Runtime wiring
 
-A future persistent `GameSessionRepository` will need a real `Engine` and
-a way to open `Session`s against it. Rather than let that repository
-invent its own ad hoc `create_engine()` call, this module is the one
-place that choice lives -- import it, call `build_engine()` then
-`build_session_factory(engine)`, and every future caller gets the same
-configuration. Nothing calls either function yet: `GameService`,
-`default_game_service`, every API route, app startup, Docker, and the
-test suite all still run entirely on `InMemoryGameSessionRepository`,
-with zero database connection anywhere in their own call graphs. Adding
-this factory is not itself a claim that persistence works, or that games
-survive a restart -- see `app.games.service`'s own module docstring, and
-the README, for what's still true regardless.
+`app.api.dependencies` calls `build_engine()` and
+`build_session_factory(engine)` when SQL mode is selected, then reuses that
+service within the process. The functions remain lazy and do not migrate or
+connect until a repository operation executes.
 """
 
 from __future__ import annotations

@@ -1,15 +1,24 @@
-"""`GameService.throw_in_game`/`reset_game`: the write-back boundary that
-calls a repository's `put()` after a successful mutation, and only after
-a successful one. See `app.games.service`'s own module docstring, "The
-repository boundary", for why an in-memory repository never needed this
-before (mutating an in-memory `GameSession` in place is already visible
-to it) and why a future persistent one would.
+"""`GameService.throw_in_game`/`reset_game`: the serialized write-back
+boundary that re-reads durable state, mutates it, and calls a repository's
+`put()` after a successful mutation, and only after a successful one. See
+`app.games.service`'s own module docstring, "The repository boundary", for
+why an in-memory repository never needed write-back before (mutating an
+in-memory `GameSession` in place is already visible to it) and why a
+persistent one does.
 
-Uses a small local spy repository -- not a mock -- wrapping a real
+Most tests use a small local spy repository -- not a mock -- wrapping a real
 `InMemoryGameSessionRepository`, so every assertion here is against real
 storage behavior, with `put()` calls additionally recorded for
-inspection.
+inspection. The concurrency regression uses a detached repository that
+rehydrates a new `GameSession` on every read, matching the identity/lifecycle
+property that exposed the SQL lost-update race.
 """
+
+from __future__ import annotations
+
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -17,6 +26,7 @@ from app.games.service import (
     GameCompleteError,
     GameService,
     GameSession,
+    GameSessionRecord,
     GameSessionRepository,
     InMemoryGameSessionRepository,
 )
@@ -49,6 +59,34 @@ class _SpyRepository(GameSessionRepository):
 
     def get_or_put(self, game_id, factory):
         return self._inner.get_or_put(game_id, factory)
+
+
+class _DetachedRepository(GameSessionRepository):
+    """Stores immutable records and returns a new live object per read."""
+
+    def __init__(self) -> None:
+        self._records: dict[str, GameSessionRecord] = {}
+        self._lock = threading.Lock()
+
+    def get(self, game_id: str) -> GameSession | None:
+        with self._lock:
+            record = self._records.get(game_id)
+        return None if record is None else GameSession.from_record(record)
+
+    def put(self, session: GameSession) -> None:
+        record = session.to_record()
+        with self._lock:
+            self._records[session.game_id] = record
+
+    def get_or_put(
+        self, game_id: str, factory: Callable[[], GameSession]
+    ) -> GameSession:
+        with self._lock:
+            record = self._records.get(game_id)
+            if record is None:
+                record = factory().to_record()
+                self._records[game_id] = record
+        return GameSession.from_record(record)
 
 
 def _resolve_pinfall(pins_knocked, fallen_pin_ids):
@@ -136,6 +174,41 @@ def test_throw_in_game_returns_exactly_what_session_throw_returns():
     assert actual[0] == expected[0]  # SimulationResult
     assert actual[1] == expected[1]  # PinfallResult
     assert actual[2] == expected[2]  # GameStateSnapshot
+
+
+def test_concurrent_detached_repository_mutations_do_not_lose_a_roll():
+    """Two SQL-shaped stale reads must serialize around a fresh re-read.
+
+    Without the service-level keyed lock, both objects record a first roll
+    and the last write wins, leaving one roll. With the lock spanning
+    re-read through write-back, the second mutation sees the first commit
+    and completes the frame.
+    """
+    service = GameService(repository=_DetachedRepository())
+    created = service.create_game(game_id="detached-concurrency")
+    stale_sessions = [service.get_game(created.game_id) for _ in range(2)]
+    assert stale_sessions[0] is not stale_sessions[1]
+
+    start = threading.Barrier(3)
+
+    def throw(stale_session: GameSession) -> None:
+        start.wait(timeout=5)
+        service.throw_in_game(
+            stale_session,
+            simulate=_real_simulate,
+            resolve_pinfall=_resolve_pinfall(0, ()),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(throw, session) for session in stale_sessions]
+        start.wait(timeout=5)
+        for future in futures:
+            future.result(timeout=10)
+
+    snapshot = service.get_game(created.game_id).current_snapshot()
+    assert snapshot.frames[0].rolls == (0, 0)
+    assert snapshot.next_frame_number == 2
+    assert snapshot.next_ball_number == 1
 
 
 def test_reset_game_writes_the_mutated_session_back_after_success():

@@ -1,13 +1,8 @@
-"""The first concrete, SQL-backed `GameSessionRepository` implementation
--- opt-in and unwired. Nothing in `GameService`, `default_game_service`,
-any API route, app startup, or the test suite's default configuration
-constructs or uses this class; it exists so the interface
-`app.games.service.GameSessionRepository` describes has a second,
-real-database implementation to prove out, alongside
-`InMemoryGameSessionRepository`. A caller (a future runtime wiring, or a
-test that constructs it directly) supplies a session factory; this
-module never builds one, opens a connection, or picks a database on its
-own.
+"""The SQL-backed `GameSessionRepository` implementation.
+
+It is opt-in at runtime: `app.api.dependencies` constructs and caches it when
+`GAME_STORAGE_MODE=sql`. A caller (runtime wiring or a test) supplies a session
+factory; this module never picks a database or opens a connection on import.
 
 ## Layering
 
