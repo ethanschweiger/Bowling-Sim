@@ -7,7 +7,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     ports:
-      - "8000:8000"
+      # Keep the unauthenticated local API off other host interfaces.
+      - "127.0.0.1:8000:8000"
 
   frontend:
     build:
@@ -21,6 +22,7 @@ services:
       # variable already existed for exactly this kind of case.
       VITE_BACKEND_ORIGIN: http://backend:8000
     ports:
-      - "5173:5173"
+      # The evaluation UI is local-only; Vite still binds inside the container.
+      - "127.0.0.1:5173:5173"
     depends_on:
       - backend
