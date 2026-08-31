@@ -15,7 +15,8 @@ score state, deterministic pin collisions, and ten-pin scoring.
 ## Highlights
 
 - Continuous skid → hook → roll simulation driven by friction and lateral slip
-- Stateful lane oil and carrydown model, isolated per game
+- Stateful lane oil and carrydown, isolated per game; each completed throw
+  updates that game's current lane condition
 - Deterministic 2D ball/pin collisions, standing-pin racks, and ten-pin scoring
 - Reproducible release variance through explicit seeds
 - In-memory storage by default; opt-in PostgreSQL persistence through SQLAlchemy
